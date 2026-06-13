@@ -1,0 +1,140 @@
+generator client {
+    provider = "prisma-client"
+    output   = "../app/generated/prisma"
+}
+
+datasource db {
+    provider = "postgresql"
+}
+
+model User {
+    id          String     @id @default(cuid())
+    email       String?    @unique
+    username    String     @unique
+    firstName   String
+    lastName    String
+    password    String
+    role        Role       @default(MEMBER)
+    ownedLeads  Lead[]     @relation("OwnedLeads")
+    lockedLeads Lead[]     @relation("LockedLeads")
+    activities  Activity[]
+}
+
+model Invite {
+    id        String    @id @default(cuid())
+    token     String    @unique
+    usedAt    DateTime?
+    expiresAt DateTime
+}
+
+model Lead {
+    id          String  @id @default(cuid())
+    number      Int     @unique @default(autoincrement())
+    companyName String?
+    phone       String?
+    website     String?
+    email       String?
+    note        String?
+
+    status  LeadStatus @default(NEW)
+    owner   User?      @relation("OwnedLeads", fields: [ownerId], references: [id])
+    ownerId String? // kto to má aktuálne na starosti (N → M)
+
+    // KEDY ĎALEJ – srdce appky
+    nextActionAt   DateTime?
+    nextActionNote String? // "overiť či prišiel mail s návrhom"
+
+    callbackKind CallbackKind? // prečo je v CALLING fronte
+    callbackAt   DateTime? // krátkodobý návrat v /calls (CALLING)
+    callbackNote String? // "vraj sa ozvať o hodinu, bola na porade"
+
+    // KEDY SME ČO POSLALI – presne to, čo si chcel vidieť na prvý pohľad
+    quoteSentAt   DateTime? // cenová ponuka
+    designSentAt  DateTime? // dizajnový návrh
+    designUrl     String?
+    aboutUsSentAt DateTime? // info o nás / odpoveď na ich mail
+
+    price     Decimal? @db.Decimal(10, 2) // celková nastrelená cena – tá sa zobrazuje
+    priceNote String? // rozpis/poznámka: "499 stránka + 299 admin systém" – na hover
+
+    lostReason String? // "nemajú záujem", "zlé číslo"
+
+    // soft delete
+    deletedAt DateTime?
+
+    // claim (future-proof, zatiaľ nevyužité)
+    lockedBy   User?     @relation("LockedLeads", fields: [lockedById], references: [id])
+    lockedById String?
+    lockedAt   DateTime?
+
+    activities Activity[]
+    createdAt  DateTime   @default(now())
+    updatedAt  DateTime   @updatedAt
+
+    @@index([status])
+    @@index([status, callbackKind])
+    @@index([deletedAt])
+}
+
+enum LeadStatus {
+    NEW // pridané, ešte sa nevolalo
+    CALLING // ← nový: marketing volá, ešte sa nedovolal
+    ACTIVE // rieši sa – všetko medzi prvým hovorom a koncom
+    SNOOZED // "ozvite sa o 4 mesiace" – spí, zobudí sa samo
+    WON // klient ide do projektu
+    LOST // koniec (nezáujem, zlý kontakt, terminované)
+    UNREACHABLE // ← nový: zlé číslo / nedá sa spojiť
+}
+
+model Activity {
+    id        String           @id @default(cuid())
+    lead      Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+    leadId    String
+    user      User             @relation(fields: [userId], references: [id])
+    userId    String
+    type      ActivityType
+    category  ActivityCategory @default(CLIENT)
+    outcome   CallOutcome?
+    note      String?
+    createdAt DateTime         @default(now())
+
+    @@index([leadId])
+    @@index([userId, createdAt])
+}
+
+enum ActivityType {
+    CALL
+    QUOTE_SENT
+    DESIGN_SENT
+    EMAIL_SENT // info o nás, odpoveď, čokoľvek
+    SMS_SENT
+    NOTE
+}
+
+enum CallOutcome {
+    NO_ANSWER // 2b nezdvihli
+    BAD_NUMBER // 2a zlé číslo
+    NOT_INTERESTED // 2c nie
+    CALL_AGAIN // 2d "zavolajte mi vtedy a vtedy"
+    WANTS_QUOTE // 2e chce CP
+    WANTS_DESIGN // 2f chce návrh
+    WANTS_EMAIL // 2g máme napísať
+    SNOOZE // 2h "o X mesiacov"
+    POSITIVE // videli, páči sa, posúva sa to
+}
+
+enum Role {
+    MEMBER // D – marketing: vidí len svoju prácu
+    MANAGER // N – vidí všetko, vie pridávať leady, meniť vlastníka
+    ADMIN // ty – všetko + pozvánky, používatelia, mazanie
+}
+
+enum CallbackKind {
+    RETRY // nedovolala sa – skúsiť znova, bez presného času
+    SCHEDULED // dohodnutý čas – „pani povedala 15:00"
+}
+
+enum ActivityCategory {
+    CLIENT
+    SYSTEM
+}
