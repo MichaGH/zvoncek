@@ -13,9 +13,15 @@ export default async function CallsPage() {
                     <h1 className="text-2xl font-semibold tracking-tight">Volania</h1>
                     <p className="text-sm text-muted-foreground">Prvý kontakt s firmami</p>
                 </div>
-                <Button asChild variant="outline" size="sm">
-                    <Link href="/dashboard/calls/history"><History className="mr-1.5 h-4 w-4" />História</Link>
-                </Button>
+                {/* História a Obnoviť vedľa seba – Obnoviť je teraz tu, nie v CallQueue */}
+                <div className="flex items-center gap-2">
+                    <Button asChild variant="outline" size="sm">
+                        <Link href="/dashboard/calls/history">
+                            <History className="mr-1.5 h-4 w-4" />
+                            História
+                        </Link>
+                    </Button>
+                </div>
             </div>
             <CallQueue board={board} />
         </main>

@@ -4,6 +4,7 @@ import prisma from "@/lib/db";
 import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
 import { CallOutcome } from "@/app/generated/prisma/enums";
+import { leadStateForOutcome } from "../domain/leadFlow";
 
 // oprava poznámky hovoru
 export async function editActivityNote(activityId: string, note: string) {
@@ -46,7 +47,7 @@ export async function correctOutcome(activityId: string, newOutcome: CallOutcome
         if (!activity) return { error: "Záznam neexistuje." };
 
         // mapovanie outcome → stav leadu (rovnaké pravidlá ako logCall)
-        const leadData = leadStateFor(newOutcome);
+        const leadData = leadStateForOutcome(newOutcome);
 
         await prisma.$transaction([
             prisma.activity.update({ where: { id: activityId }, data: { outcome: newOutcome } }),
@@ -70,8 +71,8 @@ export async function correctOutcome(activityId: string, newOutcome: CallOutcome
     return { success: true };
 }
 
-// zdieľaná logika – rovnaká ako v logCall, vytiahnutá nech sa neopakuje
-function leadStateFor(outcome: CallOutcome) {
+/* // zdieľaná logika – rovnaká ako v logCall, vytiahnutá nech sa neopakuje
+function leadStateForOutcome(outcome: CallOutcome) {
     switch (outcome) {
         case "NO_ANSWER": return { status: "CALLING" as const, callbackKind: "RETRY" as const, callbackAt: null };
         case "CALL_AGAIN": return { status: "CALLING" as const, callbackKind: "SCHEDULED" as const };
@@ -83,4 +84,4 @@ function leadStateFor(outcome: CallOutcome) {
         case "SNOOZE": return { status: "SNOOZED" as const, callbackKind: null, callbackAt: null };
         case "POSITIVE": return { status: "ACTIVE" as const, callbackKind: null, callbackAt: null };
     }
-}
+} */

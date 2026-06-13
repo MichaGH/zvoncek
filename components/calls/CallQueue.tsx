@@ -4,9 +4,10 @@ import { useOptimistic, useTransition, useState, useEffect, useRef } from "react
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { logCall } from "@/lib/actions/calls";
-import { getMoreNew } from "@/lib/actions/calls-pagination";
+import { getMoreNew } from "@/lib/actions/calls/calls-pagination";
 import { CallOutcome } from "@/app/generated/prisma/enums";
 import { CallsBoard, QueueLead } from "@/lib/queries/calls";
+
 import CallRow from "./CallRow";
 import CallDrawer from "./CallDrawer";
 import InfoDrawer from "./InfoDrawer";

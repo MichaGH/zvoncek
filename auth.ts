@@ -4,7 +4,7 @@ import { authConfig } from "./auth.config";
 import { z } from "zod";
 import prisma from "./lib/db";
 import bcrypt from "bcrypt";
-import { usernameSchema } from "./lib/validation";
+import { usernameSchema } from "./lib/domain/validation";
 
 async function getUser(username: string) {
     try {

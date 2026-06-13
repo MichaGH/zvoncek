@@ -1,7 +1,7 @@
 'use client';
 
 import { signup } from '@/lib/actions';
-import { usernameSchema, emailSchema } from '@/lib/validation';
+import { usernameSchema, emailSchema } from '@/lib/domain/validation';
 import { useActionState, useState } from 'react';
 
 // požiadavky na heslo ako dáta — checklist sa z nich vygeneruje

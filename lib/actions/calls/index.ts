@@ -4,7 +4,7 @@ import prisma from "@/lib/db";
 import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
 import { CallOutcome } from "@/app/generated/prisma/enums";
-import { leadStateForOutcome } from "@/lib/leadFlow";
+import { leadStateForOutcome } from "@/lib/domain/leadFlow";
 
 type Opts = { note?: string; callbackNote?: string; when?: string; email?: string };
 type LogCallInput = { leadId: string; outcome: CallOutcome } & Opts;
@@ -17,8 +17,6 @@ export async function logCall(input: LogCallInput) {
     const date = when ? new Date(when) : null;
 
     const flow = leadStateForOutcome(outcome, date, callbackNote ?? null);
-
-    // ak D nadiktovali email, doplníme ho (neprepíšeme existujúci, ak prázdny)
     const extra = email?.trim() ? { email: email.trim() } : {};
 
     try {
@@ -51,10 +49,9 @@ export async function updateLeadNote(leadId: string, note: string) {
     return { success: true };
 }
 
-// rýchla úprava kontaktu z InfoDrawera (meno/web/telefón)
 export async function updateLeadContact(
     leadId: string,
-    data: { companyName?: string | null; website?: string | null; phone?: string | null },
+    data: { companyName?: string | null; website?: string | null; phone?: string | null; email?: string | null },
 ) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
