@@ -23,7 +23,7 @@ export default async function Header() {
                 <Link href="/dashboard/calls">Volania</Link>
               </Button>
               <Button asChild variant="ghost" size="sm">
-                <Link href="/dashboard/leads">Leady</Link>
+                <Link href="/dashboard/pipeline">Pipeline</Link>
               </Button>
             </nav>
           )}

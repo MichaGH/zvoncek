@@ -4,7 +4,7 @@ import prisma from "@/lib/db";
 import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
 import { CallOutcome } from "@/app/generated/prisma/enums";
-import { leadStateForOutcome } from "../domain/leadFlow";
+import { leadStateForOutcome } from "@/lib/domain/leadFlow";
 
 // oprava poznámky hovoru
 export async function editActivityNote(activityId: string, note: string) {
@@ -67,7 +67,7 @@ export async function correctOutcome(activityId: string, newOutcome: CallOutcome
     }
     revalidatePath("/dashboard/calls/history");
     revalidatePath("/dashboard/calls");
-    revalidatePath("/dashboard/leads");
+    revalidatePath("/dashboard/pipeline");
     return { success: true };
 }
 

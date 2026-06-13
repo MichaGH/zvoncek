@@ -32,7 +32,7 @@ export async function logCall(input: LogCallInput) {
     }
 
     revalidatePath("/dashboard/calls");
-    revalidatePath("/dashboard/leads");
+    revalidatePath("/dashboard/pipeline");
     revalidatePath("/dashboard");
     return { success: true };
 }
