@@ -14,7 +14,7 @@ model User {
   firstName   String
   lastName    String
   password    String
-  role        Role       @default(MEMBER)
+  role        Role       @default(SCOUT)
   ownedLeads   Lead[]     @relation("OwnedLeads")
   lockedLeads  Lead[]     @relation("LockedLeads")
   createdLeads Lead[]     @relation("CreatedLeads")
@@ -37,8 +37,9 @@ model Lead {
   email       String?
   note        String?
 
-  status  LeadStatus @default(NEW)
-  origin  LeadOrigin @default(MARKETING_CALL) // ako sa lead dostal do systému (marketing hovor / priamo / odporúčanie)
+  status      LeadStatus  @default(NEW)
+  origin      LeadOrigin  @default(MARKETING_CALL) // ako sa lead dostal do systému (marketing hovor / priamo / odporúčanie)
+  projectType ProjectType? // aký typ projektu klient chce (stránka/eshop/katalóg/webapp…)
   owner   User?      @relation("OwnedLeads", fields: [ownerId], references: [id])
   ownerId String? // kto to má aktuálne na starosti (N → M)
 
@@ -147,9 +148,10 @@ enum CallOutcome {
 }
 
 enum Role {
-  MEMBER // D – marketing: vidí len svoju prácu
-  MANAGER // N – vidí všetko, vie pridávať leady, meniť vlastníka
-  ADMIN // ty – všetko + pozvánky, používatelia, mazanie
+  SCOUT // pridáva kontakty (vidí len svoje, kým nie sú obvolané)
+  TELESALES // prvotné volanie / marketing – rieši calls
+  MANAGER // vidí a rieši všetko
+  ADMIN // všetko + používatelia, admin stránky
 }
 
 enum CallbackKind {
@@ -184,6 +186,15 @@ enum LeadOrigin {
   DIRECT // priamy kontakt (stretnutie, sám napísal)
   REFERRAL // odporúčanie
   OTHER
+}
+
+enum ProjectType {
+  WEBSITE // obyčajná stránka
+  ESHOP // eshop s platbou (Shopify)
+  CATALOG // katalóg bez platby
+  WEBAPP // webová aplikácia
+  PORTFOLIO // portfólio
+  OTHER // iné (vrátane „chce Zvonček")
 }
 
 // ── DIZAJN & TRACKING ────────────────────────────────────────────────────────

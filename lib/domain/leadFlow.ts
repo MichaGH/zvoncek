@@ -93,10 +93,11 @@ export function leadStateForOutcome(
             return {
                 status: "SNOOZED",
                 callbackKind: null,
-                callbackAt: null,
+                callbackAt: when ?? null, // dátum „ozvať sa" – aby sa dal snoozed vynoriť v calls
+                callbackNote: callbackNote || null,
                 nextActionKind: "CALL",
                 nextActionAt: when ?? null,
-                nextActionNote: "Znovu osloviť neskôr",
+                nextActionNote: callbackNote || "Znovu osloviť neskôr",
             };
         case "POSITIVE":
             return { status: "ACTIVE", callbackKind: null, callbackAt: null };

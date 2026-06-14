@@ -4,6 +4,7 @@ import type {
     CallOutcome,
     LeadStatus,
     NextActionKind,
+    ProjectType,
 } from "@/app/generated/prisma/enums";
 
 export const PIPELINE_PAGE_SIZE = 50;
@@ -15,6 +16,7 @@ type PipelineLead = {
     website: string | null;
     phone: string | null;
     status: LeadStatus;
+    projectType: ProjectType | null;
     nextActionKind: NextActionKind | null;
     nextActionAt: Date | null;
     nextActionNote: string | null;
@@ -35,6 +37,7 @@ function toPipelineRow(lead: PipelineLead) {
         name: lead.companyName ?? lead.website ?? "—",
         phone: lead.phone,
         status: lead.status,
+        projectType: lead.projectType,
         nextActionKind: lead.nextActionKind,
         nextActionAt: lead.nextActionAt?.toISOString() ?? null,
         nextActionNote: lead.nextActionNote,
@@ -85,6 +88,7 @@ export async function getPipelineList({
             website: true,
             phone: true,
             status: true,
+            projectType: true,
             nextActionKind: true,
             nextActionAt: true,
             nextActionNote: true,

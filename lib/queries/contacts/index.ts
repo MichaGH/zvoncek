@@ -39,13 +39,16 @@ export type ContactListRow = ReturnType<typeof toContactRow>;
 export async function getContactsList({
     query,
     take = CONTACTS_PAGE_SIZE,
+    createdById,
 }: {
     query?: string;
     take?: number;
+    createdById?: string; // scout → len vlastné pridané
 }): Promise<{ rows: ContactListRow[]; hasMore: boolean }> {
     const leads = await prisma.lead.findMany({
         where: {
             deletedAt: null,
+            ...(createdById ? { createdById } : {}),
             ...(query
                 ? {
                       OR: [
@@ -78,19 +81,20 @@ export async function getContactsList({
     return { rows, hasMore };
 }
 
-export async function getContactsOverview(): Promise<{
+export async function getContactsOverview(createdById?: string): Promise<{
     total: number;
     addedToday: number;
     callable: number;
 }> {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
+    const scope = createdById ? { createdById } : {};
 
     const [total, addedToday, callable] = await Promise.all([
-        prisma.lead.count({ where: { deletedAt: null } }),
-        prisma.lead.count({ where: { deletedAt: null, createdAt: { gte: startOfToday } } }),
+        prisma.lead.count({ where: { deletedAt: null, ...scope } }),
+        prisma.lead.count({ where: { deletedAt: null, ...scope, createdAt: { gte: startOfToday } } }),
         // "Voľné na volanie" = ešte sa nevolalo (status NEW).
-        prisma.lead.count({ where: { deletedAt: null, status: "NEW" } }),
+        prisma.lead.count({ where: { deletedAt: null, ...scope, status: "NEW" } }),
     ]);
 
     return { total, addedToday, callable };

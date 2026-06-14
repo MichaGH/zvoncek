@@ -21,6 +21,7 @@ import {
 } from "@/lib/queries/stats";
 import { OUTCOME_LABEL, STATUS_LABEL } from "@/lib/dictionaries";
 import { resolveRange, toDateInput } from "@/lib/stats/range";
+import { can } from "@/lib/permissions";
 import type { CallOutcome, LeadStatus } from "@/app/generated/prisma/enums";
 import Link from "next/link";
 
@@ -59,10 +60,9 @@ export default async function StatsPage({
     if (!session?.user?.id) return null;
 
     const { period, from, to, userId } = await searchParams;
-    const role = (session.user as typeof session.user & { role?: string }).role;
-    const canFilterUsers = role === "ADMIN" || role === "MANAGER";
+    const canFilterUsers = can(session.user, "stats.viewAll");
 
-    // Members can only ever see their own call numbers.
+    // Bez práva vidieť všetkých → len vlastné čísla.
     const selectedUserId = canFilterUsers ? userId : session.user.id;
     const range = resolveRange({ period, from, to });
 

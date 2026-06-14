@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Phone, Pencil, Check } from "lucide-react";
-import { LeadStatus, NextActionKind } from "@/app/generated/prisma/enums";
+import { LeadStatus, NextActionKind, ProjectType } from "@/app/generated/prisma/enums";
 import { DashboardContent, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +19,7 @@ import {
     changeStatus,
     logSent,
     setNextAction,
+    setProjectType,
     updateLead,
 } from "@/lib/actions/pipeline";
 import {
@@ -27,6 +28,7 @@ import {
     ACTIVITY_SOURCE_LABEL,
     NEXT_ACTION_LABEL,
     OUTCOME_LABEL,
+    PROJECT_TYPE_LABEL,
     STATUS_LABEL,
 } from "@/lib/dictionaries";
 import type { PipelineDetailData, PipelineUserOption } from "@/lib/queries/pipeline";
@@ -224,6 +226,26 @@ export default function PipelineDetail({
                                     <SelectItem key={user.id} value={user.id}>
                                         {user.firstName} {user.lastName}
                                     </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <Select
+                            defaultValue={lead.projectType ?? "none"}
+                            onValueChange={async (value) => {
+                                await setProjectType(
+                                    lead.id,
+                                    value === "none" ? null : (value as ProjectType),
+                                );
+                                router.refresh();
+                            }}
+                        >
+                            <SelectTrigger size="sm" className="w-auto gap-1.5 rounded-full">
+                                <SelectValue placeholder="Typ projektu" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="none">— typ projektu —</SelectItem>
+                                {Object.entries(PROJECT_TYPE_LABEL).map(([key, label]) => (
+                                    <SelectItem key={key} value={key}>{label}</SelectItem>
                                 ))}
                             </SelectContent>
                         </Select>

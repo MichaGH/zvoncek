@@ -12,7 +12,7 @@ import CallRow from "./CallRow";
 import CallDrawer from "./CallDrawer";
 import InfoDrawer from "./InfoDrawer";
 import { Button } from "@/components/ui/button";
-import { CalendarClock, RotateCcw, Sparkles } from "lucide-react";
+import { CalendarClock, Clock, RotateCcw, Sparkles } from "lucide-react";
 
 type Opts = { note?: string; callbackNote?: string; when?: string; email?: string };
 type RemoveAction = { type: "remove"; leadId: string };
@@ -38,6 +38,7 @@ export default function CallQueue({ board }: { board: CallsBoard }) {
             ...current,
             scheduled: current.scheduled.filter((l) => l.id !== action.leadId),
             retry: current.retry.filter((l) => l.id !== action.leadId),
+            snoozed: current.snoozed.filter((l) => l.id !== action.leadId),
             fresh: current.fresh.filter((l) => l.id !== action.leadId),
         }),
     );
@@ -104,6 +105,12 @@ export default function CallQueue({ board }: { board: CallsBoard }) {
                         title="Skúsiť znova" hint="nedovolané"
                         count={optimisticBoard.retry.length} tone="retry"
                         leads={optimisticBoard.retry} empty="Nič na opakovanie." {...rowProps}
+                    />
+                    <Group
+                        icon={<Clock className="h-4 w-4" />}
+                        title="Spiace" hint="ozvať sa neskôr (zvýraznené = dozreté)"
+                        count={optimisticBoard.snoozed.length} tone="urgent"
+                        leads={optimisticBoard.snoozed} empty="Žiadne spiace kontakty." {...rowProps}
                     />
                 </div>
 

@@ -3,7 +3,27 @@
 import { auth } from "@/auth";
 import prisma from "@/lib/db";
 import { createAuditActivity } from "@/lib/activityLog";
+import { can } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";
+
+// Scout smie upravovať/mazať len svoje a iba kým nie sú obvolané (status NEW).
+// Manager/admin (contacts.deleteAny) smú hocičo.
+async function assertCanManageContact(
+    user: unknown,
+    userId: string,
+    leadId: string,
+): Promise<string | null> {
+    if (can(user, "contacts.deleteAny")) return null;
+    const lead = await prisma.lead.findUnique({
+        where: { id: leadId },
+        select: { createdById: true, status: true },
+    });
+    if (!lead) return "Kontakt neexistuje.";
+    if (lead.createdById !== userId || lead.status !== "NEW") {
+        return "Môžeš upravovať len svoje ešte neobvolané kontakty.";
+    }
+    return null;
+}
 
 function revalidateContacts() {
     revalidatePath("/dashboard/contacts");
@@ -30,6 +50,7 @@ export type CreateContactResult =
 export async function createContact(input: CreateContactInput): Promise<CreateContactResult> {
     const session = await auth();
     if (!session?.user?.id) return { ok: false, error: "Nie si prihlásený." };
+    if (!can(session.user, "contacts.create")) return { ok: false, error: "Nemáš oprávnenie." };
 
     const companyName = input.companyName?.trim() || null;
     const website = input.website?.trim() || null;
@@ -83,6 +104,9 @@ export async function updateContact(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
     const session = await auth();
     if (!session?.user?.id) return { ok: false, error: "Nie si prihlásený." };
+    if (!can(session.user, "contacts.access")) return { ok: false, error: "Nemáš oprávnenie." };
+    const guard = await assertCanManageContact(session.user, session.user.id, id);
+    if (guard) return { ok: false, error: guard };
 
     const companyName = input.companyName?.trim() || null;
     const website = input.website?.trim() || null;
@@ -121,6 +145,9 @@ export async function deleteContact(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
     const session = await auth();
     if (!session?.user?.id) return { ok: false, error: "Nie si prihlásený." };
+    if (!can(session.user, "contacts.access")) return { ok: false, error: "Nemáš oprávnenie." };
+    const guard = await assertCanManageContact(session.user, session.user.id, id);
+    if (guard) return { ok: false, error: guard };
 
     try {
         await prisma.lead.update({

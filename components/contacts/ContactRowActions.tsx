@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Pencil, Trash2 } from "lucide-react";
+import { Lock, Pencil, Trash2 } from "lucide-react";
 import { deleteContact, updateContact } from "@/lib/actions/contacts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +26,13 @@ export type EditableContact = {
     note: string | null;
 };
 
-export default function ContactRowActions({ contact }: { contact: EditableContact }) {
+export default function ContactRowActions({
+    contact,
+    locked,
+}: {
+    contact: EditableContact;
+    locked?: boolean;
+}) {
     const router = useRouter();
     const [open, setOpen] = useState(false);
     const [pending, startTransition] = useTransition();
@@ -63,6 +69,18 @@ export default function ContactRowActions({ contact }: { contact: EditableContac
             toast.success("Kontakt vymazaný");
             router.refresh();
         });
+    }
+
+    // Obvolaný kontakt (alebo nie tvoj) → zámok, žiadne úpravy.
+    if (locked) {
+        return (
+            <span
+                className="flex items-center justify-end gap-1 text-xs text-muted-foreground"
+                title="Kontakt je už obvolaný – nedá sa upraviť ani vymazať"
+            >
+                <Lock className="h-3.5 w-3.5" /> obvolaný
+            </span>
+        );
     }
 
     return (

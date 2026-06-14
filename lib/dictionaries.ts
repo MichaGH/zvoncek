@@ -5,6 +5,8 @@ import {
     CallOutcome,
     LeadStatus,
     NextActionKind,
+    ProjectType,
+    Role,
 } from "@/app/generated/prisma/enums";
 import type { Confidence } from "@/lib/tracking/confidence";
 
@@ -74,6 +76,22 @@ export const ACTIVITY_SOURCE_LABEL: Record<ActivitySource, string> = {
     PIPELINE: "Pipeline",
     CONTACTS: "Kontakty",
     ADMIN: "Administrácia",
+};
+
+export const PROJECT_TYPE_LABEL: Record<ProjectType, string> = {
+    WEBSITE: "Stránka",
+    ESHOP: "Eshop",
+    CATALOG: "Katalóg",
+    WEBAPP: "Webappka",
+    PORTFOLIO: "Portfólio",
+    OTHER: "Iné",
+};
+
+export const ROLE_LABEL: Record<Role, string> = {
+    SCOUT: "Pridávač kontaktov",
+    TELESALES: "Marketing (volania)",
+    MANAGER: "Manažér",
+    ADMIN: "Admin",
 };
 
 // Tracking confidence – "signál, nie dôkaz". Pozri docs/tracking-system-plan.md.

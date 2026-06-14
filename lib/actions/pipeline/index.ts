@@ -1,7 +1,7 @@
 "use server";
 
 import { auth } from "@/auth";
-import { ActivityType, LeadStatus, NextActionKind } from "@/app/generated/prisma/enums";
+import { ActivityType, LeadStatus, NextActionKind, ProjectType } from "@/app/generated/prisma/enums";
 import {
     createAuditActivity,
     createBusinessActivity,
@@ -10,6 +10,7 @@ import {
     nextActionData,
 } from "@/lib/activityLog";
 import prisma from "@/lib/db";
+import { can } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";
 
 function revalidatePipeline(leadId: string) {
@@ -66,6 +67,7 @@ export async function updateLead(
 ) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
     const userId = session.user.id;
 
     try {
@@ -115,6 +117,7 @@ export async function saveQuote(
 ) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
     const userId = session.user.id;
 
     const price = input.price;
@@ -154,6 +157,7 @@ export async function saveQuote(
 export async function setQuoteSent(leadId: string, sent: boolean) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
     const userId = session.user.id;
 
     try {
@@ -222,9 +226,23 @@ export async function setQuoteSent(leadId: string, sent: boolean) {
     return { success: true };
 }
 
+export async function setProjectType(leadId: string, projectType: ProjectType | null) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
+    try {
+        await prisma.lead.update({ where: { id: leadId }, data: { projectType } });
+    } catch {
+        return { error: "Nepodarilo sa uložiť typ projektu." };
+    }
+    revalidatePipeline(leadId);
+    return { success: true };
+}
+
 export async function changeStatus(leadId: string, status: LeadStatus) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
     const userId = session.user.id;
 
     try {
@@ -250,6 +268,7 @@ export async function changeStatus(leadId: string, status: LeadStatus) {
 export async function changeOwner(leadId: string, ownerId: string | null) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
     const userId = session.user.id;
 
     try {
@@ -280,6 +299,7 @@ export async function setNextAction(
 ) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
     const userId = session.user.id;
 
     try {
@@ -343,6 +363,7 @@ export async function logSent(
 ) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
     const userId = session.user.id;
 
     const at = sentAt ? new Date(sentAt) : new Date();
@@ -395,6 +416,7 @@ export async function logSent(
 export async function addBusinessNote(leadId: string, note: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
     if (!note.trim()) return { error: "Poznámka nemôže byť prázdna." };
 
     try {
@@ -421,6 +443,7 @@ export async function logBusinessActivity(
 ) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
 
     try {
         await prisma.activity.create({

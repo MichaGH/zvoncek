@@ -10,6 +10,7 @@ import {
 } from "@/lib/activityLog";
 import prisma from "@/lib/db";
 import { hasNextAction, leadStateForOutcome } from "@/lib/domain/leadFlow";
+import { can } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";
 
 type Opts = { note?: string; callbackNote?: string; when?: string; email?: string };
@@ -25,6 +26,7 @@ function revalidateCalls() {
 export async function logCall(input: LogCallInput) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "calls.work")) return { error: "Nemáš oprávnenie." };
     const userId = session.user.id;
 
     const { leadId, outcome, note, callbackNote, when, email } = input;
@@ -74,6 +76,7 @@ export async function logCall(input: LogCallInput) {
 export async function updateLeadNote(leadId: string, note: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "calls.work")) return { error: "Nemáš oprávnenie." };
 
     try {
         await prisma.$transaction([
@@ -101,6 +104,7 @@ export async function updateLeadContact(
 ) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "calls.work")) return { error: "Nemáš oprávnenie." };
 
     try {
         await prisma.$transaction([
@@ -119,5 +123,69 @@ export async function updateLeadContact(
         return { error: "Nepodarilo sa uložiť kontakt." };
     }
     revalidateCalls();
+    return { success: true };
+}
+
+// Vráti kontakt z histórie späť do volaní (status NEW) – len ak ho ešte nerieši manažér.
+export async function resetLeadToCalls(leadId: string) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "callHistory.revert")) return { error: "Nemáš oprávnenie." };
+    const userId = session.user.id;
+
+    try {
+        const lead = await prisma.lead.findUnique({
+            where: { id: leadId },
+            select: {
+                price: true,
+                quoteSentAt: true,
+                designSentAt: true,
+                aboutUsSentAt: true,
+                ownerId: true,
+                status: true,
+                designs: { where: { deletedAt: null }, select: { id: true }, take: 1 },
+            },
+        });
+        if (!lead) return { error: "Kontakt neexistuje." };
+        const locked = Boolean(
+            lead.price != null ||
+                lead.quoteSentAt ||
+                lead.designSentAt ||
+                lead.aboutUsSentAt ||
+                lead.ownerId ||
+                lead.status === "WON" ||
+                lead.designs.length > 0,
+        );
+        if (locked) return { error: "Kontakt už rieši manažér – nedá sa vrátiť." };
+
+        await prisma.$transaction([
+            prisma.lead.update({
+                where: { id: leadId },
+                data: {
+                    status: "NEW",
+                    callbackKind: null,
+                    callbackAt: null,
+                    callbackNote: null,
+                    nextActionKind: null,
+                    nextActionAt: null,
+                    nextActionNote: null,
+                    lostReason: null,
+                },
+            }),
+            prisma.activity.create({
+                data: createAuditActivity({
+                    leadId,
+                    userId,
+                    type: "STATUS_CHANGED",
+                    source: "CALL_QUEUE",
+                    note: "Vrátené do volaní (reset na nový)",
+                }),
+            }),
+        ]);
+    } catch {
+        return { error: "Nepodarilo sa vrátiť kontakt." };
+    }
+    revalidateCalls();
+    revalidatePath("/dashboard/calls/history");
     return { success: true };
 }

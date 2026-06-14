@@ -46,7 +46,7 @@ function map(l: {
 const NEW_PAGE = 50;
 
 export async function getCallsBoard(newCursor?: string) {
-    const [scheduled, retry, fresh] = await Promise.all([
+    const [scheduled, retry, snoozed, fresh] = await Promise.all([
         prisma.lead.findMany({
             where: { status: "CALLING", callbackKind: "SCHEDULED", deletedAt: null },
             select: SELECT,
@@ -56,6 +56,12 @@ export async function getCallsBoard(newCursor?: string) {
             where: { status: "CALLING", callbackKind: "RETRY", deletedAt: null },
             select: SELECT,
             orderBy: { updatedAt: "asc" },
+        }),
+        // Spiace kontakty (SNOOZED) – zoradené podľa dátumu „ozvať sa", aby sa vynorili keď dozrejú.
+        prisma.lead.findMany({
+            where: { status: "SNOOZED", deletedAt: null },
+            select: SELECT,
+            orderBy: { callbackAt: "asc" },
         }),
         prisma.lead.findMany({
             where: { status: "NEW", deletedAt: null },
@@ -72,6 +78,7 @@ export async function getCallsBoard(newCursor?: string) {
     return {
         scheduled: scheduled.map(map),
         retry: retry.map(map),
+        snoozed: snoozed.map(map),
         fresh: freshPage.map(map),
         freshHasMore: hasMore,
         freshNextCursor: hasMore ? freshPage[freshPage.length - 1].id : null,

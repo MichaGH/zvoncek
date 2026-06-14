@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/table";
 import { CONTACTS_PAGE_SIZE, getContactsList, getContactsOverview } from "@/lib/queries/contacts";
 import { STATUS_LABEL, STATUS_VARIANT } from "@/lib/dictionaries";
+import { can } from "@/lib/permissions";
 import { Plus } from "lucide-react";
 
 function formatDate(iso: string) {
@@ -39,9 +40,14 @@ export default async function ContactsPage({
     const take =
         Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : CONTACTS_PAGE_SIZE;
 
+    // Scout (bez contacts.viewAll) vidí len svoje pridané kontakty.
+    const scopeToOwn = !can(session.user, "contacts.viewAll");
+    const createdById = scopeToOwn ? session.user.id : undefined;
+    const canViewPipeline = can(session.user, "pipeline.view");
+
     const [{ rows, hasMore }, overview] = await Promise.all([
-        getContactsList({ query: q, take }),
-        getContactsOverview(),
+        getContactsList({ query: q, take, createdById }),
+        getContactsOverview(createdById),
     ]);
 
     const moreParams = new URLSearchParams();
@@ -94,17 +100,21 @@ export default async function ContactsPage({
                             </TableRow>
                         ) : (
                             rows.map((row) => (
-                                <TableRow key={row.id}>
+                                <TableRow key={row.id} className={row.callable ? "" : "opacity-60"}>
                                     <TableCell className="text-muted-foreground tabular-nums">
                                         {row.number}
                                     </TableCell>
                                     <TableCell className="max-w-0">
-                                        <Link
-                                            href={`/dashboard/pipeline/${row.id}`}
-                                            className="block truncate font-medium hover:underline"
-                                        >
-                                            {row.name}
-                                        </Link>
+                                        {canViewPipeline ? (
+                                            <Link
+                                                href={`/dashboard/pipeline/${row.id}`}
+                                                className="block truncate font-medium hover:underline"
+                                            >
+                                                {row.name}
+                                            </Link>
+                                        ) : (
+                                            <span className="block truncate font-medium">{row.name}</span>
+                                        )}
                                         {row.website && (
                                             <span className="block truncate text-xs text-muted-foreground">
                                                 {row.website}
@@ -131,6 +141,7 @@ export default async function ContactsPage({
                                                 phone: row.phone,
                                                 note: row.note,
                                             }}
+                                            locked={!row.callable}
                                         />
                                     </TableCell>
                                 </TableRow>

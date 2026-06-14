@@ -1,4 +1,5 @@
 import type { NextAuthConfig } from "next-auth";
+import { can, requiredPermissionForPath } from "@/lib/permissions";
 
 export const authConfig = {
     pages: {
@@ -7,12 +8,19 @@ export const authConfig = {
     callbacks: {
         authorized({ auth, request: { nextUrl } }) {
             const isLoggedIn = !!auth?.user;
-            const isOnDashboard = nextUrl.pathname.startsWith("/dashboard");
-            const isOnAuthPage = ["/login", "/signup"].includes(
-                nextUrl.pathname,
-            );
+            const path = nextUrl.pathname;
+            const isOnDashboard = path.startsWith("/dashboard");
+            const isOnAuthPage = ["/login", "/signup"].includes(path);
 
-            if (isOnDashboard) return isLoggedIn; // dashboard len pre prihlásených
+            if (isOnDashboard) {
+                if (!isLoggedIn) return false; // dashboard len pre prihlásených
+                // Route-level guard: ak na danú stránku rola nemá právo, presmeruj na Dnes.
+                const perm = requiredPermissionForPath(path);
+                if (perm && !can(auth!.user, perm)) {
+                    return Response.redirect(new URL("/dashboard", nextUrl));
+                }
+                return true;
+            }
             if (isOnAuthPage && isLoggedIn) {
                 return Response.redirect(new URL("/dashboard", nextUrl)); // prihlásený nemá čo robiť na login/signup
             }

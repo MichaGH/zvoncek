@@ -5,6 +5,7 @@ import {
     ACTIVITY_LABEL,
     NEXT_ACTION_LABEL,
     OUTCOME_LABEL,
+    PROJECT_TYPE_LABEL,
     STATUS_LABEL,
     STATUS_VARIANT,
 } from "@/lib/dictionaries";
@@ -84,6 +85,11 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                     <Badge variant={STATUS_VARIANT[row.status]} className="font-normal">
                                         {STATUS_LABEL[row.status]}
                                     </Badge>
+                                    {row.projectType && (
+                                        <span className="mt-1 block truncate text-xs text-muted-foreground">
+                                            {PROJECT_TYPE_LABEL[row.projectType]}
+                                        </span>
+                                    )}
                                 </TableCell>
                                 <TableCell className="align-top">
                                     {row.lastActivity ? (

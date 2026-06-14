@@ -173,9 +173,29 @@ export default function CallDrawer({
                     {/* ── SNOOZE ── */}
                     {step === "snooze" && (
                         <>
-                            <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 2 mesiace", { when: inMonths(2) })}>O 2 mesiace</Button>
-                            <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 4 mesiace", { when: inMonths(4) })}>O 4 mesiace</Button>
-                            <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 6 mesiacov", { when: inMonths(6) })}>O 6 mesiacov</Button>
+                            <Input
+                                placeholder="Poznámka – napr. „ozvať sa na jar, teraz nemajú rozpočet"
+                                value={callbackNote}
+                                onChange={(e) => setCallbackNote(e.target.value)}
+                                className="mb-2"
+                            />
+                            <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 2 mesiace", { when: inMonths(2), callbackNote: callbackNote.trim() || undefined })}>O 2 mesiace</Button>
+                            <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 4 mesiace", { when: inMonths(4), callbackNote: callbackNote.trim() || undefined })}>O 4 mesiace</Button>
+                            <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 6 mesiacov", { when: inMonths(6), callbackNote: callbackNote.trim() || undefined })}>O 6 mesiacov</Button>
+                            <div className="flex gap-2">
+                                <input
+                                    type="date"
+                                    data-vaul-no-drag
+                                    value={customDate}
+                                    onChange={(e) => setCustomDate(e.target.value)}
+                                    onClick={(e) => { e.stopPropagation(); (e.currentTarget as HTMLInputElement).showPicker?.(); }}
+                                    className="h-12 flex-1 rounded-md border bg-background px-3 text-sm"
+                                />
+                                <Button className="h-12" disabled={!customDate}
+                                    onClick={() => fire("SNOOZE", "Vlastný termín", { when: new Date(customDate).toISOString(), callbackNote: callbackNote.trim() || undefined })}>
+                                    OK
+                                </Button>
+                            </div>
                             <Button variant="ghost" className="w-full" onClick={() => setStep("main")}>← Späť</Button>
                         </>
                     )}
