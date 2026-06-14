@@ -1,4 +1,5 @@
 import { auth } from "@/auth";
+import { DashboardPage as DashboardShell, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import {
     Card,
     CardContent,
@@ -11,13 +12,8 @@ export default async function DashboardPage() {
     const session = await auth();
 
     return (
-        <main className="mx-auto max-w-6xl px-4 py-8">
-            <div className="mb-6">
-                <h1 className="text-2xl font-semibold tracking-tight">Dnes</h1>
-                <p className="text-sm text-muted-foreground">
-                    Ahoj, {session?.user?.email}
-                </p>
-            </div>
+        <DashboardShell>
+            <DashboardPageHeader title="Dnes" description={`Ahoj, ${session?.user?.email ?? ""}`} />
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <Card>
@@ -58,6 +54,6 @@ export default async function DashboardPage() {
                     </CardContent>
                 </Card>
             </div>
-        </main>
+        </DashboardShell>
     );
 }

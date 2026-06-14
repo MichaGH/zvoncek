@@ -2,28 +2,44 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type Width = "default" | "wide" | "narrow";
-
-const WIDTH_CLASS: Record<Width, string> = {
-    narrow: "max-w-3xl",
-    default: "max-w-5xl",
-    wide: "max-w-6xl",
-};
-
+// All dashboard pages share the same outer container so the header (title,
+// description, actions) starts at the same horizontal position on every page.
+// Page content can opt into a narrower width via <DashboardContent>.
 export function DashboardPage({
     children,
-    width = "default",
     className,
 }: {
     children: React.ReactNode;
-    width?: Width;
     className?: string;
 }) {
     return (
-        <main className={cn("mx-auto w-full px-4 py-8", WIDTH_CLASS[width], className)}>
+        <main className={cn("mx-auto w-full max-w-6xl px-4 py-8 sm:px-6", className)}>
             {children}
         </main>
     );
+}
+
+type ContentWidth = "full" | "wide" | "default" | "narrow";
+
+const CONTENT_WIDTH: Record<ContentWidth, string> = {
+    full: "",
+    wide: "max-w-5xl",
+    default: "max-w-4xl",
+    narrow: "max-w-3xl",
+};
+
+// Optional inner wrapper to keep working content from stretching the full header
+// width on pages where that looks bad (e.g. detail pages).
+export function DashboardContent({
+    children,
+    width = "full",
+    className,
+}: {
+    children: React.ReactNode;
+    width?: ContentWidth;
+    className?: string;
+}) {
+    return <div className={cn("w-full", CONTENT_WIDTH[width], className)}>{children}</div>;
 }
 
 export function DashboardPageHeader({
@@ -45,9 +61,7 @@ export function DashboardPageHeader({
 }) {
     return (
         <header className="mb-6 space-y-4">
-            {backHref && (
-                <BackLink href={backHref} label={backLabel} />
-            )}
+            {backHref && <BackLink href={backHref} label={backLabel} />}
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 space-y-1">
                     <div className="flex flex-wrap items-center gap-2">

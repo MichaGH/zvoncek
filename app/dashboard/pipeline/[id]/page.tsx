@@ -10,7 +10,7 @@ export default async function PipelineDetailPage({ params }: { params: Promise<{
     if (!lead) notFound();
 
     return (
-        <DashboardPage width="default">
+        <DashboardPage>
             <PipelineDetail lead={lead} users={users} />
         </DashboardPage>
     );

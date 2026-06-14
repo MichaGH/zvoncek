@@ -32,7 +32,7 @@ export default async function CallsHistoryPage({
     ]);
 
     return (
-        <DashboardPage width="wide">
+        <DashboardPage>
             <DashboardPageHeader
                 title="História volaní"
                 description="Iba marketingové hovory zaznamenané z fronty volaní"

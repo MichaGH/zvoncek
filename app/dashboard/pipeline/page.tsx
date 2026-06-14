@@ -39,7 +39,7 @@ export default async function PipelinePage({
     moreParams.set("limit", String(take + PIPELINE_PAGE_SIZE));
 
     return (
-        <DashboardPage width="wide">
+        <DashboardPage>
             <DashboardPageHeader
                 title="Pipeline"
                 description="Firmy, ktoré sa posunuli do reálneho riešenia"
