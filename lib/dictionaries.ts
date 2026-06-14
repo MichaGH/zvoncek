@@ -5,7 +5,9 @@ import {
     CallOutcome,
     LeadStatus,
     NextActionKind,
+    TrackedLinkKind,
 } from "@/app/generated/prisma/enums";
+import type { Confidence } from "@/lib/tracking/confidence";
 
 export const STATUS_LABEL: Record<LeadStatus, string> = {
     NEW: "Nový",
@@ -57,6 +59,9 @@ export const ACTIVITY_LABEL: Record<ActivityType, string> = {
     STATUS_CHANGED: "Stav zmenený",
     OWNER_CHANGED: "Vlastník zmenený",
     OUTCOME_CORRECTED: "Výsledok hovoru opravený",
+    TRACKER_ATTACHED: "Tracker pripojený",
+    TRACKER_UPDATED: "Dizajn aktualizovaný",
+    TRACKER_OPENED: "Klient otvoril",
 };
 
 export const ACTIVITY_CATEGORY_LABEL: Record<ActivityCategory, string> = {
@@ -70,6 +75,32 @@ export const ACTIVITY_SOURCE_LABEL: Record<ActivitySource, string> = {
     PIPELINE: "Pipeline",
     CONTACTS: "Kontakty",
     ADMIN: "Administrácia",
+};
+
+export const TRACKED_LINK_KIND_LABEL: Record<TrackedLinkKind, string> = {
+    DESIGN: "Dizajn",
+    QUOTE: "Cenová ponuka",
+    OTHER: "Iné",
+};
+
+// Tracking confidence – "signál, nie dôkaz". Pozri docs/tracking-system-plan.md.
+export const CONFIDENCE_LABEL: Record<Confidence, string> = {
+    none: "Neotvorené",
+    weak: "Slabý signál",
+    medium: "Pravdepodobne otvorené",
+    high: "Otvorené",
+    very_high: "Otvorené · silný signál",
+};
+
+export const CONFIDENCE_VARIANT: Record<
+    Confidence,
+    "default" | "secondary" | "outline" | "destructive"
+> = {
+    none: "outline",
+    weak: "outline",
+    medium: "secondary",
+    high: "default",
+    very_high: "default",
 };
 
 export const NEXT_ACTION_LABEL: Record<NextActionKind, string> = {

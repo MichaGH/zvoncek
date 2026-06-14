@@ -32,6 +32,8 @@ import {
     STATUS_VARIANT,
 } from "@/lib/dictionaries";
 import type { PipelineDetailData, PipelineUserOption } from "@/lib/queries/pipeline";
+import type { TrackedLinkView } from "@/lib/queries/tracking";
+import DesignTrackingCard from "@/components/pipeline/DesignTrackingCard";
 
 const QUICK_EVENTS = [
     "Klient sľúbil poslať podklady",
@@ -63,9 +65,11 @@ function normalizeUrl(url: string) {
 export default function PipelineDetail({
     lead,
     users,
+    trackedLinks,
 }: {
     lead: PipelineDetailData;
     users: PipelineUserOption[];
+    trackedLinks: TrackedLinkView[];
 }) {
     const router = useRouter();
     const [form, setForm] = useState({
@@ -380,6 +384,14 @@ export default function PipelineDetail({
                                 </div>
                             </CardContent>
                         </Card>
+
+                        {/* Dizajn & sledovanie */}
+                        <DesignTrackingCard
+                            leadId={lead.id}
+                            links={trackedLinks}
+                            designSentAt={lead.designSentAt}
+                            quoteSentAt={lead.quoteSentAt}
+                        />
 
                         {/* História */}
                         <Card>

@@ -19,6 +19,7 @@ model User {
   lockedLeads  Lead[]     @relation("LockedLeads")
   createdLeads Lead[]     @relation("CreatedLeads")
   activities   Activity[]
+  createdTrackedLinks TrackedLink[] @relation("CreatedTrackedLinks")
 }
 
 model Invite {
@@ -38,6 +39,7 @@ model Lead {
   note        String?
 
   status  LeadStatus @default(NEW)
+  origin  LeadOrigin @default(MARKETING_CALL) // ako sa lead dostal do systému (marketing hovor / priamo / odporúčanie)
   owner   User?      @relation("OwnedLeads", fields: [ownerId], references: [id])
   ownerId String? // kto to má aktuálne na starosti (N → M)
 
@@ -73,9 +75,10 @@ model Lead {
   lockedById String?
   lockedAt   DateTime?
 
-  activities Activity[]
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
+  activities   Activity[]
+  trackedLinks TrackedLink[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   @@index([status])
   @@index([status, callbackKind])
@@ -104,6 +107,7 @@ model Activity {
   source    ActivitySource
   outcome   CallOutcome?
   note      String?
+  meta      Json? // štruktúrované detaily: napr. diff zmien { changes: [{ field, from, to }] } alebo verzia trackeru
   createdAt DateTime         @default(now())
 
   @@index([leadId])
@@ -126,6 +130,9 @@ enum ActivityType {
   STATUS_CHANGED
   OWNER_CHANGED
   OUTCOME_CORRECTED
+  TRACKER_ATTACHED // pripojený tracked link (dizajn/CP)
+  TRACKER_UPDATED // nová verzia – „dizajn aktualizovaný"
+  TRACKER_OPENED // klient otvoril (míľnik, hlavne po update)
 }
 
 enum CallOutcome {
@@ -171,4 +178,91 @@ enum NextActionKind {
   SEND_EMAIL
   WAITING_FOR_CLIENT
   CUSTOM
+}
+
+enum LeadOrigin {
+  MARKETING_CALL // klasický flow: marketing volá
+  DIRECT // priamy kontakt (stretnutie, sám napísal)
+  REFERRAL // odporúčanie
+  OTHER
+}
+
+// ── TRACKING ─────────────────────────────────────────────────────────────────
+// TrackedLink = jeden token / jedna proposal linka. Lead môže mať viac (varianty).
+// TrackedLinkVersion = log aktualizácií (v1, v2…), každá môže mať vlastnú URL + poznámku.
+// TrackedEvent = jednotlivé otvorenia/engagement, označkované verziou ktorú videli.
+
+enum TrackedLinkKind {
+  DESIGN // dizajnový návrh
+  QUOTE // cenová ponuka (tracknutá stránka)
+  OTHER // samostatný tracker bez leadu
+}
+
+enum TrackedEventType {
+  PAGE_VIEW // stránka sa načítala (slabý signál, môže byť skener)
+  ENGAGED_VIEW // reálny engagement (čas/scroll) – nesie durationMs
+}
+
+model TrackedLink {
+  id    String          @id @default(cuid())
+  token String          @unique // náhodný, neuhádnuteľný; identifikuje linku server-side
+  kind  TrackedLinkKind @default(DESIGN)
+
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId String? // NULLABLE → samostatný tracker bez klienta
+
+  label              String? // "Variant A" / poznámka pri standalone trackeri
+  targetUrl          String? // aktuálna URL (denormalizovaná z poslednej verzie)
+  currentVersion     Int       @default(1)
+  lastMarkedUpdateAt DateTime? // kedy sa naposledy stlačilo „dizajn aktualizovaný"
+  revokedAt          DateTime? // soft-kill linky bez mazania histórie
+
+  createdBy   User?   @relation("CreatedTrackedLinks", fields: [createdById], references: [id])
+  createdById String?
+
+  versions  TrackedLinkVersion[]
+  events    TrackedEvent[]
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  @@index([leadId])
+  @@index([kind])
+  @@index([revokedAt])
+}
+
+model TrackedLinkVersion {
+  id          String   @id @default(cuid())
+  link        TrackedLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  linkId      String
+  version     Int // 1, 2, 3…
+  url         String? // URL platná pre túto verziu (môže sa zmeniť pri update)
+  note        String? // „zmenené DNS", „opravené čo chcel klient" alebo nič
+  markedAt    DateTime @default(now())
+  createdById String? // kto verziu vytvoril (audit; FK pridáme keď budú roly aktívne)
+
+  events TrackedEvent[]
+
+  @@unique([linkId, version])
+  @@index([linkId])
+}
+
+model TrackedEvent {
+  id     String      @id @default(cuid())
+  link   TrackedLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  linkId String
+
+  version   TrackedLinkVersion? @relation(fields: [versionId], references: [id])
+  versionId String?
+  versionAtView Int // ktorú verziu mal klient otvorenú v čase eventu
+
+  type       TrackedEventType
+  durationMs Int? // nažhavený čas na stránke (ENGAGED_VIEW)
+  ip         String? // surová IP – len pre hrubú geolokáciu cez API (nie presná poloha)
+  uaShort    String? // hrubý bucket user-agenta (kvôli bot heuristike)
+  botFlag    Boolean          @default(false)
+  meta       Json? // future signály: scroll %, CTA id, atď.
+  occurredAt DateTime         @default(now())
+
+  @@index([linkId, occurredAt])
+  @@index([type, occurredAt])
 }
