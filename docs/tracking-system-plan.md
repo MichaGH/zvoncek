@@ -88,12 +88,25 @@ Source of truth for the multi-round build. Update the checkboxes as phases land.
       (currently `logSent` already sets a CALL follow-up; revisit if it should change). Tracking only suggests,
       never auto-rewrites nextAction.
 
-### Phase 3 — Activity integration
-- [ ] `lib/activityLog.ts` — write field-diff into `Activity.meta` on contact/price edits so history shows
-      WHAT changed (phone/web/email/price: from → to), not just "changed".
-- [ ] Emit milestone activities: `TRACKER_ATTACHED`, `TRACKER_UPDATED`. Defer auto `TRACKER_OPENED` until
-      confidence logic is proven on real data (avoid bot-driven false timeline entries).
-- [ ] `lib/dictionaries.ts` — Slovak labels for new ActivityType values + LeadOrigin + tracker kinds.
+### Phase 3 — full pipeline [id] redesign + price/design rework  ✅ DONE (tsc+lint+build+live query)
+Schema: `TrackedLink` += `repoUrl String?`, `isLive Boolean @default(true)` (pushed).
+- [x] Layout rebuilt (`PipelineDetail.tsx`): status+owner as compact pills in the header (no big Stav card);
+      main column = Ďalší krok (with Vymazať/delete) → Cenová ponuka → Dizajn → Ďalšie kroky → História;
+      sidebar = Údaje only (firma/web/telefón/email/poznámka), **read-only until "Upraviť"**. Price & design URL
+      removed from Údaje.
+- [x] `CenovaPonukaCard.tsx` — note saveable WITHOUT price ("thinking" number); states: sent="Klient videl X €",
+      not-sent-with-price="Uvažovaná cena", only-note, none. Action `saveQuote(leadId,{price,note,send})` in
+      `lib/actions/pipeline` (send stamps quoteSentAt + follow-up; price change logged as diff).
+- [x] `DesignTrackingCard.tsx` rebuilt: plain **odkaz** is clickable + copy button; **sledovaný** link is muted
+      select-all text (no link, no copy) so nobody fires it by mistake; repo link; live/off toggle; "Aktualizovať"
+      (version) vs "Repo / označenie" (meta) vs "Odstrániť návrh" (revoke); design-sent gated behind a design existing;
+      ⚠ design-no-price warning. Open-history in a **drawer** (`TrackerHistory`, vaul) showing time/type/duration/device/bot.
+- [x] tracking actions: `createTrackedLink`(+repoUrl), `updateTrackedLinkMeta`(label/repoUrl/isLive), existing version/revoke.
+- [x] queries: `getTrackedLinksForLead` now returns `repoUrl`, `isLive`, and `events[]` (for the drawer).
+- [x] `updateLead` now logs a real diff note ("Telefón: X → Y · Email: …"); trimmed to contact fields only.
+- [x] dictionaries: CONFIDENCE + TRACKED_LINK_KIND labels (earlier), new ActivityTypes labelled.
+- [ ] STILL TODO: `TRACKER_OPENED` auto-milestone deferred (avoid bot-driven false timeline rows);
+      `Activity.meta` JSON still unused (diffs currently go in the `note` string — fine for now).
 
 ### Phase 4 — tracking hub + standalone trackers
 - [ ] `app/dashboard/tracking/page.tsx` (top-level, NOT under pipeline) — flat table of all tracked links

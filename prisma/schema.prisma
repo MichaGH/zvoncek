@@ -19,7 +19,6 @@ model User {
   lockedLeads  Lead[]     @relation("LockedLeads")
   createdLeads Lead[]     @relation("CreatedLeads")
   activities   Activity[]
-  createdTrackedLinks TrackedLink[] @relation("CreatedTrackedLinks")
 }
 
 model Invite {
@@ -76,7 +75,7 @@ model Lead {
   lockedAt   DateTime?
 
   activities   Activity[]
-  trackedLinks TrackedLink[]
+  designs      Design[]
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
@@ -187,82 +186,82 @@ enum LeadOrigin {
   OTHER
 }
 
-// ── TRACKING ─────────────────────────────────────────────────────────────────
-// TrackedLink = jeden token / jedna proposal linka. Lead môže mať viac (varianty).
-// TrackedLinkVersion = log aktualizácií (v1, v2…), každá môže mať vlastnú URL + poznámku.
-// TrackedEvent = jednotlivé otvorenia/engagement, označkované verziou ktorú videli.
-
-enum TrackedLinkKind {
-  DESIGN // dizajnový návrh
-  QUOTE // cenová ponuka (tracknutá stránka)
-  OTHER // samostatný tracker bez leadu
-}
+// ── DIZAJN & TRACKING ────────────────────────────────────────────────────────
+// Design = dizajnový návrh (patrí leadu): URL, repo, isLive, verzie, stav poslania.
+// DesignVersion = log verzií (v1, v2…), každá môže mať vlastnú URL + poznámku.
+// Tracker = sledovanie jedného návrhu (1:1): token + eventy. Token má @unique index,
+//   takže ingest API ho nájde JEDNÝM indexovaným dotazom (include aj s návrhom a verziou).
+// TrackerEvent = jednotlivé otvorenia/engagement, označkované verziou ktorú videli.
 
 enum TrackedEventType {
   PAGE_VIEW // stránka sa načítala (slabý signál, môže byť skener)
-  ENGAGED_VIEW // reálny engagement (čas/scroll) – nesie durationMs
+  ENGAGED_VIEW // reálne pozretie (aktívny čas/scroll) – nesie durationMs
 }
 
-model TrackedLink {
-  id    String          @id @default(cuid())
-  token String          @unique // náhodný, neuhádnuteľný; identifikuje linku server-side
-  kind  TrackedLinkKind @default(DESIGN)
+model Design {
+  id             String    @id @default(cuid())
+  lead           Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId         String
+  label          String? // "Variant A"
+  targetUrl      String? // aktuálna URL návrhu (denormalizovaná z poslednej verzie)
+  repoUrl        String? // GitHub repo – nech po vypnutí hostingu vieme, ktorý projekt to bol
+  isLive         Boolean   @default(true) // ručný príznak: beží stránka? (pri vytvorení predpokladáme áno)
+  currentVersion Int       @default(1)
+  sentAt         DateTime? // kedy bol návrh označený ako poslaný klientovi (revertovateľné)
+  createdById    String?
+  deletedAt      DateTime? // soft delete
 
-  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  leadId String? // NULLABLE → samostatný tracker bez klienta
-
-  label              String? // "Variant A" / poznámka pri standalone trackeri
-  targetUrl          String? // aktuálna URL (denormalizovaná z poslednej verzie)
-  currentVersion     Int       @default(1)
-  lastMarkedUpdateAt DateTime? // kedy sa naposledy stlačilo „dizajn aktualizovaný"
-  revokedAt          DateTime? // soft-kill linky bez mazania histórie
-
-  createdBy   User?   @relation("CreatedTrackedLinks", fields: [createdById], references: [id])
-  createdById String?
-
-  versions  TrackedLinkVersion[]
-  events    TrackedEvent[]
-  createdAt DateTime             @default(now())
-  updatedAt DateTime             @updatedAt
+  versions  DesignVersion[]
+  tracker   Tracker?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
 
   @@index([leadId])
-  @@index([kind])
-  @@index([revokedAt])
+  @@index([deletedAt])
 }
 
-model TrackedLinkVersion {
+model DesignVersion {
   id          String   @id @default(cuid())
-  link        TrackedLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
-  linkId      String
+  design      Design   @relation(fields: [designId], references: [id], onDelete: Cascade)
+  designId    String
   version     Int // 1, 2, 3…
-  url         String? // URL platná pre túto verziu (môže sa zmeniť pri update)
-  note        String? // „zmenené DNS", „opravené čo chcel klient" alebo nič
+  url         String? // URL platná pre túto verziu
+  note        String? // „opravené čo chcel klient", „zmenené DNS"… alebo nič
   markedAt    DateTime @default(now())
-  createdById String? // kto verziu vytvoril (audit; FK pridáme keď budú roly aktívne)
+  createdById String?
 
-  events TrackedEvent[]
+  events TrackerEvent[]
 
-  @@unique([linkId, version])
-  @@index([linkId])
+  @@unique([designId, version])
+  @@index([designId])
 }
 
-model TrackedEvent {
-  id     String      @id @default(cuid())
-  link   TrackedLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
-  linkId String
+model Tracker {
+  id        String   @id @default(cuid())
+  token     String   @unique // ingest API ho nájde jedným indexovaným dotazom
+  design    Design   @relation(fields: [designId], references: [id], onDelete: Cascade)
+  designId  String   @unique // 1:1 s návrhom
+  createdAt DateTime @default(now())
 
-  version   TrackedLinkVersion? @relation(fields: [versionId], references: [id])
-  versionId String?
+  events TrackerEvent[]
+}
+
+model TrackerEvent {
+  id        String  @id @default(cuid())
+  tracker   Tracker @relation(fields: [trackerId], references: [id], onDelete: Cascade)
+  trackerId String
+
+  version       DesignVersion? @relation(fields: [versionId], references: [id])
+  versionId     String?
   versionAtView Int // ktorú verziu mal klient otvorenú v čase eventu
 
   type       TrackedEventType
-  durationMs Int? // nažhavený čas na stránke (ENGAGED_VIEW)
-  ip         String? // surová IP – len pre hrubú geolokáciu cez API (nie presná poloha)
-  uaShort    String? // hrubý bucket user-agenta (kvôli bot heuristike)
+  durationMs Int? // aktívny čas na stránke (ENGAGED_VIEW)
+  ip         String? // surová IP – len pre hrubú geolokáciu (nie presná poloha)
+  uaShort    String? // hrubý bucket user-agenta (bot heuristika)
   botFlag    Boolean          @default(false)
-  meta       Json? // future signály: scroll %, CTA id, atď.
   occurredAt DateTime         @default(now())
 
-  @@index([linkId, occurredAt])
+  @@index([trackerId, occurredAt])
   @@index([type, occurredAt])
 }

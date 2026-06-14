@@ -1,11 +1,10 @@
 import prisma from "@/lib/db";
-import { resolveTokenForIngest } from "@/lib/queries/tracking";
+import { resolveTrackerToken } from "@/lib/queries/tracking";
 import { shortUa, looksLikeBot } from "@/lib/tracking/tokens";
 import type { TrackedEventType } from "@/app/generated/prisma/enums";
 
 // Public, anonymous tracking ingest. Visitors are not logged in.
-// It must NEVER return lead data and always answers 204 so it can't be used
-// to probe which tokens are valid.
+// Never returns lead data and always answers 204 so it can't probe which tokens are valid.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -26,7 +25,6 @@ export function OPTIONS() {
 type Body = { p?: string; e?: string; d?: number };
 
 async function parseBody(req: Request): Promise<Body> {
-    // sendBeacon sends text/plain; fetch may send JSON. Both arrive as a JSON string.
     try {
         const text = await req.text();
         if (!text) return {};
@@ -55,18 +53,19 @@ export async function POST(req: Request) {
     const type = eventType(body.e);
     if (!token || !type) return noContent();
 
-    const link = await resolveTokenForIngest(token);
-    if (!link) return noContent();
+    const tracker = await resolveTrackerToken(token);
+    // Ignore unknown tokens or events for a soft-deleted design.
+    if (!tracker || tracker.design.deletedAt) return noContent();
 
     const ua = req.headers.get("user-agent");
     const ip = clientIp(req);
-    const versionRow = link.versions[0];
+    const versionRow = tracker.design.versions[0];
 
     // Light dedup: skip an identical PAGE_VIEW from the same IP within 45s.
     if (type === "PAGE_VIEW" && ip) {
-        const recent = await prisma.trackedEvent.findFirst({
+        const recent = await prisma.trackerEvent.findFirst({
             where: {
-                linkId: link.id,
+                trackerId: tracker.id,
                 type: "PAGE_VIEW",
                 ip,
                 occurredAt: { gte: new Date(Date.now() - 45_000) },
@@ -82,11 +81,11 @@ export async function POST(req: Request) {
             : null;
 
     try {
-        await prisma.trackedEvent.create({
+        await prisma.trackerEvent.create({
             data: {
-                linkId: link.id,
+                trackerId: tracker.id,
                 versionId: versionRow?.id ?? null,
-                versionAtView: versionRow?.version ?? link.currentVersion,
+                versionAtView: versionRow?.version ?? tracker.design.currentVersion,
                 type,
                 durationMs: duration,
                 ip,

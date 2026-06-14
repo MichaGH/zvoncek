@@ -1,53 +1,40 @@
 // prisma/seedTracking.ts
-// Creates test tracked links so you can immediately poke /api/p with Postman.
-// Run: npm run seed:tracking
+// Vytvorí testovací návrh + tracker, aby si hneď mohol skúšať /api/p (Postman / dev stránka).
+// Spusti: npm run seed:tracking
 import prisma from "@/lib/db";
 import { generateToken } from "@/lib/tracking/tokens";
 
 async function main() {
     const lead = await prisma.lead.findFirst({ orderBy: { number: "asc" } });
+    if (!lead) {
+        console.log("Žiadny lead v DB – najprv seedni leady.");
+        return;
+    }
 
-    const leadToken = generateToken();
-    await prisma.trackedLink.create({
+    const token = generateToken();
+    await prisma.design.create({
         data: {
-            token: leadToken,
-            kind: "DESIGN",
-            leadId: lead?.id ?? null,
-            label: "Testovací dizajn",
-            targetUrl: "http://127.0.0.1:5500/proposal.html",
+            leadId: lead.id,
+            label: "Testovací návrh",
+            targetUrl: "https://atp.thegrandpoints.com/",
             currentVersion: 1,
-            versions: {
-                create: { version: 1, url: "http://127.0.0.1:5500/proposal.html" },
-            },
-        },
-    });
-
-    const standaloneToken = generateToken();
-    await prisma.trackedLink.create({
-        data: {
-            token: standaloneToken,
-            kind: "OTHER",
-            label: "Samostatný test tracker",
-            currentVersion: 1,
-            versions: { create: { version: 1 } },
+            versions: { create: { version: 1, url: "https://atp.thegrandpoints.com/" } },
+            tracker: { create: { token } },
         },
     });
 
     const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-    const leadLabel = lead
-        ? `#${lead.number} ${lead.companyName ?? lead.website ?? ""}`.trim()
-        : "(žiadny lead v DB)";
+    const leadLabel = `#${lead.number} ${lead.companyName ?? lead.website ?? ""}`.trim();
 
     console.log("\n✅ Tracking seed hotový.\n");
-    console.log(`Lead tracker token:       ${leadToken}   → ${leadLabel}`);
-    console.log(`Standalone tracker token: ${standaloneToken}`);
-    console.log(`\n── Postman test ───────────────────────────────`);
+    console.log(`Návrh token: ${token}   → ${leadLabel}`);
+    console.log(`\n── Postman ────────────────────────────────────`);
     console.log(`POST ${base}/api/p`);
-    console.log(`Body (raw / JSON):  { "p": "${leadToken}", "e": "view" }`);
-    console.log(`Then "engaged":     { "p": "${leadToken}", "e": "engaged", "d": 12000 }`);
-    console.log(`\n── Browser test ───────────────────────────────`);
-    console.log(`${base}/dev/proposal?p=${leadToken}`);
-    console.log(`\nPozri výsledok:  npx prisma studio  →  TrackedEvent\n`);
+    console.log(`Body (raw/JSON):  { "p": "${token}", "e": "view" }`);
+    console.log(`Engaged:          { "p": "${token}", "e": "engaged", "d": 12000 }`);
+    console.log(`\n── Browser ────────────────────────────────────`);
+    console.log(`${base}/dev/proposal?p=${token}`);
+    console.log(`\nVýsledok: npx prisma studio → TrackerEvent\n`);
 }
 
 main().finally(() => prisma.$disconnect());

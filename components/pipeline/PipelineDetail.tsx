@@ -2,10 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Phone, Globe, Mail, Pencil, Check } from "lucide-react";
+import { Phone, Pencil, Check } from "lucide-react";
 import { LeadStatus, NextActionKind } from "@/app/generated/prisma/enums";
 import { DashboardContent, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,10 +28,10 @@ import {
     NEXT_ACTION_LABEL,
     OUTCOME_LABEL,
     STATUS_LABEL,
-    STATUS_VARIANT,
 } from "@/lib/dictionaries";
 import type { PipelineDetailData, PipelineUserOption } from "@/lib/queries/pipeline";
-import type { TrackedLinkView } from "@/lib/queries/tracking";
+import type { DesignView } from "@/lib/queries/tracking";
+import CenovaPonukaCard from "@/components/pipeline/CenovaPonukaCard";
 import DesignTrackingCard from "@/components/pipeline/DesignTrackingCard";
 
 const QUICK_EVENTS = [
@@ -65,29 +64,24 @@ function normalizeUrl(url: string) {
 export default function PipelineDetail({
     lead,
     users,
-    trackedLinks,
+    designs,
 }: {
     lead: PipelineDetailData;
     users: PipelineUserOption[];
-    trackedLinks: TrackedLinkView[];
+    designs: DesignView[];
 }) {
     const router = useRouter();
+
+    const [editingData, setEditingData] = useState(false);
     const [form, setForm] = useState({
         companyName: lead.companyName ?? "",
         website: lead.website ?? "",
         phone: lead.phone ?? "",
         email: lead.email ?? "",
         note: lead.note ?? "",
-        price: lead.price?.toString() ?? "",
-        priceNote: lead.priceNote ?? "",
-        designUrl: lead.designUrl ?? "",
     });
-    const [saving, setSaving] = useState(false);
-    const [dirty, setDirty] = useState(false);
+    const [savingData, setSavingData] = useState(false);
 
-    // The next-action editor starts empty on purpose: setting a new next action must
-    // never silently carry over the previously saved note. The current saved action
-    // is shown read-only above; "Upraviť" loads it into the editor when you want it.
     const [nextKind, setNextKind] = useState<NextActionKind>("CALL");
     const [nextAt, setNextAt] = useState("");
     const [nextNote, setNextNote] = useState("");
@@ -105,7 +99,31 @@ export default function PipelineDetail({
 
     function set<K extends keyof typeof form>(key: K, value: string) {
         setForm((current) => ({ ...current, [key]: value }));
-        setDirty(true);
+    }
+
+    function startEditData() {
+        setForm({
+            companyName: lead.companyName ?? "",
+            website: lead.website ?? "",
+            phone: lead.phone ?? "",
+            email: lead.email ?? "",
+            note: lead.note ?? "",
+        });
+        setEditingData(true);
+    }
+
+    async function saveData() {
+        setSavingData(true);
+        await updateLead(lead.id, {
+            companyName: form.companyName.trim() || null,
+            website: form.website.trim() || null,
+            phone: form.phone.trim() || null,
+            email: form.email.trim() || null,
+            note: form.note.trim() || null,
+        });
+        setSavingData(false);
+        setEditingData(false);
+        router.refresh();
     }
 
     function resetNextEditor() {
@@ -120,23 +138,6 @@ export default function PipelineDetail({
         setNextAt(lead.nextActionAt ? lead.nextActionAt.slice(0, 16) : "");
         setNextNote(lead.nextActionNote ?? "");
         setEditingNext(true);
-    }
-
-    async function save() {
-        setSaving(true);
-        await updateLead(lead.id, {
-            companyName: form.companyName.trim() || null,
-            website: form.website.trim() || null,
-            phone: form.phone.trim() || null,
-            email: form.email.trim() || null,
-            note: form.note.trim() || null,
-            price: form.price ? Number(form.price) : null,
-            priceNote: form.priceNote.trim() || null,
-            designUrl: form.designUrl.trim() || null,
-        });
-        setSaving(false);
-        setDirty(false);
-        router.refresh();
     }
 
     async function saveNextAction() {
@@ -188,21 +189,53 @@ export default function PipelineDetail({
                         <span className="truncate">{lead.companyName ?? lead.website ?? "Bez mena"}</span>
                     </span>
                 }
-                badge={
-                    <Badge variant={STATUS_VARIANT[lead.status]} className="font-normal">
-                        {STATUS_LABEL[lead.status]}
-                    </Badge>
-                }
                 description="Detail príležitosti v pipeline"
                 actions={
-                    phoneHref && (
-                        <Button asChild size="sm">
-                            <a href={phoneHref}>
-                                <Phone className="mr-1.5 h-4 w-4" />
-                                {lead.phone}
-                            </a>
-                        </Button>
-                    )
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Select
+                            defaultValue={lead.status}
+                            onValueChange={async (value) => {
+                                await changeStatus(lead.id, value as LeadStatus);
+                                router.refresh();
+                            }}
+                        >
+                            <SelectTrigger size="sm" className="w-auto gap-1.5 rounded-full">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {Object.entries(STATUS_LABEL).map(([key, label]) => (
+                                    <SelectItem key={key} value={key}>{label}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <Select
+                            defaultValue={lead.owner?.id ?? "none"}
+                            onValueChange={async (value) => {
+                                await changeOwner(lead.id, value === "none" ? null : value);
+                                router.refresh();
+                            }}
+                        >
+                            <SelectTrigger size="sm" className="w-auto gap-1.5 rounded-full">
+                                <SelectValue placeholder="Rieši" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="none">— nikto —</SelectItem>
+                                {users.map((user) => (
+                                    <SelectItem key={user.id} value={user.id}>
+                                        {user.firstName} {user.lastName}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        {phoneHref && (
+                            <Button asChild size="sm">
+                                <a href={phoneHref}>
+                                    <Phone className="mr-1.5 h-4 w-4" />
+                                    {lead.phone}
+                                </a>
+                            </Button>
+                        )}
+                    </div>
                 }
             />
 
@@ -242,6 +275,7 @@ export default function PipelineDetail({
                                                 <Button
                                                     size="sm"
                                                     variant="ghost"
+                                                    className="text-destructive"
                                                     onClick={clearNextAction}
                                                     disabled={savingNext}
                                                 >
@@ -306,36 +340,43 @@ export default function PipelineDetail({
                             </CardContent>
                         </Card>
 
-                        {/* Obchodné kroky — proper action section */}
+                        {/* Cenová ponuka */}
+                        <CenovaPonukaCard
+                            leadId={lead.id}
+                            price={lead.price}
+                            priceNote={lead.priceNote}
+                            quoteSentAt={lead.quoteSentAt}
+                        />
+
+                        {/* Dizajn & sledovanie */}
+                        <DesignTrackingCard
+                            leadId={lead.id}
+                            designs={designs}
+                            quoteSentAt={lead.quoteSentAt}
+                        />
+
+                        {/* Ďalšie kroky */}
                         <Card>
                             <CardHeader className="pb-3">
-                                <CardTitle className="text-base">Obchodné kroky</CardTitle>
+                                <CardTitle className="text-base">Ďalšie kroky</CardTitle>
                             </CardHeader>
                             <CardContent className="space-y-5">
                                 <div className="space-y-2">
                                     <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                        Označiť ako poslané
+                                        Email „o nás&quot;
                                     </Label>
-                                    <div className="grid gap-2 sm:grid-cols-3">
-                                        <SentButton
-                                            label="Cenová ponuka"
-                                            at={lead.quoteSentAt}
-                                            disabled={busy}
-                                            onLog={() => runBusiness(() => logSent(lead.id, "QUOTE_SENT"))}
-                                        />
-                                        <SentButton
-                                            label="Dizajnový návrh"
-                                            at={lead.designSentAt}
-                                            disabled={busy}
-                                            onLog={() => runBusiness(() => logSent(lead.id, "DESIGN_SENT"))}
-                                        />
-                                        <SentButton
-                                            label="Email / o nás"
-                                            at={lead.aboutUsSentAt}
-                                            disabled={busy}
-                                            onLog={() => runBusiness(() => logSent(lead.id, "EMAIL_SENT"))}
-                                        />
-                                    </div>
+                                    <Button
+                                        type="button"
+                                        variant={lead.aboutUsSentAt ? "secondary" : "outline"}
+                                        size="sm"
+                                        disabled={busy}
+                                        onClick={() => runBusiness(() => logSent(lead.id, "EMAIL_SENT"))}
+                                    >
+                                        {lead.aboutUsSentAt && <Check className="mr-1.5 h-3.5 w-3.5" />}
+                                        {lead.aboutUsSentAt
+                                            ? `Poslané ${formatDate(lead.aboutUsSentAt)}`
+                                            : "Označiť ako poslané"}
+                                    </Button>
                                 </div>
 
                                 <Separator />
@@ -345,7 +386,7 @@ export default function PipelineDetail({
                                         Zaznamenať udalosť
                                     </Label>
                                     <p className="text-xs text-muted-foreground">
-                                        Pridá krok do obchodnej histórie. Nezávisí od poslania CP/návrhu/emailu.
+                                        Pridá krok do obchodnej histórie.
                                     </p>
                                     <div className="flex flex-wrap gap-2">
                                         {QUICK_EVENTS.map((text) => (
@@ -385,14 +426,6 @@ export default function PipelineDetail({
                             </CardContent>
                         </Card>
 
-                        {/* Dizajn & sledovanie */}
-                        <DesignTrackingCard
-                            leadId={lead.id}
-                            links={trackedLinks}
-                            designSentAt={lead.designSentAt}
-                            quoteSentAt={lead.quoteSentAt}
-                        />
-
                         {/* História */}
                         <Card>
                             <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
@@ -420,26 +453,19 @@ export default function PipelineDetail({
                                                         <span className="font-medium">
                                                             {ACTIVITY_LABEL[activity.type]}
                                                         </span>
-                                                        <Badge
-                                                            variant={
-                                                                activity.category === "BUSINESS"
-                                                                    ? "default"
-                                                                    : "outline"
-                                                            }
-                                                        >
-                                                            {ACTIVITY_CATEGORY_LABEL[activity.category]}
-                                                        </Badge>
                                                         <span className="text-xs text-muted-foreground">
                                                             {ACTIVITY_SOURCE_LABEL[activity.source]}
+                                                            {" · "}
+                                                            {ACTIVITY_CATEGORY_LABEL[activity.category]}
                                                         </span>
                                                         <span className="ml-auto text-xs text-muted-foreground">
                                                             {formatDateTime(activity.createdAt)} · {activity.userName}
                                                         </span>
                                                     </div>
                                                     {activity.outcome && (
-                                                        <Badge variant="secondary">
+                                                        <p className="text-xs text-muted-foreground">
                                                             {OUTCOME_LABEL[activity.outcome]}
-                                                        </Badge>
+                                                        </p>
                                                     )}
                                                     {activity.note && (
                                                         <p className="text-muted-foreground">{activity.note}</p>
@@ -456,99 +482,66 @@ export default function PipelineDetail({
                         </Card>
                     </div>
 
-                    {/* SIDEBAR — status & reference */}
+                    {/* SIDEBAR — who the client is */}
                     <div className="space-y-6">
                         <Card>
-                            <CardHeader className="pb-3">
-                                <CardTitle className="text-base">Stav</CardTitle>
+                            <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+                                <CardTitle className="text-base">Údaje</CardTitle>
+                                {!editingData && (
+                                    <Button size="sm" variant="outline" onClick={startEditData}>
+                                        <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                                        Upraviť
+                                    </Button>
+                                )}
                             </CardHeader>
                             <CardContent className="space-y-4">
-                                <div className="grid gap-1.5">
-                                    <Label>Stav</Label>
-                                    <Select
-                                        defaultValue={lead.status}
-                                        onValueChange={async (value) => {
-                                            await changeStatus(lead.id, value as LeadStatus);
-                                            router.refresh();
-                                        }}
-                                    >
-                                        <SelectTrigger><SelectValue /></SelectTrigger>
-                                        <SelectContent>
-                                            {Object.entries(STATUS_LABEL).map(([key, label]) => (
-                                                <SelectItem key={key} value={key}>{label}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <div className="grid gap-1.5">
-                                    <Label>Rieši</Label>
-                                    <Select
-                                        defaultValue={lead.owner?.id ?? "none"}
-                                        onValueChange={async (value) => {
-                                            await changeOwner(lead.id, value === "none" ? null : value);
-                                            router.refresh();
-                                        }}
-                                    >
-                                        <SelectTrigger><SelectValue /></SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="none">— nikto —</SelectItem>
-                                            {users.map((user) => (
-                                                <SelectItem key={user.id} value={user.id}>
-                                                    {user.firstName} {user.lastName}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <div className="space-y-1.5">
-                                    <QuickLink
-                                        icon={<Phone className="h-3.5 w-3.5" />}
-                                        href={phoneHref}
-                                        text={lead.phone}
-                                    />
-                                    <QuickLink
-                                        icon={<Mail className="h-3.5 w-3.5" />}
-                                        href={lead.email ? `mailto:${lead.email}` : null}
-                                        text={lead.email}
-                                    />
-                                    <QuickLink
-                                        icon={<Globe className="h-3.5 w-3.5" />}
-                                        href={lead.website ? normalizeUrl(lead.website) : null}
-                                        text={lead.website}
-                                        external
-                                    />
-                                </div>
-                            </CardContent>
-                        </Card>
-
-                        <Card>
-                            <CardHeader className="pb-3">
-                                <CardTitle className="text-base">Údaje</CardTitle>
-                            </CardHeader>
-                            <CardContent className="grid gap-4">
-                                <Field label="Firma" value={form.companyName} onChange={(v) => set("companyName", v)} />
-                                <Field label="Web" value={form.website} onChange={(v) => set("website", v)} />
-                                <Field label="Telefón" value={form.phone} onChange={(v) => set("phone", v)} />
-                                <Field label="Email" value={form.email} onChange={(v) => set("email", v)} />
-                                <Field label="Cena (€)" value={form.price} onChange={(v) => set("price", v)} type="number" />
-                                <Field
-                                    label="Rozpis ceny"
-                                    value={form.priceNote}
-                                    onChange={(v) => set("priceNote", v)}
-                                    placeholder="499 stránka + 299 admin"
-                                />
-                                <Field label="Link na návrh" value={form.designUrl} onChange={(v) => set("designUrl", v)} />
-                                <div className="grid gap-1.5">
-                                    <Label>Interná poznámka</Label>
-                                    <Textarea
-                                        value={form.note}
-                                        onChange={(event) => set("note", event.target.value)}
-                                    />
-                                </div>
-                                {dirty && (
-                                    <Button onClick={save} disabled={saving}>
-                                        {saving ? "Ukladám…" : "Uložiť zmeny"}
-                                    </Button>
+                                {!editingData ? (
+                                    <div className="space-y-3">
+                                        <ReadRow label="Firma" value={lead.companyName} />
+                                        <ReadRow
+                                            label="Web"
+                                            value={lead.website}
+                                            href={lead.website ? normalizeUrl(lead.website) : null}
+                                            external
+                                        />
+                                        <ReadRow
+                                            label="Telefón"
+                                            value={lead.phone}
+                                            href={phoneHref}
+                                        />
+                                        <ReadRow
+                                            label="Email"
+                                            value={lead.email}
+                                            href={lead.email ? `mailto:${lead.email}` : null}
+                                        />
+                                        <ReadRow label="Poznámka" value={lead.note} />
+                                    </div>
+                                ) : (
+                                    <div className="grid gap-4">
+                                        <Field label="Firma" value={form.companyName} onChange={(v) => set("companyName", v)} />
+                                        <Field label="Web" value={form.website} onChange={(v) => set("website", v)} />
+                                        <Field label="Telefón" value={form.phone} onChange={(v) => set("phone", v)} />
+                                        <Field label="Email" value={form.email} onChange={(v) => set("email", v)} />
+                                        <div className="grid gap-1.5">
+                                            <Label>Poznámka</Label>
+                                            <Textarea
+                                                value={form.note}
+                                                onChange={(event) => set("note", event.target.value)}
+                                            />
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <Button size="sm" onClick={saveData} disabled={savingData}>
+                                                {savingData ? "Ukladám…" : "Uložiť"}
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={() => setEditingData(false)}
+                                            >
+                                                Zrušiť
+                                            </Button>
+                                        </div>
+                                    </div>
                                 )}
                             </CardContent>
                         </Card>
@@ -559,28 +552,33 @@ export default function PipelineDetail({
     );
 }
 
-function QuickLink({
-    icon,
+function ReadRow({
+    label,
+    value,
     href,
-    text,
     external,
 }: {
-    icon: React.ReactNode;
-    href: string | null;
-    text: string | null;
+    label: string;
+    value: string | null;
+    href?: string | null;
     external?: boolean;
 }) {
-    if (!href || !text) return null;
     return (
-        <a
-            href={href}
-            target={external ? "_blank" : undefined}
-            rel={external ? "noopener noreferrer" : undefined}
-            className="flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-            {icon}
-            <span className="truncate">{text}</span>
-        </a>
+        <div>
+            <p className="text-xs text-muted-foreground">{label}</p>
+            {value && href ? (
+                <a
+                    href={href}
+                    target={external ? "_blank" : undefined}
+                    rel={external ? "noopener noreferrer" : undefined}
+                    className="break-words text-sm text-primary underline-offset-2 hover:underline"
+                >
+                    {value}
+                </a>
+            ) : (
+                <p className="break-words text-sm">{value || "—"}</p>
+            )}
+        </div>
     );
 }
 
@@ -607,35 +605,5 @@ function Field({
                 onChange={(event) => onChange(event.target.value)}
             />
         </div>
-    );
-}
-
-function SentButton({
-    label,
-    at,
-    onLog,
-    disabled,
-}: {
-    label: string;
-    at: string | null;
-    onLog: () => void;
-    disabled?: boolean;
-}) {
-    return (
-        <Button
-            type="button"
-            variant={at ? "secondary" : "outline"}
-            onClick={onLog}
-            disabled={disabled}
-            className="h-auto flex-col items-start gap-0.5 px-3 py-2 text-left"
-        >
-            <span className="flex items-center gap-1.5 text-sm font-medium">
-                {at && <Check className="h-3.5 w-3.5" />}
-                {label}
-            </span>
-            <span className="text-xs font-normal text-muted-foreground">
-                {at ? formatDateTime(at) : "neposlané"}
-            </span>
-        </Button>
     );
 }

@@ -2,7 +2,7 @@
  * Usage on a proposal page (token from the link query string):
  *     <script src="https://YOUR_ZVONCEK/p.js"></script>      // reads ?p=TOKEN
  * or explicit:
- *     <script src="https://YOUR_ZVONCEK/p.js" data-p="TOKEN"></script>
+ *     <script src="https://YOUR_ZVONCEK/p.js" data-p="TOKEN"></script> -- pozor, pri každom načitani..
  * The endpoint is inferred from this script's own origin → /api/p.
  */
 (function () {
