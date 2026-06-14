@@ -2,6 +2,8 @@
 
 import { getCallsBoard } from "@/lib/queries/calls";
 
+
+
 export async function getMoreNew(cursor: string) {
     const board = await getCallsBoard(cursor);
     return {
