@@ -15,9 +15,10 @@ model User {
   lastName    String
   password    String
   role        Role       @default(MEMBER)
-  ownedLeads  Lead[]     @relation("OwnedLeads")
-  lockedLeads Lead[]     @relation("LockedLeads")
-  activities  Activity[]
+  ownedLeads   Lead[]     @relation("OwnedLeads")
+  lockedLeads  Lead[]     @relation("LockedLeads")
+  createdLeads Lead[]     @relation("CreatedLeads")
+  activities   Activity[]
 }
 
 model Invite {
@@ -60,6 +61,10 @@ model Lead {
 
   lostReason String? // "nemajú záujem", "zlé číslo"
 
+  // kto kontakt pridal – pre štatistiky pridávania
+  creator     User?   @relation("CreatedLeads", fields: [createdById], references: [id])
+  createdById String?
+
   // soft delete
   deletedAt DateTime?
 
@@ -75,6 +80,7 @@ model Lead {
   @@index([status])
   @@index([status, callbackKind])
   @@index([deletedAt])
+  @@index([createdById, createdAt])
 }
 
 enum LeadStatus {

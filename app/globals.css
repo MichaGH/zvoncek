@@ -127,5 +127,7 @@
     }
     html {
         @apply font-sans;
+        /* Always reserve space for the scrollbar so pages with/without it don't shift. */
+        scrollbar-gutter: stable;
     }
 }

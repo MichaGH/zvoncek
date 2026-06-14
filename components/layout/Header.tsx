@@ -25,6 +25,12 @@ export default async function Header() {
               <Button asChild variant="ghost" size="sm">
                 <Link href="/dashboard/pipeline">Pipeline</Link>
               </Button>
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/dashboard/contacts">Kontakty</Link>
+              </Button>
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/dashboard/stats">Štatistiky</Link>
+              </Button>
             </nav>
           )}
         </div>
