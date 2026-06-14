@@ -1,18 +1,21 @@
-import { CallOutcome, LeadStatus, CallbackKind } from "@/app/generated/prisma/enums";
+import {
+    CallbackKind,
+    CallOutcome,
+    LeadStatus,
+    NextActionKind,
+} from "@/app/generated/prisma/enums";
 
 export type LeadFlowData = {
     status: LeadStatus;
     callbackKind: CallbackKind | null;
     callbackAt?: Date | null;
     callbackNote?: string | null;
+    nextActionKind?: NextActionKind | null;
     nextActionAt?: Date | null;
     nextActionNote?: string | null;
     lostReason?: string | null;
 };
 
-// Čo daný výsledok hovoru znamená pre lead.
-// `when` = dátum z drawera (callbackAt alebo nextActionAt podľa outcome)
-// `callbackNote` = voliteľná poznámka od D
 export function leadStateForOutcome(
     outcome: CallOutcome,
     when?: Date | null,
@@ -20,30 +23,90 @@ export function leadStateForOutcome(
 ): LeadFlowData {
     switch (outcome) {
         case "NO_ANSWER":
-            return { status: "CALLING", callbackKind: "RETRY", callbackAt: null, callbackNote: callbackNote || null };
+            return {
+                status: "CALLING",
+                callbackKind: "RETRY",
+                callbackAt: null,
+                callbackNote: callbackNote || null,
+                nextActionKind: null,
+                nextActionAt: null,
+                nextActionNote: null,
+            };
         case "CALL_AGAIN":
-            return { status: "CALLING", callbackKind: "SCHEDULED", callbackAt: when ?? null, callbackNote: callbackNote || null };
+            return {
+                status: "CALLING",
+                callbackKind: "SCHEDULED",
+                callbackAt: when ?? null,
+                callbackNote: callbackNote || null,
+                nextActionKind: "CALL",
+                nextActionAt: when ?? null,
+                nextActionNote: callbackNote || "Dohodnutý spätný hovor",
+            };
         case "BAD_NUMBER":
-            return { status: "UNREACHABLE", callbackKind: null, callbackAt: null, lostReason: "Zlé / nefunkčné číslo" };
+            return {
+                status: "UNREACHABLE",
+                callbackKind: null,
+                callbackAt: null,
+                nextActionKind: null,
+                nextActionAt: null,
+                nextActionNote: null,
+                lostReason: "Zlé / nefunkčné číslo",
+            };
         case "NOT_INTERESTED":
-            return { status: "LOST", callbackKind: null, callbackAt: null, lostReason: "Nemajú záujem" };
+            return {
+                status: "LOST",
+                callbackKind: null,
+                callbackAt: null,
+                nextActionKind: null,
+                nextActionAt: null,
+                nextActionNote: null,
+                lostReason: "Nemajú záujem",
+            };
         case "WANTS_QUOTE":
-            return { status: "ACTIVE", callbackKind: null, callbackAt: null, nextActionAt: new Date(), nextActionNote: "Poslať cenovú ponuku" };
+            return {
+                status: "ACTIVE",
+                callbackKind: null,
+                callbackAt: null,
+                nextActionKind: "SEND_QUOTE",
+                nextActionAt: new Date(),
+                nextActionNote: "Poslať cenovú ponuku",
+            };
         case "WANTS_DESIGN":
-            return { status: "ACTIVE", callbackKind: null, callbackAt: null, nextActionAt: new Date(), nextActionNote: "Vytvoriť a poslať dizajnový návrh" };
+            return {
+                status: "ACTIVE",
+                callbackKind: null,
+                callbackAt: null,
+                nextActionKind: "SEND_DESIGN",
+                nextActionAt: new Date(),
+                nextActionNote: "Vytvoriť a poslať dizajnový návrh",
+            };
         case "WANTS_EMAIL":
-            return { status: "ACTIVE", callbackKind: null, callbackAt: null, nextActionAt: new Date(), nextActionNote: "Napísať im email" };
+            return {
+                status: "ACTIVE",
+                callbackKind: null,
+                callbackAt: null,
+                nextActionKind: "SEND_EMAIL",
+                nextActionAt: new Date(),
+                nextActionNote: "Napísať email / poslať informácie o nás",
+            };
         case "SNOOZE":
-            return { status: "SNOOZED", callbackKind: null, callbackAt: null, nextActionAt: when ?? null, nextActionNote: "Znovu osloviť (chceli o pár mesiacov)" };
+            return {
+                status: "SNOOZED",
+                callbackKind: null,
+                callbackAt: null,
+                nextActionKind: "CALL",
+                nextActionAt: when ?? null,
+                nextActionNote: "Znovu osloviť neskôr",
+            };
         case "POSITIVE":
             return { status: "ACTIVE", callbackKind: null, callbackAt: null };
     }
 }
 
-// ktorá sekcia /calls lead "opúšťa" pri danom outcome – pre optimistic odobratie
-export function leavesCallsBoard(outcome: CallOutcome): boolean {
-    // pri NO_ANSWER a CALL_AGAIN ostáva v CALLING (presunie sa do inej sekcie),
-    // ostatné board opúšťajú úplne. Pre optimistic to nepotrebujeme rozlišovať –
-    // vždy ho odoberieme zo zdrojovej sekcie, refetch ho prípadne vráti inde.
+export function hasNextAction(data: LeadFlowData): boolean {
+    return Boolean(data.nextActionKind || data.nextActionAt || data.nextActionNote);
+}
+
+export function leavesCallsBoard(): boolean {
     return true;
 }

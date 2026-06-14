@@ -1,47 +1,93 @@
 "use server";
 
-import prisma from "@/lib/db";
 import { auth } from "@/auth";
-import { revalidatePath } from "next/cache";
 import { CallOutcome } from "@/app/generated/prisma/enums";
-import { leadStateForOutcome } from "@/lib/domain/leadFlow";
+import {
+    createAuditActivity,
+    createBusinessActivity,
+    createPlanningActivity,
+    describeNextAction,
+} from "@/lib/activityLog";
+import prisma from "@/lib/db";
+import { hasNextAction, leadStateForOutcome } from "@/lib/domain/leadFlow";
+import { revalidatePath } from "next/cache";
 
 type Opts = { note?: string; callbackNote?: string; when?: string; email?: string };
 type LogCallInput = { leadId: string; outcome: CallOutcome } & Opts;
 
+function revalidateCalls() {
+    revalidatePath("/dashboard/calls");
+    revalidatePath("/dashboard/calls/history");
+    revalidatePath("/dashboard/pipeline");
+    revalidatePath("/dashboard");
+}
+
 export async function logCall(input: LogCallInput) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    const userId = session.user.id;
 
     const { leadId, outcome, note, callbackNote, when, email } = input;
     const date = when ? new Date(when) : null;
-
     const flow = leadStateForOutcome(outcome, date, callbackNote ?? null);
     const extra = email?.trim() ? { email: email.trim() } : {};
 
     try {
-        await prisma.$transaction([
-            prisma.activity.create({
-                data: { leadId, userId: session.user.id, type: "CALL", category: "CLIENT", outcome, note: note?.trim() || null },
-            }),
-            prisma.lead.update({ where: { id: leadId }, data: { ...flow, ...extra } }),
-        ]);
+        await prisma.$transaction(async (tx) => {
+            await tx.activity.create({
+                data: createBusinessActivity({
+                    leadId,
+                    userId,
+                    type: "CALL",
+                    source: "CALL_QUEUE",
+                    outcome,
+                    note: note?.trim() || null,
+                }),
+            });
+            await tx.lead.update({ where: { id: leadId }, data: { ...flow, ...extra } });
+
+            if (hasNextAction(flow)) {
+                await tx.activity.create({
+                    data: createPlanningActivity({
+                        leadId,
+                        userId,
+                        type: "NEXT_ACTION_SET",
+                        source: "CALL_QUEUE",
+                        note: describeNextAction({
+                            nextActionKind: flow.nextActionKind ?? null,
+                            nextActionAt: flow.nextActionAt ?? null,
+                            nextActionNote: flow.nextActionNote ?? null,
+                        }),
+                    }),
+                });
+            }
+        });
     } catch (error) {
         console.error("logCall failed:", error);
         return { error: "Nepodarilo sa uložiť. Skús znova." };
     }
 
-    revalidatePath("/dashboard/calls");
-    revalidatePath("/dashboard/pipeline");
-    revalidatePath("/dashboard");
+    revalidateCalls();
     return { success: true };
 }
 
 export async function updateLeadNote(leadId: string, note: string) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+
     try {
-        await prisma.lead.update({ where: { id: leadId }, data: { note: note.trim() || null } });
+        await prisma.$transaction([
+            prisma.lead.update({ where: { id: leadId }, data: { note: note.trim() || null } }),
+            prisma.activity.create({
+                data: createAuditActivity({
+                    leadId,
+                    userId: session.user.id,
+                    type: "CONTACT_UPDATED",
+                    source: "CALL_QUEUE",
+                    note: "Interná poznámka kontaktu bola upravená",
+                }),
+            }),
+        ]);
     } catch {
         return { error: "Nepodarilo sa uložiť poznámku." };
     }
@@ -55,11 +101,23 @@ export async function updateLeadContact(
 ) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
+
     try {
-        await prisma.lead.update({ where: { id: leadId }, data });
+        await prisma.$transaction([
+            prisma.lead.update({ where: { id: leadId }, data }),
+            prisma.activity.create({
+                data: createAuditActivity({
+                    leadId,
+                    userId: session.user.id,
+                    type: "CONTACT_UPDATED",
+                    source: "CALL_QUEUE",
+                    note: "Kontaktné údaje boli upravené",
+                }),
+            }),
+        ]);
     } catch {
         return { error: "Nepodarilo sa uložiť kontakt." };
     }
-    revalidatePath("/dashboard/calls");
+    revalidateCalls();
     return { success: true };
 }

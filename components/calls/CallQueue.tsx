@@ -1,6 +1,6 @@
 "use client";
 
-import { useOptimistic, useTransition, useState, useEffect, useRef } from "react";
+import { useOptimistic, useTransition, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { logCall } from "@/lib/actions/calls";
@@ -131,7 +131,12 @@ export default function CallQueue({ board }: { board: CallsBoard }) {
                 </div>
             </div>
 
-            <CallDrawer lead={openLead} onClose={() => setOpenLead(null)} onOutcome={handleOutcome} />
+            <CallDrawer
+                key={openLead?.id ?? "closed"}
+                lead={openLead}
+                onClose={() => setOpenLead(null)}
+                onOutcome={handleOutcome}
+            />
             <InfoDrawer lead={infoLead} onClose={() => setInfoLead(null)} />
         </>
     );

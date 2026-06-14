@@ -1,11 +1,5 @@
 import prisma from "@/lib/db";
 
-function startOfToday() {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
-}
-
 const SELECT = {
     id: true,
     number: true,
@@ -18,7 +12,11 @@ const SELECT = {
     callbackAt: true,
     callbackNote: true,
     activities: {
-        where: { type: "CALL" as const },
+        where: {
+            type: "CALL" as const,
+            category: "BUSINESS" as const,
+            source: "CALL_QUEUE" as const,
+        },
         select: { id: true, createdAt: true },
         orderBy: { createdAt: "desc" as const },
     },

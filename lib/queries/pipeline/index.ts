@@ -28,14 +28,16 @@ export async function getPipelineList({
             website: true,
             phone: true,
             status: true,
+            nextActionKind: true,
             nextActionAt: true,
             nextActionNote: true,
             price: true,
             owner: { select: { firstName: true } },
             activities: {
+                where: { category: "BUSINESS" },
                 orderBy: { createdAt: "desc" },
                 take: 1,
-                select: { type: true, outcome: true, createdAt: true },
+                select: { type: true, outcome: true, note: true, createdAt: true },
             },
         },
         orderBy: { nextActionAt: { sort: "asc", nulls: "last" } },
@@ -47,6 +49,7 @@ export async function getPipelineList({
         name: lead.companyName ?? lead.website ?? "—",
         phone: lead.phone,
         status: lead.status,
+        nextActionKind: lead.nextActionKind,
         nextActionAt: lead.nextActionAt?.toISOString() ?? null,
         nextActionNote: lead.nextActionNote,
         price: lead.price ? Number(lead.price) : null,
@@ -55,6 +58,7 @@ export async function getPipelineList({
             ? {
                   type: lead.activities[0].type,
                   outcome: lead.activities[0].outcome,
+                  note: lead.activities[0].note,
                   at: lead.activities[0].createdAt.toISOString(),
               }
             : null,
@@ -88,6 +92,8 @@ export async function getPipelineDetail(id: string) {
         activities: lead.activities.map((activity) => ({
             id: activity.id,
             type: activity.type,
+            category: activity.category,
+            source: activity.source,
             outcome: activity.outcome,
             note: activity.note,
             userName: activity.user.firstName,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription } from "@/components/ui/drawer";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,22 +24,11 @@ export default function CallDrawer({
     onOutcome: (leadId: string, outcome: CallOutcome, label: string, opts?: Opts) => void;
 }) {
     const [step, setStep] = useState<Step>("main");
-    const [note, setNote] = useState("");
+    const [note, setNote] = useState(lead?.note ?? "");
     const [callbackNote, setCallbackNote] = useState("");
     const [customDate, setCustomDate] = useState("");
     const [pendingOutcome, setPendingOutcome] = useState<PendingOutcome>(null);
-    const [email, setEmail] = useState("");
-
-    useEffect(() => {
-        if (lead) {
-            setStep("main");
-            setNote(lead.note ?? "");
-            setCallbackNote("");
-            setCustomDate("");
-            setPendingOutcome(null);
-            setEmail(lead.email ?? "");
-        }
-    }, [lead]);
+    const [email, setEmail] = useState(lead?.email ?? "");
 
     if (!lead) return <Drawer open={false} />;
     const L = lead;

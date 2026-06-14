@@ -60,7 +60,13 @@ export async function signup(
     // Hash password and save it
     const passwordHash = await bcrypt.hash(password, 10)
     await prisma.user.create({
-        data: { username, email, password: passwordHash},
+        data: {
+          username,
+          email,
+          firstName: username,
+          lastName: '',
+          password: passwordHash,
+        },
     })
 
     // Automatically log in user

@@ -1,7 +1,13 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { STATUS_LABEL, STATUS_VARIANT } from "@/lib/dictionaries";
+import {
+    ACTIVITY_LABEL,
+    NEXT_ACTION_LABEL,
+    OUTCOME_LABEL,
+    STATUS_LABEL,
+    STATUS_VARIANT,
+} from "@/lib/dictionaries";
 import type { PipelineListRow } from "@/lib/queries/pipeline";
 
 function formatDate(iso: string | null) {
@@ -33,15 +39,14 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
 
     return (
         <div className="overflow-x-auto rounded-lg border">
-            <Table className="w-full table-fixed">
+            <Table className="w-full">
                 <TableHeader>
                     <TableRow>
                         <TableHead className="w-12">#</TableHead>
                         <TableHead>Firma</TableHead>
-                        <TableHead>Telefón</TableHead>
                         <TableHead>Stav</TableHead>
+                        <TableHead>Posledný krok</TableHead>
                         <TableHead>Ďalší krok</TableHead>
-                        <TableHead>Posledná aktivita</TableHead>
                         <TableHead className="text-right">Cena</TableHead>
                         <TableHead>Rieši</TableHead>
                     </TableRow>
@@ -60,25 +65,59 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                         href={`/dashboard/pipeline/${row.id}`}
                                         className="after:absolute after:inset-0"
                                     >
-                                        {row.name}
+                                        <span className="block">{row.name}</span>
+                                        <span className="text-xs font-normal text-muted-foreground">
+                                            {row.phone ?? "—"}
+                                        </span>
                                     </Link>
                                 </TableCell>
-                                <TableCell className="tabular-nums">{row.phone ?? "—"}</TableCell>
                                 <TableCell>
                                     <Badge variant={STATUS_VARIANT[row.status]} className="font-normal">
                                         {STATUS_LABEL[row.status]}
                                     </Badge>
                                 </TableCell>
-                                <TableCell className={overdue ? "font-medium text-destructive" : ""}>
-                                    <span className="tabular-nums">{formatDate(row.nextActionAt)}</span>
-                                    {row.nextActionNote && (
-                                        <span className="ml-1.5 text-xs text-muted-foreground">
-                                            {row.nextActionNote}
-                                        </span>
+                                <TableCell className="max-w-xs whitespace-normal">
+                                    {row.lastActivity ? (
+                                        <>
+                                            <span className="font-medium">
+                                                {ACTIVITY_LABEL[row.lastActivity.type]}
+                                            </span>
+                                            {row.lastActivity.outcome && (
+                                                <span className="ml-1 text-muted-foreground">
+                                                    · {OUTCOME_LABEL[row.lastActivity.outcome]}
+                                                </span>
+                                            )}
+                                            {row.lastActivity.note && (
+                                                <span className="block truncate text-xs text-muted-foreground">
+                                                    {row.lastActivity.note}
+                                                </span>
+                                            )}
+                                            <span className="block text-xs text-muted-foreground">
+                                                {formatDate(row.lastActivity.at)}
+                                            </span>
+                                        </>
+                                    ) : (
+                                        "—"
                                     )}
                                 </TableCell>
-                                <TableCell className="text-muted-foreground">
-                                    {row.lastActivity ? formatDate(row.lastActivity.at) : "—"}
+                                <TableCell
+                                    className={`max-w-xs whitespace-normal ${overdue ? "font-medium text-destructive" : ""}`}
+                                >
+                                    {row.nextActionKind ? (
+                                        <>
+                                            <span>{NEXT_ACTION_LABEL[row.nextActionKind]}</span>
+                                            <span className="ml-1.5 tabular-nums">
+                                                · {formatDate(row.nextActionAt)}
+                                            </span>
+                                            {row.nextActionNote && (
+                                                <span className="block truncate text-xs text-muted-foreground">
+                                                    {row.nextActionNote}
+                                                </span>
+                                            )}
+                                        </>
+                                    ) : (
+                                        "—"
+                                    )}
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums">
                                     {row.price ? `${row.price} €` : "—"}

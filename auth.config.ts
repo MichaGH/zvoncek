@@ -21,16 +21,24 @@ export const authConfig = {
         jwt({ token, user }) {
             // user existuje len pri logine – vtedy si z neho zoberieme čo treba
             if (user) {
+                const authUser = user as typeof user & {
+                    role?: unknown;
+                    username?: unknown;
+                };
                 token.id = user.id;
-                token.role = (user as any).role;
-                token.username = (user as any).username;
+                if (typeof authUser.role === "string") token.role = authUser.role;
+                if (typeof authUser.username === "string") token.username = authUser.username;
             }
             return token;
         },
         session({ session, token }) {
             if (token.id) session.user.id = token.id as string;
-            (session.user as any).role = token.role;
-            (session.user as any).username = token.username;
+            const sessionUser = session.user as typeof session.user & {
+                role?: unknown;
+                username?: unknown;
+            };
+            sessionUser.role = token.role;
+            sessionUser.username = token.username;
             return session;
         },
     },

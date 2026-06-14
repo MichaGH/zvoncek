@@ -8,12 +8,14 @@ export async function getStats(fromDays = 30) {
 
     const [calls, byOutcome, byStatus, wonValue, callsByUser] = await Promise.all([
         // počet hovorov za obdobie
-        prisma.activity.count({ where: { type: "CALL", createdAt: { gte: from } } }),
+        prisma.activity.count({
+            where: { type: "CALL", source: "CALL_QUEUE", createdAt: { gte: from } },
+        }),
 
         // rozdelenie podľa výsledku – z toho miera dovolania, lievik
         prisma.activity.groupBy({
             by: ["outcome"],
-            where: { type: "CALL", createdAt: { gte: from } },
+            where: { type: "CALL", source: "CALL_QUEUE", createdAt: { gte: from } },
             _count: true,
         }),
 
@@ -33,7 +35,7 @@ export async function getStats(fromDays = 30) {
         // výkon per člen (kто koľko volal)
         prisma.activity.groupBy({
             by: ["userId"],
-            where: { type: "CALL", createdAt: { gte: from } },
+            where: { type: "CALL", source: "CALL_QUEUE", createdAt: { gte: from } },
             _count: true,
         }),
     ]);

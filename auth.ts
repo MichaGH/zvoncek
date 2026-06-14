@@ -51,7 +51,8 @@ export const { auth, signIn, signOut } = NextAuth({
 
                     if (passwordsMatch) {
                         // password von zo session objektu
-                        const { password: _, ...safeUser } = user;
+                        const { password: passwordHash, ...safeUser } = user;
+                        void passwordHash;
                         return safeUser;
                     }
 
