@@ -29,6 +29,8 @@ function formatDate(iso: string | null) {
     return date.toLocaleDateString("sk-SK", { day: "numeric", month: "numeric" }) + time;
 }
 
+const NBSP = " ";
+
 export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
     if (rows.length === 0) {
         return (
@@ -40,20 +42,22 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
 
     return (
         <div className="overflow-x-auto rounded-lg border">
-            <Table className="w-full min-w-[860px] table-fixed">
+            <Table className="w-full min-w-[900px]">
                 <colgroup>
-                    <col className="w-12" />
-                    <col className="w-[220px]" />
-                    <col className="w-28" />
-                    <col className="w-[200px]" />
-                    <col className="w-[200px]" />
+                    <col className="w-10" />
+                    <col />
                     <col className="w-24" />
-                    <col className="w-28" />
+                    <col className="w-24" />
+                    <col className="w-52" />
+                    <col className="w-52" />
+                    <col className="w-20" />
+                    <col className="w-24" />
                 </colgroup>
                 <TableHeader>
                     <TableRow>
-                        <TableHead>#</TableHead>
+                        <TableHead className="pl-4">#</TableHead>
                         <TableHead>Firma</TableHead>
+                        <TableHead>Typ</TableHead>
                         <TableHead>Stav</TableHead>
                         <TableHead>Posledný krok</TableHead>
                         <TableHead>Ďalší krok</TableHead>
@@ -68,9 +72,11 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                             new Date(row.nextActionAt) < new Date() &&
                             (row.status === "ACTIVE" || row.status === "NEW");
                         return (
-                            <TableRow key={row.id} className="relative">
-                                <TableCell className="text-muted-foreground tabular-nums">{row.number}</TableCell>
-                                <TableCell className="font-medium">
+                            <TableRow key={row.id} className="relative h-[4.75rem]">
+                                <TableCell className="pl-4 align-middle text-muted-foreground tabular-nums">
+                                    {row.number}
+                                </TableCell>
+                                <TableCell className="align-middle font-medium">
                                     <Link
                                         href={`/dashboard/pipeline/${row.id}`}
                                         className="block after:absolute after:inset-0"
@@ -81,20 +87,24 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                         </span>
                                     </Link>
                                 </TableCell>
-                                <TableCell>
+                                <TableCell className="align-middle">
+                                    {row.projectType ? (
+                                        <Badge variant="outline" className="font-normal">
+                                            {PROJECT_TYPE_LABEL[row.projectType]}
+                                        </Badge>
+                                    ) : (
+                                        <span className="text-muted-foreground">—</span>
+                                    )}
+                                </TableCell>
+                                <TableCell className="align-middle">
                                     <Badge variant={STATUS_VARIANT[row.status]} className="font-normal">
                                         {STATUS_LABEL[row.status]}
                                     </Badge>
-                                    {row.projectType && (
-                                        <span className="mt-1 block truncate text-xs text-muted-foreground">
-                                            {PROJECT_TYPE_LABEL[row.projectType]}
-                                        </span>
-                                    )}
                                 </TableCell>
-                                <TableCell className="align-top">
+                                <TableCell className="align-middle text-sm">
                                     {row.lastActivity ? (
-                                        <>
-                                            <span className="block truncate">
+                                        <div className="flex flex-col">
+                                            <span className="truncate">
                                                 <span className="font-medium">
                                                     {ACTIVITY_LABEL[row.lastActivity.type]}
                                                 </span>
@@ -104,44 +114,42 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                                     </span>
                                                 )}
                                             </span>
-                                            {row.lastActivity.note && (
-                                                <span className="block truncate text-xs text-muted-foreground">
-                                                    {row.lastActivity.note}
-                                                </span>
-                                            )}
-                                            <span className="block text-xs text-muted-foreground">
+                                            <span className="truncate text-xs text-muted-foreground">
+                                                {row.lastActivity.note || NBSP}
+                                            </span>
+                                            <span className="text-xs text-muted-foreground tabular-nums">
                                                 {formatDate(row.lastActivity.at)}
                                             </span>
-                                        </>
+                                        </div>
                                     ) : (
-                                        "—"
+                                        <span className="text-muted-foreground">—</span>
                                     )}
                                 </TableCell>
                                 <TableCell
-                                    className={`align-top ${overdue ? "font-medium text-destructive" : ""}`}
+                                    className={`align-middle text-sm ${overdue ? "font-medium text-destructive" : ""}`}
                                 >
                                     {row.nextActionKind ? (
-                                        <>
-                                            <span className="block truncate">
+                                        <div className="flex flex-col">
+                                            <span className="truncate">
                                                 {NEXT_ACTION_LABEL[row.nextActionKind]}
                                                 <span className="ml-1.5 tabular-nums">
                                                     · {formatDate(row.nextActionAt)}
                                                 </span>
                                             </span>
-                                            {row.nextActionNote && (
-                                                <span className="block truncate text-xs text-muted-foreground">
-                                                    {row.nextActionNote}
-                                                </span>
-                                            )}
-                                        </>
+                                            <span className="truncate text-xs font-normal text-muted-foreground">
+                                                {row.nextActionNote || NBSP}
+                                            </span>
+                                        </div>
                                     ) : (
-                                        "—"
+                                        <span className="text-muted-foreground">—</span>
                                     )}
                                 </TableCell>
-                                <TableCell className="text-right tabular-nums">
+                                <TableCell className="align-middle text-right tabular-nums">
                                     {row.price ? `${row.price} €` : "—"}
                                 </TableCell>
-                                <TableCell className="truncate text-muted-foreground">{row.owner ?? "—"}</TableCell>
+                                <TableCell className="align-middle truncate text-muted-foreground">
+                                    {row.owner ?? "—"}
+                                </TableCell>
                             </TableRow>
                         );
                     })}

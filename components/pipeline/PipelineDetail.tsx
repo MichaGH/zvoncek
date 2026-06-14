@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Phone, Pencil, Check } from "lucide-react";
+import { Phone, Pencil, Check, Plus } from "lucide-react";
 import { LeadStatus, NextActionKind, ProjectType } from "@/app/generated/prisma/enums";
 import { DashboardContent, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -57,6 +58,25 @@ function formatDateTime(iso: string | null) {
 function formatDate(iso: string | null) {
     if (!iso) return "—";
     return new Date(iso).toLocaleDateString("sk-SK");
+}
+
+function formatNextDate(iso: string | null): { label: string; overdue: boolean } {
+    if (!iso) return { label: "—", overdue: false };
+    const date = new Date(iso);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const that = new Date(date);
+    that.setHours(0, 0, 0, 0);
+    const diff = (that.getTime() - today.getTime()) / 86_400_000;
+    const h = date.getHours();
+    const m = date.getMinutes();
+    const time = h || m ? ` ${h}:${String(m).padStart(2, "0")}` : "";
+    let label: string;
+    if (diff === 0) label = `Dnes${time}`;
+    else if (diff === 1) label = `Zajtra${time}`;
+    else if (diff === -1) label = `Včera${time}`;
+    else label = date.toLocaleDateString("sk-SK", { day: "numeric", month: "numeric", year: "numeric" }) + time;
+    return { label, overdue: date < new Date() };
 }
 
 function normalizeUrl(url: string) {
@@ -139,6 +159,14 @@ export default function PipelineDetail({
         setNextKind(lead.nextActionKind ?? "CALL");
         setNextAt(lead.nextActionAt ? lead.nextActionAt.slice(0, 16) : "");
         setNextNote(lead.nextActionNote ?? "");
+        setEditingNext(true);
+    }
+
+    // „Nový krok" – otvorí editor s prázdnymi poľami.
+    function startNewNext() {
+        setNextKind("CALL");
+        setNextAt("");
+        setNextNote("");
         setEditingNext(true);
     }
 
@@ -261,59 +289,47 @@ export default function PipelineDetail({
                 }
             />
 
-            <DashboardContent width="wide">
+            <DashboardContent width="full">
                 <div className="grid items-start gap-6 lg:grid-cols-3">
                     {/* MAIN COLUMN — the workflow */}
                     <div className="space-y-6 lg:col-span-2">
                         {/* Ďalší krok */}
                         <Card>
-                            <CardHeader className="pb-3">
+                            <CardHeader className="flex items-center justify-between">
                                 <CardTitle className="text-base">Ďalší krok</CardTitle>
+                                <div className="flex items-center gap-1">
+                                    <Button size="sm" variant="outline" onClick={startNewNext}>
+                                        <Plus className="mr-1.5 h-3.5 w-3.5" />
+                                        Nový
+                                    </Button>
+                                    {hasNextAction && !editingNext && (
+                                        <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="h-8 w-8 p-0"
+                                            onClick={startEditNext}
+                                            aria-label="Upraviť ďalší krok"
+                                        >
+                                            <Pencil className="h-3.5 w-3.5" />
+                                        </Button>
+                                    )}
+                                </div>
                             </CardHeader>
-                            <CardContent className="space-y-4">
-                                {hasNextAction && (
-                                    <div className="flex flex-wrap items-start justify-between gap-2 rounded-lg border bg-muted/40 p-3">
-                                        <div className="min-w-0 space-y-0.5 text-sm">
-                                            <p className="font-medium">
-                                                {lead.nextActionKind
-                                                    ? NEXT_ACTION_LABEL[lead.nextActionKind]
-                                                    : "Ďalší krok"}
-                                                {lead.nextActionAt && (
-                                                    <span className="ml-2 font-normal text-muted-foreground tabular-nums">
-                                                        {formatDateTime(lead.nextActionAt)}
-                                                    </span>
-                                                )}
-                                            </p>
-                                            {lead.nextActionNote && (
-                                                <p className="text-muted-foreground">{lead.nextActionNote}</p>
-                                            )}
-                                        </div>
-                                        {!editingNext && (
-                                            <div className="flex shrink-0 gap-1">
-                                                <Button size="sm" variant="outline" onClick={startEditNext}>
-                                                    <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                                                    Upraviť
-                                                </Button>
-                                                <Button
-                                                    size="sm"
-                                                    variant="ghost"
-                                                    className="text-destructive"
-                                                    onClick={clearNextAction}
-                                                    disabled={savingNext}
-                                                >
-                                                    Vymazať
-                                                </Button>
-                                            </div>
-                                        )}
-                                    </div>
+                            <CardContent className="space-y-3">
+                                {hasNextAction && !editingNext && (
+                                    <NextActionDisplay
+                                        kind={lead.nextActionKind}
+                                        at={lead.nextActionAt ?? null}
+                                        note={lead.nextActionNote ?? null}
+                                    />
                                 )}
 
                                 {showEditor && (
                                     <div className="space-y-2">
                                         {hasNextAction && (
-                                            <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                                                 Zmeniť ďalší krok
-                                            </Label>
+                                            </p>
                                         )}
                                         <div className="grid gap-2 sm:grid-cols-2">
                                             <div className="grid gap-1.5">
@@ -362,55 +378,40 @@ export default function PipelineDetail({
                             </CardContent>
                         </Card>
 
-                        {/* Cenová ponuka */}
-                        <CenovaPonukaCard
-                            leadId={lead.id}
-                            price={lead.price}
-                            priceNote={lead.priceNote}
-                            quoteSentAt={lead.quoteSentAt}
-                        />
-
-                        {/* Dizajn & sledovanie */}
-                        <DesignTrackingCard
-                            leadId={lead.id}
-                            designs={designs}
-                            quoteSentAt={lead.quoteSentAt}
-                        />
-
-                        {/* Ďalšie kroky */}
+                        {/* Posledný krok & zaznamenať udalosť */}
                         <Card>
-                            <CardHeader className="pb-3">
-                                <CardTitle className="text-base">Ďalšie kroky</CardTitle>
+                            <CardHeader className="flex items-center justify-between">
+                                <CardTitle className="text-base">Posledný krok</CardTitle>
                             </CardHeader>
-                            <CardContent className="space-y-5">
-                                <div className="space-y-2">
-                                    <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                        Email „o nás&quot;
-                                    </Label>
-                                    <Button
-                                        type="button"
-                                        variant={lead.aboutUsSentAt ? "secondary" : "outline"}
-                                        size="sm"
-                                        disabled={busy}
-                                        onClick={() => runBusiness(() => logSent(lead.id, "EMAIL_SENT"))}
-                                    >
-                                        {lead.aboutUsSentAt && <Check className="mr-1.5 h-3.5 w-3.5" />}
-                                        {lead.aboutUsSentAt
-                                            ? `Poslané ${formatDate(lead.aboutUsSentAt)}`
-                                            : "Označiť ako poslané"}
-                                    </Button>
-                                </div>
+                            <CardContent className="space-y-4">
+                                {businessActivities[0] ? (
+                                    <div className="space-y-1 text-sm">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <span className="font-medium">
+                                                {ACTIVITY_LABEL[businessActivities[0].type]}
+                                            </span>
+                                            {businessActivities[0].outcome && (
+                                                <span className="text-xs text-muted-foreground">
+                                                    {OUTCOME_LABEL[businessActivities[0].outcome]}
+                                                </span>
+                                            )}
+                                            <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+                                                {formatDateTime(businessActivities[0].createdAt)}
+                                            </span>
+                                        </div>
+                                        {businessActivities[0].note && (
+                                            <p className="text-muted-foreground">{businessActivities[0].note}</p>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <p className="text-sm text-muted-foreground">Zatiaľ žiadny krok.</p>
+                                )}
 
-                                <Separator />
-
                                 <div className="space-y-2">
-                                    <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                                         Zaznamenať udalosť
-                                    </Label>
-                                    <p className="text-xs text-muted-foreground">
-                                        Pridá krok do obchodnej histórie.
                                     </p>
-                                    <div className="flex flex-wrap gap-2">
+                                    <div className="grid grid-cols-2 gap-2">
                                         {QUICK_EVENTS.map((text) => (
                                             <Button
                                                 key={text}
@@ -418,6 +419,7 @@ export default function PipelineDetail({
                                                 variant="outline"
                                                 disabled={busy}
                                                 onClick={() => runBusiness(() => addBusinessNote(lead.id, text))}
+                                                className="h-auto min-h-8 justify-start whitespace-normal py-1.5 text-left leading-snug"
                                             >
                                                 {text}
                                             </Button>
@@ -448,9 +450,50 @@ export default function PipelineDetail({
                             </CardContent>
                         </Card>
 
+                        {/* Cenová ponuka */}
+                        <CenovaPonukaCard
+                            leadId={lead.id}
+                            price={lead.price}
+                            priceNote={lead.priceNote}
+                            quoteSentAt={lead.quoteSentAt}
+                        />
+
+                        {/* Dizajn & sledovanie */}
+                        <DesignTrackingCard
+                            leadId={lead.id}
+                            designs={designs}
+                            quoteSentAt={lead.quoteSentAt}
+                        />
+
+                        {/* Email „o nás" – samostatná vec (jedna z 3, čo si klient môže vypýtať) */}
+                        <Card>
+                            <CardHeader className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <CardTitle className="text-base">Email „o nás&quot;</CardTitle>
+                                    {lead.aboutUsSentAt && (
+                                        <Badge variant="secondary" className="font-normal">
+                                            Poslané {formatDate(lead.aboutUsSentAt)}
+                                        </Badge>
+                                    )}
+                                </div>
+                            </CardHeader>
+                            <CardContent>
+                                <Button
+                                    type="button"
+                                    variant={lead.aboutUsSentAt ? "secondary" : "default"}
+                                    size="sm"
+                                    disabled={busy || Boolean(lead.aboutUsSentAt)}
+                                    onClick={() => runBusiness(() => logSent(lead.id, "EMAIL_SENT"))}
+                                >
+                                    {lead.aboutUsSentAt && <Check className="mr-1.5 h-3.5 w-3.5" />}
+                                    {lead.aboutUsSentAt ? "Označené ako poslané" : "Označiť ako poslané"}
+                                </Button>
+                            </CardContent>
+                        </Card>
+
                         {/* História */}
                         <Card>
-                            <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+                            <CardHeader className="flex items-center justify-between">
                                 <CardTitle className="text-base">História</CardTitle>
                                 <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                                     <Checkbox
@@ -507,12 +550,17 @@ export default function PipelineDetail({
                     {/* SIDEBAR — who the client is */}
                     <div className="space-y-6">
                         <Card>
-                            <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+                            <CardHeader className="flex items-center justify-between">
                                 <CardTitle className="text-base">Údaje</CardTitle>
                                 {!editingData && (
-                                    <Button size="sm" variant="outline" onClick={startEditData}>
-                                        <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                                        Upraviť
+                                    <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-8 w-8 p-0"
+                                        onClick={startEditData}
+                                        aria-label="Upraviť údaje"
+                                    >
+                                        <Pencil className="h-3.5 w-3.5" />
                                     </Button>
                                 )}
                             </CardHeader>
@@ -571,6 +619,33 @@ export default function PipelineDetail({
                 </div>
             </DashboardContent>
         </>
+    );
+}
+
+function NextActionDisplay({
+    kind,
+    at,
+    note,
+}: {
+    kind: string | null;
+    at: string | null;
+    note: string | null;
+}) {
+    const nd = formatNextDate(at);
+    return (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+            <span className={`text-sm font-semibold${nd.overdue ? " text-destructive" : ""}`}>
+                {kind ? NEXT_ACTION_LABEL[kind as NextActionKind] : "Ďalší krok"}
+            </span>
+            {at && (
+                <span className={`text-sm tabular-nums${nd.overdue ? " text-destructive" : ""}`}>
+                    {nd.label}
+                </span>
+            )}
+            {note && (
+                <span className="text-sm text-muted-foreground">{note}</span>
+            )}
+        </div>
     );
 }
 

@@ -149,7 +149,7 @@ export default function DesignTrackingCard({
 
     return (
         <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+            <CardHeader className="flex items-center justify-between">
                 <CardTitle className="text-base">Dizajn</CardTitle>
                 <Button
                     size="sm"
@@ -183,29 +183,57 @@ export default function DesignTrackingCard({
                     const isSent = Boolean(design.sentAt);
                     return (
                         <div key={design.id} className="space-y-2 rounded-lg border p-3">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <span className="text-sm font-medium">{design.label || "Návrh"}</span>
-                                <Badge variant="outline" className="font-normal">
-                                    v{design.currentVersion}
-                                </Badge>
-                                <Badge variant={CONFIDENCE_VARIANT[s.confidence]} className="font-normal">
-                                    {CONFIDENCE_LABEL[s.confidence]}
-                                </Badge>
-                                {s.viewedAfterUpdate && design.currentVersion > 1 && (
-                                    <Badge variant="secondary" className="font-normal">
-                                        Videli po update
+                            <div className="flex items-start justify-between gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-sm font-medium">{design.label || "Návrh"}</span>
+                                    <Badge variant="outline" className="font-normal">
+                                        v{design.currentVersion}
                                     </Badge>
-                                )}
-                                {isSent && (
-                                    <Badge variant="secondary" className="font-normal">
-                                        Poslané {fmtDate(design.sentAt)}
+                                    <Badge variant={CONFIDENCE_VARIANT[s.confidence]} className="font-normal">
+                                        {CONFIDENCE_LABEL[s.confidence]}
                                     </Badge>
-                                )}
-                                {!design.isLive && (
-                                    <Badge variant="destructive" className="font-normal">
-                                        Stránka vypnutá
-                                    </Badge>
-                                )}
+                                    {s.viewedAfterUpdate && design.currentVersion > 1 && (
+                                        <Badge variant="secondary" className="font-normal">
+                                            Videli po update
+                                        </Badge>
+                                    )}
+                                    {isSent && (
+                                        <Badge variant="secondary" className="font-normal">
+                                            Poslané {fmtDate(design.sentAt)}
+                                        </Badge>
+                                    )}
+                                    {!design.isLive && (
+                                        <Badge variant="destructive" className="font-normal">
+                                            Stránka vypnutá
+                                        </Badge>
+                                    )}
+                                </div>
+                                <div className="flex shrink-0 gap-0.5">
+                                    <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-8 w-8 p-0"
+                                        aria-label="Upraviť repo / označenie"
+                                        disabled={busy}
+                                        onClick={() => {
+                                            setMLabel(design.label ?? "");
+                                            setMRepo(design.repoUrl ?? "");
+                                            setForm({ id: design.id, mode: "meta" });
+                                        }}
+                                    >
+                                        <Pencil className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-8 w-8 p-0 text-destructive"
+                                        aria-label="Odstrániť návrh"
+                                        disabled={busy}
+                                        onClick={() => run(() => removeDesign(design.id))}
+                                    >
+                                        <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                </div>
                             </div>
 
                             {/* Odkaz pre manažéra — klikateľný + kopírovanie */}
@@ -275,17 +303,6 @@ export default function DesignTrackingCard({
                                 <TrackerHistory events={design.events} />
                             </div>
 
-                            {/* Poslané – revertovateľné */}
-                            <Button
-                                size="sm"
-                                variant={isSent ? "secondary" : "default"}
-                                onClick={() => run(() => setDesignSent(design.id, !isSent))}
-                                disabled={busy}
-                            >
-                                <Send className="mr-1.5 h-3.5 w-3.5" />
-                                {isSent ? "Označiť ako neposlaný" : "Označiť ako poslaný"}
-                            </Button>
-
                             {form?.id === design.id && form.mode === "version" ? (
                                 <div className="space-y-2 rounded-md bg-muted/40 p-2">
                                     <div className="grid gap-1.5">
@@ -349,7 +366,16 @@ export default function DesignTrackingCard({
                                     </div>
                                 </div>
                             ) : (
-                                <div className="flex flex-wrap gap-1">
+                                <div className="flex flex-wrap items-center gap-1">
+                                    <Button
+                                        size="sm"
+                                        variant={isSent ? "secondary" : "default"}
+                                        onClick={() => run(() => setDesignSent(design.id, !isSent))}
+                                        disabled={busy}
+                                    >
+                                        <Send className="mr-1.5 h-3.5 w-3.5" />
+                                        {isSent ? "Neposlaný" : "Označiť poslaný"}
+                                    </Button>
                                     <Button
                                         size="sm"
                                         variant="outline"
@@ -366,19 +392,6 @@ export default function DesignTrackingCard({
                                     <Button
                                         size="sm"
                                         variant="ghost"
-                                        onClick={() => {
-                                            setMLabel(design.label ?? "");
-                                            setMRepo(design.repoUrl ?? "");
-                                            setForm({ id: design.id, mode: "meta" });
-                                        }}
-                                        disabled={busy}
-                                    >
-                                        <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                                        Repo / označenie
-                                    </Button>
-                                    <Button
-                                        size="sm"
-                                        variant="ghost"
                                         onClick={() =>
                                             run(() => updateDesignMeta(design.id, { isLive: !design.isLive }))
                                         }
@@ -389,17 +402,7 @@ export default function DesignTrackingCard({
                                         ) : (
                                             <Power className="mr-1.5 h-3.5 w-3.5" />
                                         )}
-                                        {design.isLive ? "Označiť vypnutú" : "Označiť živú"}
-                                    </Button>
-                                    <Button
-                                        size="sm"
-                                        variant="ghost"
-                                        className="text-destructive"
-                                        onClick={() => run(() => removeDesign(design.id))}
-                                        disabled={busy}
-                                    >
-                                        <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                                        Odstrániť návrh
+                                        {design.isLive ? "Vypnutá" : "Živá"}
                                     </Button>
                                 </div>
                             )}

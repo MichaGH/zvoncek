@@ -129,5 +129,9 @@
         @apply font-sans;
         /* Always reserve space for the scrollbar so pages with/without it don't shift. */
         scrollbar-gutter: stable;
+        /* The gutter already reserves the scrollbar width, so cancel the extra
+           padding that Radix/vaul (react-remove-scroll) inject when a select or
+           drawer locks scroll — otherwise the whole page shifts sideways. */
+        --removed-body-scroll-bar-size: 0px !important;
     }
 }

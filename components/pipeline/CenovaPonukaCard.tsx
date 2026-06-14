@@ -67,37 +67,42 @@ export default function CenovaPonukaCard({
 
     return (
         <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-                <div className="flex items-center gap-2">
+            <CardHeader className="flex items-center justify-between">
+                <div className="flex min-w-0 items-center gap-2">
                     <CardTitle className="text-base">Cenová ponuka</CardTitle>
                     {sent && (
-                        <Badge variant="default" className="font-normal">
+                        <Badge variant="secondary" className="shrink-0 font-normal">
                             Odoslané {fmtDate(quoteSentAt)}
                         </Badge>
                     )}
                 </div>
                 {!editing && (
-                    <Button size="sm" variant="outline" onClick={startEdit}>
-                        <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                        {price != null || priceNote ? "Upraviť" : "Zadať cenu / poznámku"}
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-8 w-8 shrink-0 p-0"
+                        onClick={startEdit}
+                        aria-label="Upraviť cenu"
+                    >
+                        <Pencil className="h-3.5 w-3.5" />
                     </Button>
                 )}
             </CardHeader>
             <CardContent className="space-y-3">
                 {!editing ? (
                     <>
-                        {price != null ? (
-                            <div>
-                                <p className="text-2xl font-medium tabular-nums">{price} €</p>
+                        <div>
+                            <p className={`text-2xl font-medium tabular-nums${price == null ? " text-muted-foreground" : ""}`}>
+                                {price != null ? `${price} €` : "— €"}
+                            </p>
+                            {price != null && (
                                 <p className="text-xs text-muted-foreground">
                                     {sent
                                         ? "Klient videl túto cenu"
                                         : "Interná cena · klientovi ešte neodoslaná"}
                                 </p>
-                            </div>
-                        ) : (
-                            <p className="text-sm text-muted-foreground">Cena ešte nezadaná</p>
-                        )}
+                            )}
+                        </div>
                         {priceNote && (
                             <p className="whitespace-pre-wrap text-sm text-muted-foreground">
                                 {priceNote}
