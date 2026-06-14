@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import {
     Table,
     TableBody,
@@ -11,7 +12,6 @@ import {
 } from "@/components/ui/table";
 import { OUTCOME_LABEL } from "@/lib/dictionaries";
 import { getCallHistory, getCallHistoryUsers } from "@/lib/queries/calls/history";
-import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 
 export default async function CallsHistoryPage({
@@ -32,21 +32,12 @@ export default async function CallsHistoryPage({
     ]);
 
     return (
-        <main className="mx-auto max-w-6xl px-4 py-8">
-            <div className="mb-6 flex items-center gap-3">
-                <Button asChild variant="ghost" size="sm">
-                    <Link href="/dashboard/calls">
-                        <ArrowLeft className="mr-1 h-4 w-4" />
-                        Späť
-                    </Link>
-                </Button>
-                <div>
-                    <h1 className="text-2xl font-semibold tracking-tight">História volaní</h1>
-                    <p className="text-sm text-muted-foreground">
-                        Iba marketingové hovory zaznamenané z fronty volaní
-                    </p>
-                </div>
-            </div>
+        <DashboardPage width="wide">
+            <DashboardPageHeader
+                title="História volaní"
+                description="Iba marketingové hovory zaznamenané z fronty volaní"
+                backHref="/dashboard/calls"
+            />
 
             {canFilterUsers && (
                 <div className="mb-4 flex flex-wrap gap-2">
@@ -115,6 +106,6 @@ export default async function CallsHistoryPage({
                     </TableBody>
                 </Table>
             </div>
-        </main>
+        </DashboardPage>
     );
 }

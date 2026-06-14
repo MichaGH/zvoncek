@@ -12,14 +12,14 @@ import CallRow from "./CallRow";
 import CallDrawer from "./CallDrawer";
 import InfoDrawer from "./InfoDrawer";
 import { Button } from "@/components/ui/button";
-import { CalendarClock, RotateCcw, Sparkles, RefreshCw } from "lucide-react";
+import { CalendarClock, RotateCcw, Sparkles } from "lucide-react";
 
 type Opts = { note?: string; callbackNote?: string; when?: string; email?: string };
 type RemoveAction = { type: "remove"; leadId: string };
 
 export default function CallQueue({ board }: { board: CallsBoard }) {
     const router = useRouter();
-    const [isPending, startTransition] = useTransition();
+    const [, startTransition] = useTransition();
     const [openLead, setOpenLead] = useState<QueueLead | null>(null);
     const [infoLead, setInfoLead] = useState<QueueLead | null>(null);
 
@@ -90,14 +90,6 @@ export default function CallQueue({ board }: { board: CallsBoard }) {
 
     return (
         <>
-            {/* lišta s refreshom */}
-            <div className="mb-4 flex items-center justify-end gap-2">
-                <Button variant="outline" size="sm" onClick={() => router.refresh()} disabled={isPending}>
-                    <RefreshCw className={`mr-1.5 h-4 w-4 ${isPending ? "animate-spin" : ""}`} />
-                    Obnoviť
-                </Button>
-            </div>
-
             <div className="grid gap-6 lg:grid-cols-2">
                 {/* ĽAVÝ STĹPEC */}
                 <div className="space-y-6">

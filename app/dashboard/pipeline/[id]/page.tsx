@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import PipelineDetail from "@/components/pipeline/PipelineDetail";
+import { DashboardPage } from "@/components/dashboard/DashboardPage";
 import { getPipelineDetail, getPipelineUsers } from "@/lib/queries/pipeline";
 
 export default async function PipelineDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -9,8 +10,8 @@ export default async function PipelineDetailPage({ params }: { params: Promise<{
     if (!lead) notFound();
 
     return (
-        <main className="mx-auto max-w-3xl px-4 py-8">
+        <DashboardPage width="default">
             <PipelineDetail lead={lead} users={users} />
-        </main>
+        </DashboardPage>
     );
 }

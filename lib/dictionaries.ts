@@ -27,7 +27,8 @@ export const STATUS_VARIANT: Record<
     SNOOZED: "secondary",
     WON: "secondary",
     LOST: "destructive",
-    UNREACHABLE: "destructive",
+    // Unreachable is a dead-number state, not a lost deal — keep it visually distinct from LOST.
+    UNREACHABLE: "outline",
 };
 
 export const OUTCOME_LABEL: Record<CallOutcome, string> = {

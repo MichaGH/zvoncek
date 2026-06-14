@@ -39,10 +39,19 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
 
     return (
         <div className="overflow-x-auto rounded-lg border">
-            <Table className="w-full">
+            <Table className="w-full min-w-[860px] table-fixed">
+                <colgroup>
+                    <col className="w-12" />
+                    <col className="w-[220px]" />
+                    <col className="w-28" />
+                    <col className="w-[200px]" />
+                    <col className="w-[200px]" />
+                    <col className="w-24" />
+                    <col className="w-28" />
+                </colgroup>
                 <TableHeader>
                     <TableRow>
-                        <TableHead className="w-12">#</TableHead>
+                        <TableHead>#</TableHead>
                         <TableHead>Firma</TableHead>
                         <TableHead>Stav</TableHead>
                         <TableHead>Posledný krok</TableHead>
@@ -63,10 +72,10 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                 <TableCell className="font-medium">
                                     <Link
                                         href={`/dashboard/pipeline/${row.id}`}
-                                        className="after:absolute after:inset-0"
+                                        className="block after:absolute after:inset-0"
                                     >
-                                        <span className="block">{row.name}</span>
-                                        <span className="text-xs font-normal text-muted-foreground">
+                                        <span className="block truncate">{row.name}</span>
+                                        <span className="block truncate text-xs font-normal text-muted-foreground">
                                             {row.phone ?? "—"}
                                         </span>
                                     </Link>
@@ -76,17 +85,19 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                         {STATUS_LABEL[row.status]}
                                     </Badge>
                                 </TableCell>
-                                <TableCell className="max-w-xs whitespace-normal">
+                                <TableCell className="align-top">
                                     {row.lastActivity ? (
                                         <>
-                                            <span className="font-medium">
-                                                {ACTIVITY_LABEL[row.lastActivity.type]}
-                                            </span>
-                                            {row.lastActivity.outcome && (
-                                                <span className="ml-1 text-muted-foreground">
-                                                    · {OUTCOME_LABEL[row.lastActivity.outcome]}
+                                            <span className="block truncate">
+                                                <span className="font-medium">
+                                                    {ACTIVITY_LABEL[row.lastActivity.type]}
                                                 </span>
-                                            )}
+                                                {row.lastActivity.outcome && (
+                                                    <span className="ml-1 text-muted-foreground">
+                                                        · {OUTCOME_LABEL[row.lastActivity.outcome]}
+                                                    </span>
+                                                )}
+                                            </span>
                                             {row.lastActivity.note && (
                                                 <span className="block truncate text-xs text-muted-foreground">
                                                     {row.lastActivity.note}
@@ -101,13 +112,15 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                     )}
                                 </TableCell>
                                 <TableCell
-                                    className={`max-w-xs whitespace-normal ${overdue ? "font-medium text-destructive" : ""}`}
+                                    className={`align-top ${overdue ? "font-medium text-destructive" : ""}`}
                                 >
                                     {row.nextActionKind ? (
                                         <>
-                                            <span>{NEXT_ACTION_LABEL[row.nextActionKind]}</span>
-                                            <span className="ml-1.5 tabular-nums">
-                                                · {formatDate(row.nextActionAt)}
+                                            <span className="block truncate">
+                                                {NEXT_ACTION_LABEL[row.nextActionKind]}
+                                                <span className="ml-1.5 tabular-nums">
+                                                    · {formatDate(row.nextActionAt)}
+                                                </span>
                                             </span>
                                             {row.nextActionNote && (
                                                 <span className="block truncate text-xs text-muted-foreground">
@@ -122,7 +135,7 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                 <TableCell className="text-right tabular-nums">
                                     {row.price ? `${row.price} €` : "—"}
                                 </TableCell>
-                                <TableCell className="text-muted-foreground">{row.owner ?? "—"}</TableCell>
+                                <TableCell className="truncate text-muted-foreground">{row.owner ?? "—"}</TableCell>
                             </TableRow>
                         );
                     })}

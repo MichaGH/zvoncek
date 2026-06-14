@@ -1,13 +1,69 @@
 import prisma from "@/lib/db";
-import type { LeadStatus } from "@/app/generated/prisma/enums";
+import type {
+    ActivityType,
+    CallOutcome,
+    LeadStatus,
+    NextActionKind,
+} from "@/app/generated/prisma/enums";
 
+export const PIPELINE_PAGE_SIZE = 50;
+
+type PipelineLead = {
+    id: string;
+    number: number;
+    companyName: string | null;
+    website: string | null;
+    phone: string | null;
+    status: LeadStatus;
+    nextActionKind: NextActionKind | null;
+    nextActionAt: Date | null;
+    nextActionNote: string | null;
+    price: { toString(): string } | null;
+    owner: { firstName: string } | null;
+    activities: {
+        type: ActivityType;
+        outcome: CallOutcome | null;
+        note: string | null;
+        createdAt: Date;
+    }[];
+};
+
+function toPipelineRow(lead: PipelineLead) {
+    return {
+        id: lead.id,
+        number: lead.number,
+        name: lead.companyName ?? lead.website ?? "—",
+        phone: lead.phone,
+        status: lead.status,
+        nextActionKind: lead.nextActionKind,
+        nextActionAt: lead.nextActionAt?.toISOString() ?? null,
+        nextActionNote: lead.nextActionNote,
+        price: lead.price ? Number(lead.price) : null,
+        owner: lead.owner?.firstName ?? null,
+        lastActivity: lead.activities[0]
+            ? {
+                  type: lead.activities[0].type,
+                  outcome: lead.activities[0].outcome,
+                  note: lead.activities[0].note,
+                  at: lead.activities[0].createdAt.toISOString(),
+              }
+            : null,
+    };
+}
+
+export type PipelineListRow = ReturnType<typeof toPipelineRow>;
+
+// Simple offset-based pagination. Good enough for current volume.
+// TODO: switch to cursor-based ("next 50") if the list grows large.
 export async function getPipelineList({
     status,
     query,
+    take = PIPELINE_PAGE_SIZE,
 }: {
     status?: LeadStatus;
     query?: string;
-}) {
+    take?: number;
+}): Promise<{ rows: PipelineListRow[]; hasMore: boolean }> {
     const leads = await prisma.lead.findMany({
         where: {
             ...(status ? { status } : {}),
@@ -17,6 +73,7 @@ export async function getPipelineList({
                           { companyName: { contains: query, mode: "insensitive" } },
                           { website: { contains: query, mode: "insensitive" } },
                           { phone: { contains: query } },
+                          { email: { contains: query, mode: "insensitive" } },
                       ],
                   }
                 : {}),
@@ -41,31 +98,13 @@ export async function getPipelineList({
             },
         },
         orderBy: { nextActionAt: { sort: "asc", nulls: "last" } },
+        take: take + 1,
     });
 
-    return leads.map((lead) => ({
-        id: lead.id,
-        number: lead.number,
-        name: lead.companyName ?? lead.website ?? "—",
-        phone: lead.phone,
-        status: lead.status,
-        nextActionKind: lead.nextActionKind,
-        nextActionAt: lead.nextActionAt?.toISOString() ?? null,
-        nextActionNote: lead.nextActionNote,
-        price: lead.price ? Number(lead.price) : null,
-        owner: lead.owner?.firstName ?? null,
-        lastActivity: lead.activities[0]
-            ? {
-                  type: lead.activities[0].type,
-                  outcome: lead.activities[0].outcome,
-                  note: lead.activities[0].note,
-                  at: lead.activities[0].createdAt.toISOString(),
-              }
-            : null,
-    }));
+    const hasMore = leads.length > take;
+    const rows = leads.slice(0, take).map(toPipelineRow);
+    return { rows, hasMore };
 }
-
-export type PipelineListRow = Awaited<ReturnType<typeof getPipelineList>>[number];
 
 export async function getPipelineDetail(id: string) {
     const lead = await prisma.lead.findUnique({
