@@ -209,10 +209,10 @@ export default function ContactGrid({ initialCallable }: { initialCallable: numb
 
             <div className="overflow-x-auto rounded-lg border bg-card">
                 <div className="min-w-[820px]">
-                    <div className="grid grid-cols-[1.4fr_1fr_0.9fr_1.6fr_5.5rem] border-b bg-muted/50 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        <HeaderCell>Firma</HeaderCell>
+                    <div className="grid grid-cols-[1fr_0.9fr_1.4fr_1.6fr_5.5rem] border-b bg-muted/50 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         <HeaderCell>Web</HeaderCell>
                         <HeaderCell>Telefón</HeaderCell>
+                        <HeaderCell>Firma</HeaderCell>
                         <HeaderCell>Poznámka</HeaderCell>
                         <HeaderCell className="border-r-0 text-center">Stav</HeaderCell>
                     </div>
@@ -228,7 +228,7 @@ export default function ContactGrid({ initialCallable }: { initialCallable: numb
                                     if (!saved) handleRowBlur(row.id, e);
                                 }}
                                 className={cn(
-                                    "grid grid-cols-[1.4fr_1fr_0.9fr_1.6fr_5.5rem] border-b last:border-b-0",
+                                    "grid grid-cols-[1fr_0.9fr_1.4fr_1.6fr_5.5rem] border-b last:border-b-0",
                                     saved && !isEditing && "bg-emerald-50/60",
                                     isEditing && "bg-accent/30",
                                     row.status === "error" && "bg-destructive/5",
@@ -236,13 +236,6 @@ export default function ContactGrid({ initialCallable }: { initialCallable: numb
                             >
                                 <GridInput
                                     ref={(el) => { firstInputs.current[row.id] = el; }}
-                                    value={isEditing ? editForm.companyName : row.companyName}
-                                    onChange={isEditing ? (v) => setEditForm((f) => ({ ...f, companyName: v })) : (v) => updateField(row.id, "companyName", v)}
-                                    onKeyDown={saved ? noop : (e) => handleKeyDown(row.id, e)}
-                                    disabled={saved && !isEditing}
-                                    placeholder="Autoservis Kováč"
-                                />
-                                <GridInput
                                     value={isEditing ? editForm.website : row.website}
                                     onChange={isEditing ? (v) => setEditForm((f) => ({ ...f, website: v })) : (v) => updateField(row.id, "website", v)}
                                     onKeyDown={saved ? noop : (e) => handleKeyDown(row.id, e)}
@@ -256,6 +249,13 @@ export default function ContactGrid({ initialCallable }: { initialCallable: numb
                                     disabled={saved && !isEditing}
                                     placeholder="0905 123 456"
                                     inputMode="tel"
+                                />
+                                <GridInput
+                                    value={isEditing ? editForm.companyName : row.companyName}
+                                    onChange={isEditing ? (v) => setEditForm((f) => ({ ...f, companyName: v })) : (v) => updateField(row.id, "companyName", v)}
+                                    onKeyDown={saved ? noop : (e) => handleKeyDown(row.id, e)}
+                                    disabled={saved && !isEditing}
+                                    placeholder="Autoservis Kováč"
                                 />
                                 <GridInput
                                     value={isEditing ? editForm.note : row.note}

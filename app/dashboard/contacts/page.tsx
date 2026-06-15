@@ -18,7 +18,11 @@ import { CONTACTS_PAGE_SIZE, getContactsList, getContactsOverview } from "@/lib/
 import { STATUS_LABEL, STATUS_VARIANT } from "@/lib/dictionaries";
 import { can } from "@/lib/permissions";
 import { getUserOptions } from "@/lib/queries/users";
-import { Plus } from "lucide-react";
+import { Plus, StickyNote } from "lucide-react";
+
+function toHref(website: string): string {
+    return /^https?:\/\//i.test(website) ? website : `https://${website}`;
+}
 
 function formatDate(iso: string) {
     return new Date(iso).toLocaleDateString("sk-SK", {
@@ -41,13 +45,10 @@ export default async function ContactsPage({
     const take =
         Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : CONTACTS_PAGE_SIZE;
 
-    // Scout (bez contacts.viewAll) vidí len svoje pridané kontakty.
     const isManager = can(session.user, "contacts.viewAll");
     const scopeToOwn = !isManager;
-    // Scout: vždy len vlastné. Manager/admin: filter podľa URL param (alebo všetky).
     const effectiveCreatedById = scopeToOwn ? session.user.id : (createdBy || undefined);
     const effectiveOwnerId = isManager ? (assignedTo || undefined) : undefined;
-    const canViewPipeline = can(session.user, "pipeline.view");
 
     const fetchUsers = isManager ? getUserOptions() : Promise.resolve([]);
     const [{ rows, hasMore }, overview, users] = await Promise.all([
@@ -96,13 +97,13 @@ export default async function ContactsPage({
                 <Table className="min-w-[760px]">
                     <TableHeader>
                         <TableRow>
-                            <TableHead className="w-16">#</TableHead>
+                            <TableHead className="w-10">#</TableHead>
                             <TableHead>Firma</TableHead>
-                            <TableHead>Telefón</TableHead>
-                            <TableHead>Stav</TableHead>
-                            <TableHead>Pridal</TableHead>
-                            <TableHead className="text-right">Pridané</TableHead>
-                            <TableHead className="w-20 text-right">Akcie</TableHead>
+                            <TableHead className="w-36">Telefón</TableHead>
+                            <TableHead className="w-28">Stav</TableHead>
+                            <TableHead className="w-28">Pridal</TableHead>
+                            <TableHead className="w-28 text-right">Pridané</TableHead>
+                            <TableHead className="w-20 text-center">Akcie</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -119,19 +120,26 @@ export default async function ContactsPage({
                                         {row.number}
                                     </TableCell>
                                     <TableCell className="max-w-0">
-                                        {canViewPipeline ? (
-                                            <Link
-                                                href={`/dashboard/pipeline/${row.id}`}
-                                                className="block truncate font-medium hover:underline"
-                                            >
-                                                {row.name}
-                                            </Link>
-                                        ) : (
-                                            <span className="block truncate font-medium">{row.name}</span>
-                                        )}
-                                        {row.website && (
+                                        <div className="flex min-w-0 items-center gap-1.5">
+                                            {row.website ? (
+                                                <a
+                                                    href={toHref(row.website)}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="truncate font-medium hover:underline"
+                                                >
+                                                    {row.website}
+                                                </a>
+                                            ) : (
+                                                <span className="truncate font-medium">{row.companyName ?? "—"}</span>
+                                            )}
+                                            {row.note && (
+                                                <StickyNote className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+                                            )}
+                                        </div>
+                                        {row.website && row.companyName && (
                                             <span className="block truncate text-xs text-muted-foreground">
-                                                {row.website}
+                                                {row.companyName}
                                             </span>
                                         )}
                                     </TableCell>
@@ -145,7 +153,7 @@ export default async function ContactsPage({
                                     <TableCell className="text-right text-muted-foreground tabular-nums">
                                         {formatDate(row.createdAt)}
                                     </TableCell>
-                                    <TableCell className="text-right">
+                                    <TableCell className="text-center">
                                         <ContactRowActions
                                             contact={{
                                                 id: row.id,

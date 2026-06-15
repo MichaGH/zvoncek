@@ -5,6 +5,7 @@ import MobileNav from "@/components/layout/MobileNav";
 import { can, type Permission } from "@/lib/permissions";
 import { logout } from "@/lib/actions";
 import { LogOut } from "lucide-react";
+import DarkModeToggle from "@/components/layout/DarkModeToggle";
 
 const NAV: { href: string; label: string; perm: Permission | null }[] = [
     { href: "/dashboard",          label: "Dashboard",  perm: null              },
@@ -66,6 +67,8 @@ export default async function Header() {
                             <span className="hidden font-mono text-sm text-muted-foreground md:inline lg:hidden">
                                 {u.username}
                             </span>
+
+                            <DarkModeToggle />
 
                             {/* Logout — outline vždy; lg+ má text, md- len ikonka */}
                             <form action={logout} className="flex items-center">

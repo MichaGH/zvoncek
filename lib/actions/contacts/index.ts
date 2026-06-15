@@ -47,13 +47,25 @@ export type CreateContactResult =
 // A contact needs a name (company OR website) and a phone number to be callable.
 // Inserts never collide with people calling/editing other leads, so concurrent
 // adding is safe; the only shared guard is the soft duplicate-phone check below.
+function normalizeWebsite(raw: string | undefined): string | null {
+    const s = raw?.trim();
+    if (!s) return null;
+    const withProtocol = /^https?:\/\//i.test(s) ? s : `https://${s}`;
+    try {
+        const { hostname } = new URL(withProtocol);
+        return hostname.replace(/^www\./i, "") || s;
+    } catch {
+        return s;
+    }
+}
+
 export async function createContact(input: CreateContactInput): Promise<CreateContactResult> {
     const session = await auth();
     if (!session?.user?.id) return { ok: false, error: "Nie si prihlásený." };
     if (!can(session.user, "contacts.create")) return { ok: false, error: "Nemáš oprávnenie." };
 
     const companyName = input.companyName?.trim() || null;
-    const website = input.website?.trim() || null;
+    const website = normalizeWebsite(input.website);
     const phone = input.phone?.trim() || null;
     const note = input.note?.trim() || null;
 
@@ -109,7 +121,7 @@ export async function updateContact(
     if (guard) return { ok: false, error: guard };
 
     const companyName = input.companyName?.trim() || null;
-    const website = input.website?.trim() || null;
+    const website = normalizeWebsite(input.website);
     const phone = input.phone?.trim() || null;
     const note = input.note?.trim() || null;
 

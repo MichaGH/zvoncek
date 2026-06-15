@@ -75,7 +75,7 @@ export default function ContactRowActions({
     if (locked) {
         return (
             <span
-                className="flex items-center justify-end gap-1 text-xs text-muted-foreground"
+                className="flex items-center justify-center gap-1 text-xs text-muted-foreground"
                 title="Kontakt je už obvolaný – nedá sa upraviť ani vymazať"
             >
                 <Lock className="h-3.5 w-3.5" /> obvolaný
@@ -84,7 +84,7 @@ export default function ContactRowActions({
     }
 
     return (
-        <div className="flex items-center justify-end gap-1">
+        <div className="flex items-center justify-center gap-1">
             <Button
                 variant="ghost"
                 size="icon"
