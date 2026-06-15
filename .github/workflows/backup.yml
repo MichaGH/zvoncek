@@ -2,9 +2,7 @@ name: Záloha databázy
 
 on:
   schedule:
-    # Každý deň o 01:00 UTC = 03:00 SK (leto) / 02:00 SK (zima)
     - cron: '0 1 * * *'
-  # Aj manuálne spustenie cez GitHub UI (Actions → Run workflow)
   workflow_dispatch:
 
 jobs:
@@ -14,8 +12,9 @@ jobs:
     steps:
       - name: Inštalácia PostgreSQL 18 klienta
         run: |
-          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-          wget -qO- https://www.postgresql.org/apt/ACCC4CF8.asc | sudo tee /etc/apt/trusted.gpg.d/pgdg.asc &>/dev/null
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update -qq
           sudo apt-get install -y postgresql-client-18
 
