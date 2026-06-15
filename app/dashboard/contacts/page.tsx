@@ -2,7 +2,7 @@ import Link from "next/link";
 import { auth } from "@/auth";
 import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import RefreshButton from "@/components/dashboard/RefreshButton";
-import ContactsSearch from "@/components/contacts/ContactsSearch";
+import ContactsFilterBar from "@/components/contacts/ContactsFilterBar";
 import ContactRowActions from "@/components/contacts/ContactRowActions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import {
 import { CONTACTS_PAGE_SIZE, getContactsList, getContactsOverview } from "@/lib/queries/contacts";
 import { STATUS_LABEL, STATUS_VARIANT } from "@/lib/dictionaries";
 import { can } from "@/lib/permissions";
+import { getUserOptions } from "@/lib/queries/users";
 import { Plus } from "lucide-react";
 
 function formatDate(iso: string) {
@@ -30,28 +31,35 @@ function formatDate(iso: string) {
 export default async function ContactsPage({
     searchParams,
 }: {
-    searchParams: Promise<{ q?: string; limit?: string }>;
+    searchParams: Promise<{ q?: string; limit?: string; createdBy?: string; assignedTo?: string }>;
 }) {
     const session = await auth();
     if (!session?.user?.id) return null;
 
-    const { q, limit } = await searchParams;
+    const { q, limit, createdBy, assignedTo } = await searchParams;
     const parsedLimit = Number(limit);
     const take =
         Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : CONTACTS_PAGE_SIZE;
 
     // Scout (bez contacts.viewAll) vidí len svoje pridané kontakty.
-    const scopeToOwn = !can(session.user, "contacts.viewAll");
-    const createdById = scopeToOwn ? session.user.id : undefined;
+    const isManager = can(session.user, "contacts.viewAll");
+    const scopeToOwn = !isManager;
+    // Scout: vždy len vlastné. Manager/admin: filter podľa URL param (alebo všetky).
+    const effectiveCreatedById = scopeToOwn ? session.user.id : (createdBy || undefined);
+    const effectiveOwnerId = isManager ? (assignedTo || undefined) : undefined;
     const canViewPipeline = can(session.user, "pipeline.view");
 
-    const [{ rows, hasMore }, overview] = await Promise.all([
-        getContactsList({ query: q, take, createdById }),
-        getContactsOverview(createdById),
+    const fetchUsers = isManager ? getUserOptions() : Promise.resolve([]);
+    const [{ rows, hasMore }, overview, users] = await Promise.all([
+        getContactsList({ query: q, take, createdById: effectiveCreatedById, ownerId: effectiveOwnerId }),
+        getContactsOverview(effectiveCreatedById),
+        fetchUsers,
     ]);
 
     const moreParams = new URLSearchParams();
     if (q) moreParams.set("q", q);
+    if (createdBy) moreParams.set("createdBy", createdBy);
+    if (assignedTo) moreParams.set("assignedTo", assignedTo);
     moreParams.set("limit", String(take + CONTACTS_PAGE_SIZE));
 
     return (
@@ -71,7 +79,13 @@ export default async function ContactsPage({
                     </>
                 }
             >
-                <ContactsSearch query={q} />
+                <ContactsFilterBar
+                    query={q}
+                    createdBy={createdBy}
+                    assignedTo={assignedTo}
+                    users={users}
+                    showFilters={isManager}
+                />
             </DashboardPageHeader>
 
             <div className="mb-3 text-sm text-muted-foreground">

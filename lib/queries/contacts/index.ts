@@ -40,15 +40,18 @@ export async function getContactsList({
     query,
     take = CONTACTS_PAGE_SIZE,
     createdById,
+    ownerId,
 }: {
     query?: string;
     take?: number;
     createdById?: string; // scout → len vlastné pridané
+    ownerId?: string;
 }): Promise<{ rows: ContactListRow[]; hasMore: boolean }> {
     const leads = await prisma.lead.findMany({
         where: {
             deletedAt: null,
             ...(createdById ? { createdById } : {}),
+            ...(ownerId ? { ownerId } : {}),
             ...(query
                 ? {
                       OR: [

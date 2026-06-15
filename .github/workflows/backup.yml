@@ -1,0 +1,32 @@
+name: Záloha databázy
+
+on:
+  schedule:
+    # Každý deň o 01:00 UTC = 03:00 SK (leto) / 02:00 SK (zima)
+    - cron: '0 1 * * *'
+  # Aj manuálne spustenie cez GitHub UI (Actions → Run workflow)
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dump databázy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          pg_dump "$DATABASE_URL" \
+            --no-owner \
+            --no-acl \
+            --format=custom \
+            --file=zvoncek_${DATE}.dump
+          echo "Záloha vytvorená: zvoncek_${DATE}.dump ($(du -sh zvoncek_${DATE}.dump | cut -f1))"
+
+      - name: Nahranie zálohy (90 dní)
+        uses: actions/upload-artifact@v4
+        with:
+          name: zvoncek-${{ github.run_number }}-${{ github.run_id }}
+          path: zvoncek_*.dump
+          retention-days: 90

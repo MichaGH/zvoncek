@@ -1,13 +1,6 @@
+import { redirect } from "next/navigation";
 
-import SignupForm from '@/components/layout/SignUpForm'
-
-
-export default function LoginPage() {
-  return (
-    <main>
-        <div className="flex items-center justify-center h-screen ">
-            <SignupForm />
-        </div>
-    </main>
-  )
+// Verejná registrácia je vypnutá – účty spravuje admin v /dashboard/admin/users.
+export default function SignupPage() {
+    redirect("/login");
 }

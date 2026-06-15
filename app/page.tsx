@@ -1,11 +1,7 @@
-// app/page.tsx
-export default function Home() {
-  return (
-    <main className="mx-auto max-w-5xl px-4 py-24 text-center">
-      <h1 className="text-4xl font-bold tracking-tight">Vitaj 👋</h1>
-      <p className="mt-3 text-gray-500">
-        Learning projekt: Next.js + Prisma + NextAuth.
-      </p>
-    </main>
-  );
+import { redirect } from "next/navigation";
+import { auth } from "@/auth";
+
+export default async function HomePage() {
+    const session = await auth();
+    redirect(session?.user ? "/dashboard" : "/login");
 }

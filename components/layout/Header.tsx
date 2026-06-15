@@ -5,7 +5,7 @@ import LogoutButton from "@/components/layout/LogoutButton";
 import { can, type Permission } from "@/lib/permissions";
 
 const NAV: { href: string; label: string; perm: Permission | null }[] = [
-    { href: "/dashboard", label: "Dnes", perm: null },
+    { href: "/dashboard", label: "Dashboard", perm: null },
     { href: "/dashboard/calls", label: "Volania", perm: "calls.view" },
     { href: "/dashboard/pipeline", label: "Pipeline", perm: "pipeline.view" },
     { href: "/dashboard/contacts", label: "Kontakty", perm: "contacts.access" },
@@ -46,14 +46,9 @@ export default async function Header() {
                             <LogoutButton />
                         </>
                     ) : (
-                        <>
-                            <Button asChild variant="ghost" size="sm">
-                                <Link href="/login">Prihlásiť sa</Link>
-                            </Button>
-                            <Button asChild size="sm">
-                                <Link href="/signup">Registrovať sa</Link>
-                            </Button>
-                        </>
+                        <Button asChild size="sm">
+                            <Link href="/login">Prihlásiť sa</Link>
+                        </Button>
                     )}
                 </div>
             </div>

@@ -8,20 +8,10 @@ import { usernameSchema } from "./lib/domain/validation";
 
 async function getUser(username: string) {
     try {
-        const user = await prisma.user.findUnique({
-            where: {
-                username,
-            },
-            select: {
-                id: true,
-                email: true,
-                username: true,
-                password: true,
-                role: true,
-            },
+        return await prisma.user.findUnique({
+            where: { username },
+            select: { id: true, email: true, username: true, password: true, role: true, deletedAt: true },
         });
-
-        return user;
     } catch (error) {
         console.error("Failed to fetch user: ", error);
         throw new Error("Failed to fetch user.");
@@ -44,15 +34,14 @@ export const { auth, signIn, signOut } = NextAuth({
                     const { username, password } = parsedCredentials.data;
                     const user = await getUser(username);
                     if (!user) return null;
-                    const passwordsMatch = await bcrypt.compare(
-                        password,
-                        user.password,
-                    );
+                    if (user.deletedAt) return null; // deaktivovaný účet
+                    const passwordsMatch = await bcrypt.compare(password, user.password);
 
                     if (passwordsMatch) {
-                        // password von zo session objektu
-                        const { password: passwordHash, ...safeUser } = user;
-                        void passwordHash;
+                        // Zaznamenáme posledné prihlásenie (fire-and-forget)
+                        void prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+                        const { password: _pw, deletedAt: _del, ...safeUser } = user;
+                        void _pw; void _del;
                         return safeUser;
                     }
 

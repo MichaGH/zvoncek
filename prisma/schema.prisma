@@ -8,24 +8,42 @@ datasource db {
 }
 
 model User {
-  id          String     @id @default(cuid())
-  email       String?    @unique
-  username    String     @unique
-  firstName   String
-  lastName    String
-  password    String
-  role        Role       @default(SCOUT)
+  id              String    @id @default(cuid())
+  email           String?   @unique
+  username        String    @unique
+  firstName       String
+  lastName        String
+  password        String
+  role            Role      @default(SCOUT)
+
+  // Kontaktné + verifikácia (verifikačný flow sa pridá neskôr)
+  phone           String?
+  emailVerifiedAt DateTime?
+  phoneVerifiedAt DateTime?
+
+  // Životný cyklus účtu
+  deletedAt       DateTime? // soft delete — deaktivovaný účet
+  lastLoginAt     DateTime? // nastavuje sa pri každom prihlásení
+  note            String?   // interná poznámka admina o userovi
+  createdAt       DateTime  @default(now())
+
   ownedLeads   Lead[]     @relation("OwnedLeads")
   lockedLeads  Lead[]     @relation("LockedLeads")
   createdLeads Lead[]     @relation("CreatedLeads")
   activities   Activity[]
+
+  @@index([deletedAt])
+  @@index([role])
 }
 
 model Invite {
-  id        String    @id @default(cuid())
-  token     String    @unique
-  usedAt    DateTime?
-  expiresAt DateTime
+  id          String    @id @default(cuid())
+  token       String    @unique
+  usedAt      DateTime?
+  expiresAt   DateTime
+  createdById String?   // kto pozývací link vygeneroval
+  forEmail    String?   // pre koho je určený
+  forRole     Role      @default(SCOUT) // aká rola sa priradí po registrácii
 }
 
 model Lead {
