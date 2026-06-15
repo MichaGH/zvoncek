@@ -19,7 +19,7 @@ type PendingOutcome = { outcome: CallOutcome; label: string; when?: string } | n
 // Trieda pre natívne date/datetime inputy:
 // text-[16px] – zabraňuje iOS auto-zoom pri focuse
 // [color-scheme:light_dark] – zabezpečí viditeľnosť ikonky kalendára v dark mode
-const nativeDateCls = "h-12 flex-1 rounded-md border bg-background px-3 text-[16px] [color-scheme:light_dark]";
+const nativeDateCls = "h-12 flex-1 rounded-md border px-3 text-[16px] [color-scheme:light_dark]";
 
 export default function CallDrawer({
     lead, onClose, onOutcome,
