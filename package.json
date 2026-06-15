@@ -7,8 +7,10 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
-    "seed:tracking": "tsx prisma/seedTracking.ts",
-    "seed:users": "tsx prisma/seedUsers.ts"
+    "seed:admin": "tsx prisma/seedAdmin.ts",
+    "seed:dummy:users": "tsx prisma/dummySeeds/seedUsers.ts",
+    "seed:dummy:leads": "tsx prisma/dummySeeds/seedLeads.ts",
+    "seed:tracking": "tsx prisma/seedTracking.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",

@@ -144,12 +144,12 @@ Tracks whether clients actually viewed design proposals.
 1. MANAGER creates a `Design` on the lead. Zvonček auto-creates a `Tracker` with a unique token.
 2. `DesignTrackingCard` shows two URLs: plain URL (clickable) + tracked URL (`https://zvoncek.com/?p=TOKEN`) as muted text.
 3. Manager copies the tracked URL and sends it to the client (email, messenger, etc.).
-4. Client's browser loads `?p=TOKEN` on the proposal site, which has the universal snippet `public/p.js` embedded.
+4. Client's browser loads `?p=TOKEN` on the proposal site, which has the universal snippet `public/scripts/tracker.js` embedded.
 5. Snippet POSTs to `https://zvoncek.com/api/p` (always 204). Logs `PAGE_VIEW` immediately, then `ENGAGED_VIEW` after 8 s active time or scroll event.
 6. Confidence summary: none / weak (all bot) / medium (pageview only) / high (engaged) / very_high (multi-day or viewed after version update).
 
 **Ingest:** `app/api/p/route.ts` — public, no auth, always returns 204.
-**Snippet:** `public/p.js` — reads `?p=TOKEN`, strips it from URL with `history.replaceState`, POSTs events.
+**Snippet:** `public/scripts/tracker.js` — reads `?p=TOKEN`, strips it from URL with `history.replaceState`, POSTs events.
 **Confidence:** `lib/tracking/confidence.ts` → `summarizeEvents(events, currentVersion)`.
 
 ---

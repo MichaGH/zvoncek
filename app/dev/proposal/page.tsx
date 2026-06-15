@@ -25,7 +25,7 @@ export default async function DevProposalPage({
         >
             <h1>Dev proposal — test tracking</h1>
             <p>
-                Toto je testovacia „proposal&quot; stránka. Snippet <code>/p.js</code> sa
+                Toto je testovacia „proposal&quot; stránka. Snippet <code>/scripts/tracker.js</code> sa
                 načíta a pošle event na <code>/api/p</code>.
             </p>
             <p>
@@ -45,7 +45,7 @@ export default async function DevProposalPage({
             </ol>
             <div style={{ height: 1400 }} aria-hidden />
             <p>↓ Scrolluj sem — to spustí „engaged&quot; event.</p>
-            {p ? <Script src="/p.js" data-p={p} strategy="afterInteractive" /> : null}
+            {p ? <Script src="/scripts/tracker.js" data-p={p} strategy="afterInteractive" /> : null}
         </main>
     );
 }

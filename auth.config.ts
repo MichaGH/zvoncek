@@ -32,10 +32,14 @@ export const authConfig = {
                 const authUser = user as typeof user & {
                     role?: unknown;
                     username?: unknown;
+                    firstName?: unknown;
+                    lastName?: unknown;
                 };
                 token.id = user.id;
                 if (typeof authUser.role === "string") token.role = authUser.role;
                 if (typeof authUser.username === "string") token.username = authUser.username;
+                if (typeof authUser.firstName === "string") token.firstName = authUser.firstName;
+                if (typeof authUser.lastName === "string") token.lastName = authUser.lastName;
             }
             return token;
         },
@@ -44,9 +48,13 @@ export const authConfig = {
             const sessionUser = session.user as typeof session.user & {
                 role?: unknown;
                 username?: unknown;
+                firstName?: unknown;
+                lastName?: unknown;
             };
             sessionUser.role = token.role;
             sessionUser.username = token.username;
+            sessionUser.firstName = token.firstName;
+            sessionUser.lastName = token.lastName;
             return session;
         },
     },
