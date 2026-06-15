@@ -12,17 +12,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Inštalácia PostgreSQL 18 klienta
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          wget -qO- https://www.postgresql.org/apt/ACCC4CF8.asc | sudo tee /etc/apt/trusted.gpg.d/pgdg.asc &>/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client-18
+
       - name: Dump databázy
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL_DIRECT }}
         run: |
           DATE=$(date +%Y-%m-%d)
-          pg_dump "$DATABASE_URL" \
+          /usr/lib/postgresql/18/bin/pg_dump "$DATABASE_URL" \
             --no-owner \
             --no-acl \
             --format=custom \
             --file=zvoncek_${DATE}.dump
-          echo "Záloha vytvorená: zvoncek_${DATE}.dump ($(du -sh zvoncek_${DATE}.dump | cut -f1))"
+          echo "Záloha: zvoncek_${DATE}.dump ($(du -sh zvoncek_${DATE}.dump | cut -f1))"
 
       - name: Nahranie zálohy (90 dní)
         uses: actions/upload-artifact@v4
