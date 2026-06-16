@@ -291,8 +291,9 @@ export default function PipelineDetail({
 
             <DashboardContent width="full">
                 <div className="grid items-start gap-6 lg:grid-cols-3">
-                    {/* MAIN COLUMN — the workflow */}
-                    <div className="space-y-6 lg:col-span-2">
+                    {/* MAIN COLUMN — the workflow. order-2: na one-column layoute (split screen,
+                        manager bez fullscreenu) nech je Údaje vidno hned, nie uplne dole. */}
+                    <div className="order-2 space-y-6 lg:order-none lg:col-span-2">
                         {/* Ďalší krok */}
                         <Card>
                             <CardHeader className="flex items-center justify-between">
@@ -548,7 +549,7 @@ export default function PipelineDetail({
                     </div>
 
                     {/* SIDEBAR — who the client is */}
-                    <div className="space-y-6">
+                    <div className="order-1 space-y-6 lg:order-none">
                         <Card>
                             <CardHeader className="flex items-center justify-between">
                                 <CardTitle className="text-base">Údaje</CardTitle>
@@ -566,25 +567,32 @@ export default function PipelineDetail({
                             </CardHeader>
                             <CardContent className="space-y-4">
                                 {!editingData ? (
-                                    <div className="space-y-3">
-                                        <ReadRow label="Firma" value={lead.companyName} />
-                                        <ReadRow
-                                            label="Web"
-                                            value={lead.website}
-                                            href={lead.website ? normalizeUrl(lead.website) : null}
-                                            external
-                                        />
-                                        <ReadRow
-                                            label="Telefón"
-                                            value={lead.phone}
-                                            href={phoneHref}
-                                        />
-                                        <ReadRow
-                                            label="Email"
-                                            value={lead.email}
-                                            href={lead.email ? `mailto:${lead.email}` : null}
-                                        />
-                                        <ReadRow label="Poznámka" value={lead.note} />
+                                    // @container: rozloženie podľa skutočnej šírky karty, nie
+                                    // šírky obrazovky — funguje rovnako či je karta na šírku
+                                    // celej stránky (one-column layout) alebo v úzkom sidebari.
+                                    <div className="@container">
+                                        <div className="grid grid-cols-2 gap-4 @lg:grid-cols-4">
+                                            <ReadRow label="Firma" value={lead.companyName} />
+                                            <ReadRow
+                                                label="Web"
+                                                value={lead.website}
+                                                href={lead.website ? normalizeUrl(lead.website) : null}
+                                                external
+                                            />
+                                            <ReadRow
+                                                label="Telefón"
+                                                value={lead.phone}
+                                                href={phoneHref}
+                                            />
+                                            <ReadRow
+                                                label="Email"
+                                                value={lead.email}
+                                                href={lead.email ? `mailto:${lead.email}` : null}
+                                            />
+                                            <div className="col-span-2 @lg:col-span-4">
+                                                <ReadRow label="Poznámka" value={lead.note} />
+                                            </div>
+                                        </div>
                                     </div>
                                 ) : (
                                     <div className="grid gap-4">

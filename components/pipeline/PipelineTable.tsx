@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -29,9 +32,11 @@ function formatDate(iso: string | null) {
     return date.toLocaleDateString("sk-SK", { day: "numeric", month: "numeric" }) + time;
 }
 
-const NBSP = " ";
+const NBSP = " ";
 
 export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
+    const router = useRouter();
+
     if (rows.length === 0) {
         return (
             <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
@@ -41,17 +46,17 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
     }
 
     return (
-        <div className="overflow-x-auto rounded-lg border">
-            <Table className="w-full min-w-[900px]">
+        <div className="overflow-hidden rounded-lg border">
+            <Table className="w-full table-fixed">
                 <colgroup>
-                    <col className="w-10" />
-                    <col />
-                    <col className="w-24" />
-                    <col className="w-24" />
-                    <col className="w-52" />
-                    <col className="w-52" />
-                    <col className="w-20" />
-                    <col className="w-24" />
+                    <col className="w-[4%]" />
+                    <col className="w-[24%]" />
+                    <col className="w-[8%]" />
+                    <col className="w-[9%]" />
+                    <col className="w-[19%]" />
+                    <col className="w-[19%]" />
+                    <col className="w-[8%]" />
+                    <col className="w-[9%]" />
                 </colgroup>
                 <TableHeader>
                     <TableRow>
@@ -71,15 +76,21 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                             row.nextActionAt &&
                             new Date(row.nextActionAt) < new Date() &&
                             (row.status === "ACTIVE" || row.status === "NEW");
+                        const href = `/dashboard/pipeline/${row.id}`;
                         return (
-                            <TableRow key={row.id} className="relative h-[4.75rem]">
+                            <TableRow
+                                key={row.id}
+                                className="h-[4.75rem] cursor-pointer hover:bg-muted/50"
+                                onClick={() => router.push(href)}
+                            >
                                 <TableCell className="pl-4 align-middle text-muted-foreground tabular-nums">
                                     {row.number}
                                 </TableCell>
-                                <TableCell className="align-middle font-medium">
+                                <TableCell className="max-w-0 align-middle font-medium">
                                     <Link
-                                        href={`/dashboard/pipeline/${row.id}`}
-                                        className="block after:absolute after:inset-0"
+                                        href={href}
+                                        className="block"
+                                        onClick={(e) => e.stopPropagation()}
                                     >
                                         <span className="block truncate">{row.name}</span>
                                         <span className="block truncate text-xs font-normal text-muted-foreground">
@@ -101,9 +112,9 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                         {STATUS_LABEL[row.status]}
                                     </Badge>
                                 </TableCell>
-                                <TableCell className="align-middle text-sm">
+                                <TableCell className="max-w-0 align-middle text-sm">
                                     {row.lastActivity ? (
-                                        <div className="flex flex-col">
+                                        <div className="flex min-w-0 flex-col">
                                             <span className="truncate">
                                                 <span className="font-medium">
                                                     {ACTIVITY_LABEL[row.lastActivity.type]}
@@ -126,10 +137,10 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                     )}
                                 </TableCell>
                                 <TableCell
-                                    className={`align-middle text-sm ${overdue ? "font-medium text-destructive" : ""}`}
+                                    className={`max-w-0 align-middle text-sm ${overdue ? "font-medium text-destructive" : ""}`}
                                 >
                                     {row.nextActionKind ? (
-                                        <div className="flex flex-col">
+                                        <div className="flex min-w-0 flex-col">
                                             <span className="truncate">
                                                 {NEXT_ACTION_LABEL[row.nextActionKind]}
                                                 <span className="ml-1.5 tabular-nums">
@@ -147,7 +158,7 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                 <TableCell className="align-middle text-right tabular-nums">
                                     {row.price ? `${row.price} €` : "—"}
                                 </TableCell>
-                                <TableCell className="align-middle truncate text-muted-foreground">
+                                <TableCell className="max-w-0 truncate align-middle text-muted-foreground">
                                     {row.owner ?? "—"}
                                 </TableCell>
                             </TableRow>
