@@ -36,6 +36,7 @@ import type { PipelineDetailData, PipelineUserOption } from "@/lib/queries/pipel
 import type { DesignView } from "@/lib/queries/tracking";
 import CenovaPonukaCard from "@/components/pipeline/CenovaPonukaCard";
 import DesignTrackingCard from "@/components/pipeline/DesignTrackingCard";
+import UrgencyLabel from "@/components/shared/UrgencyLabel";
 
 const QUICK_EVENTS = [
     "Klient sľúbil poslať podklady",
@@ -60,23 +61,15 @@ function formatDate(iso: string | null) {
     return new Date(iso).toLocaleDateString("sk-SK");
 }
 
-function formatNextDate(iso: string | null): { label: string; overdue: boolean } {
-    if (!iso) return { label: "—", overdue: false };
-    const date = new Date(iso);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const that = new Date(date);
-    that.setHours(0, 0, 0, 0);
-    const diff = (that.getTime() - today.getTime()) / 86_400_000;
-    const h = date.getHours();
-    const m = date.getMinutes();
-    const time = h || m ? ` ${h}:${String(m).padStart(2, "0")}` : "";
-    let label: string;
-    if (diff === 0) label = `Dnes${time}`;
-    else if (diff === 1) label = `Zajtra${time}`;
-    else if (diff === -1) label = `Včera${time}`;
-    else label = date.toLocaleDateString("sk-SK", { day: "numeric", month: "numeric", year: "numeric" }) + time;
-    return { label, overdue: date < new Date() };
+// ISO → lokálny dátum + čas pre <input type="date"> / <input type="time">.
+function toLocalParts(iso: string | null): { date: string; time: string } {
+    if (!iso) return { date: "", time: "" };
+    const d = new Date(iso);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return {
+        date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+        time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+    };
 }
 
 function normalizeUrl(url: string) {
@@ -105,7 +98,8 @@ export default function PipelineDetail({
     const [savingData, setSavingData] = useState(false);
 
     const [nextKind, setNextKind] = useState<NextActionKind>("CALL");
-    const [nextAt, setNextAt] = useState("");
+    const [nextDate, setNextDate] = useState("");
+    const [nextTime, setNextTime] = useState("");
     const [nextNote, setNextNote] = useState("");
     const [savingNext, setSavingNext] = useState(false);
     const [editingNext, setEditingNext] = useState(false);
@@ -150,14 +144,17 @@ export default function PipelineDetail({
 
     function resetNextEditor() {
         setNextKind("CALL");
-        setNextAt("");
+        setNextDate("");
+        setNextTime("");
         setNextNote("");
         setEditingNext(false);
     }
 
     function startEditNext() {
+        const parts = toLocalParts(lead.nextActionAt);
         setNextKind(lead.nextActionKind ?? "CALL");
-        setNextAt(lead.nextActionAt ? lead.nextActionAt.slice(0, 16) : "");
+        setNextDate(parts.date);
+        setNextTime(lead.nextActionHasTime ? parts.time : "");
         setNextNote(lead.nextActionNote ?? "");
         setEditingNext(true);
     }
@@ -165,19 +162,26 @@ export default function PipelineDetail({
     // „Nový krok" – otvorí editor s prázdnymi poľami.
     function startNewNext() {
         setNextKind("CALL");
-        setNextAt("");
+        setNextDate("");
+        setNextTime("");
         setNextNote("");
         setEditingNext(true);
     }
 
     async function saveNextAction() {
+        // Dátum + voliteľný čas: čas vyplnený = presný, prázdny = len deň.
+        let iso: string | null = null;
+        let hasTime = false;
+        if (nextDate) {
+            if (nextTime) {
+                iso = new Date(`${nextDate}T${nextTime}`).toISOString();
+                hasTime = true;
+            } else {
+                iso = new Date(`${nextDate}T00:00`).toISOString();
+            }
+        }
         setSavingNext(true);
-        await setNextAction(
-            lead.id,
-            nextKind,
-            nextAt ? new Date(nextAt).toISOString() : null,
-            nextNote.trim() || null,
-        );
+        await setNextAction(lead.id, nextKind, iso, nextNote.trim() || null, hasTime);
         setSavingNext(false);
         resetNextEditor();
         router.refresh();
@@ -321,6 +325,7 @@ export default function PipelineDetail({
                                     <NextActionDisplay
                                         kind={lead.nextActionKind}
                                         at={lead.nextActionAt ?? null}
+                                        hasTime={lead.nextActionHasTime}
                                         note={lead.nextActionNote ?? null}
                                     />
                                 )}
@@ -349,11 +354,25 @@ export default function PipelineDetail({
                                             </div>
                                             <div className="grid gap-1.5">
                                                 <Label className="text-xs text-muted-foreground">Kedy</Label>
-                                                <Input
-                                                    type="datetime-local"
-                                                    value={nextAt}
-                                                    onChange={(event) => setNextAt(event.target.value)}
-                                                />
+                                                <div className="flex gap-2">
+                                                    <Input
+                                                        type="date"
+                                                        value={nextDate}
+                                                        onChange={(event) => setNextDate(event.target.value)}
+                                                        onClick={(e) => (e.currentTarget as HTMLInputElement).showPicker?.()}
+                                                        className="flex-1 [color-scheme:light_dark]"
+                                                    />
+                                                    <Input
+                                                        type="time"
+                                                        value={nextTime}
+                                                        onChange={(event) => setNextTime(event.target.value)}
+                                                        onClick={(e) => (e.currentTarget as HTMLInputElement).showPicker?.()}
+                                                        className="w-28 [color-scheme:light_dark]"
+                                                    />
+                                                </div>
+                                                <p className="text-xs text-muted-foreground">
+                                                    Čas nechaj prázdny, ak nie je dohodnutý presný čas.
+                                                </p>
                                             </div>
                                         </div>
                                         <div className="grid gap-1.5">
@@ -633,26 +652,21 @@ export default function PipelineDetail({
 function NextActionDisplay({
     kind,
     at,
+    hasTime,
     note,
 }: {
     kind: string | null;
     at: string | null;
+    hasTime: boolean;
     note: string | null;
 }) {
-    const nd = formatNextDate(at);
     return (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-            <span className={`text-sm font-semibold${nd.overdue ? " text-destructive" : ""}`}>
+            <span className="text-sm font-semibold">
                 {kind ? NEXT_ACTION_LABEL[kind as NextActionKind] : "Ďalší krok"}
             </span>
-            {at && (
-                <span className={`text-sm tabular-nums${nd.overdue ? " text-destructive" : ""}`}>
-                    {nd.label}
-                </span>
-            )}
-            {note && (
-                <span className="text-sm text-muted-foreground">{note}</span>
-            )}
+            {at && <UrgencyLabel at={at} hasTime={hasTime} className="text-sm" />}
+            {note && <span className="text-sm text-muted-foreground">{note}</span>}
         </div>
     );
 }

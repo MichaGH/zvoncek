@@ -9,9 +9,11 @@ export type LeadFlowData = {
     status: LeadStatus;
     callbackKind: CallbackKind | null;
     callbackAt?: Date | null;
+    callbackHasTime?: boolean;
     callbackNote?: string | null;
     nextActionKind?: NextActionKind | null;
     nextActionAt?: Date | null;
+    nextActionHasTime?: boolean;
     nextActionNote?: string | null;
     lostReason?: string | null;
 };
@@ -20,6 +22,7 @@ export function leadStateForOutcome(
     outcome: CallOutcome,
     when?: Date | null,
     callbackNote?: string | null,
+    hasTime: boolean = false,
 ): LeadFlowData {
     switch (outcome) {
         case "NO_ANSWER":
@@ -37,9 +40,11 @@ export function leadStateForOutcome(
                 status: "CALLING",
                 callbackKind: "SCHEDULED",
                 callbackAt: when ?? null,
+                callbackHasTime: hasTime,
                 callbackNote: callbackNote || null,
                 nextActionKind: "CALL",
                 nextActionAt: when ?? null,
+                nextActionHasTime: hasTime,
                 nextActionNote: callbackNote || "Dohodnutý spätný hovor",
             };
         case "BAD_NUMBER":
@@ -68,7 +73,8 @@ export function leadStateForOutcome(
                 callbackKind: null,
                 callbackAt: null,
                 nextActionKind: "SEND_QUOTE",
-                nextActionAt: new Date(),
+                nextActionAt: new Date(), // dnes – deň bez presného času → svieti "dnes"
+                nextActionHasTime: false,
                 nextActionNote: "Poslať cenovú ponuku",
             };
         case "WANTS_DESIGN":
@@ -78,6 +84,7 @@ export function leadStateForOutcome(
                 callbackAt: null,
                 nextActionKind: "SEND_DESIGN",
                 nextActionAt: new Date(),
+                nextActionHasTime: false,
                 nextActionNote: "Vytvoriť a poslať dizajnový návrh",
             };
         case "WANTS_EMAIL":
@@ -87,6 +94,7 @@ export function leadStateForOutcome(
                 callbackAt: null,
                 nextActionKind: "SEND_EMAIL",
                 nextActionAt: new Date(),
+                nextActionHasTime: false,
                 nextActionNote: "Napísať email / poslať informácie o nás",
             };
         case "SNOOZE":
@@ -94,9 +102,11 @@ export function leadStateForOutcome(
                 status: "SNOOZED",
                 callbackKind: null,
                 callbackAt: when ?? null, // dátum „ozvať sa" – aby sa dal snoozed vynoriť v calls
+                callbackHasTime: false, // snooze je vždy len deň, nikdy presný čas
                 callbackNote: callbackNote || null,
                 nextActionKind: "CALL",
                 nextActionAt: when ?? null,
+                nextActionHasTime: false,
                 nextActionNote: callbackNote || "Znovu osloviť neskôr",
             };
         case "POSITIVE":

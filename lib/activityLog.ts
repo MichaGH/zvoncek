@@ -39,6 +39,7 @@ export function createAuditActivity(
 export type NextActionData = {
     nextActionKind: NextActionKind | null;
     nextActionAt: Date | null;
+    nextActionHasTime: boolean;
     nextActionNote: string | null;
 };
 
@@ -46,15 +47,17 @@ export function nextActionData(
     kind: NextActionKind | null,
     at?: Date | null,
     note?: string | null,
+    hasTime: boolean = false,
 ): NextActionData {
     return {
         nextActionKind: kind,
         nextActionAt: at ?? null,
+        nextActionHasTime: hasTime,
         nextActionNote: note?.trim() || null,
     };
 }
 
-export function describeNextAction(data: NextActionData): string {
+export function describeNextAction(data: Omit<NextActionData, "nextActionHasTime">): string {
     if (!data.nextActionKind) return "Ďalší krok bol vymazaný";
 
     const parts: string[] = [data.nextActionKind];

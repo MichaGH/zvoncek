@@ -62,13 +62,15 @@ model Lead {
   ownerId String? // kto to má aktuálne na starosti (N → M)
 
   // KEDY ĎALEJ – srdce appky
-  nextActionKind NextActionKind?
-  nextActionAt   DateTime?
-  nextActionNote String? // "overiť či prišiel mail s návrhom"
+  nextActionKind    NextActionKind?
+  nextActionAt      DateTime?
+  nextActionHasTime Boolean         @default(false) // true = presný čas; false = len deň
+  nextActionNote    String? // "overiť či prišiel mail s návrhom"
 
-  callbackKind CallbackKind? // prečo je v CALLING fronte
-  callbackAt   DateTime? // krátkodobý návrat v /calls (CALLING)
-  callbackNote String? // "vraj sa ozvať o hodinu, bola na porade"
+  callbackKind    CallbackKind? // prečo je v CALLING fronte
+  callbackAt      DateTime? // krátkodobý návrat v /calls (CALLING)
+  callbackHasTime Boolean       @default(false) // true = klient dal presný čas; false = len deň
+  callbackNote    String? // "vraj sa ozvať o hodinu, bola na porade"
 
   // KEDY SME ČO POSLALI – presne to, čo si chcel vidieť na prvý pohľad
   quoteSentAt   DateTime? // cenová ponuka

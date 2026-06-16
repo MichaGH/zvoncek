@@ -10,6 +10,7 @@ const SELECT = {
     note: true,
     callbackKind: true,
     callbackAt: true,
+    callbackHasTime: true,
     callbackNote: true,
     activities: {
         where: {
@@ -25,7 +26,7 @@ const SELECT = {
 function map(l: {
     id: string; number: number; companyName: string | null; website: string | null;
     phone: string | null; email: string | null; note: string | null;
-    callbackAt: Date | null; callbackNote: string | null;
+    callbackAt: Date | null; callbackHasTime: boolean; callbackNote: string | null;
     activities: { id: string; createdAt: Date }[];
 }) {
     return {
@@ -37,6 +38,7 @@ function map(l: {
         email: l.email,
         note: l.note,
         callbackAt: l.callbackAt?.toISOString() ?? null,
+        callbackHasTime: l.callbackHasTime,
         callbackNote: l.callbackNote,
         attempts: l.activities.length,
         lastAttemptAt: l.activities[0]?.createdAt.toISOString() ?? null,

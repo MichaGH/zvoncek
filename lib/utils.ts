@@ -9,6 +9,8 @@ export function inHours(h: number) { const d = new Date(); d.setHours(d.getHours
 export function tomorrow9() { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return d.toISOString(); }
 export function inDays(days: number) { const d = new Date(); d.setDate(d.getDate() + days); d.setHours(9, 0, 0, 0); return d.toISOString(); }
 export function inMonths(m: number) { const d = new Date(); d.setMonth(d.getMonth() + m); d.setHours(9, 0, 0, 0); return d.toISOString(); }
+// Deň bez presného času (00:00) – pre "zajtra"/"o týždeň" kde sa čas nedohodol.
+export function dayIn(days: number) { const d = new Date(); d.setDate(d.getDate() + days); d.setHours(0, 0, 0, 0); return d.toISOString(); }
 
 
 export function fmtScheduled(iso: string | null) {

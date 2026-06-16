@@ -6,12 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { updateLeadNote } from "@/lib/actions/calls";
-import { inHours, tomorrow9, inDays, inMonths } from "@/lib/utils";
+import { inHours, inMonths, dayIn } from "@/lib/utils";
 import { QueueLead } from "@/lib/queries/calls";
 import { CallOutcome } from "@/app/generated/prisma/enums";
 
 type Step = "main" | "scheduled" | "interested" | "email" | "snooze";
-type Opts = { note?: string; callbackNote?: string; when?: string; email?: string };
+type Opts = { note?: string; callbackNote?: string; when?: string; hasTime?: boolean; email?: string };
 
 // Po výbere záujmu uložíme pending outcome, potom prejdeme na email step
 type PendingOutcome = { outcome: CallOutcome; label: string; when?: string } | null;
@@ -32,6 +32,7 @@ export default function CallDrawer({
     const [note, setNote] = useState(lead?.note ?? "");
     const [callbackNote, setCallbackNote] = useState("");
     const [customDate, setCustomDate] = useState("");
+    const [customTime, setCustomTime] = useState("");
     const [pendingOutcome, setPendingOutcome] = useState<PendingOutcome>(null);
     const [email, setEmail] = useState(lead?.email ?? "");
 
@@ -51,6 +52,20 @@ export default function CallDrawer({
     function selectInterest(outcome: CallOutcome, label: string, when?: string) {
         setPendingOutcome({ outcome, label, when });
         setStep("email");
+    }
+
+    // Vlastný termín: dátum povinný, čas voliteľný. Čas vyplnený = presný dohodnutý čas,
+    // čas prázdny = len deň (mäkká pripomienka).
+    function fireScheduledCustom() {
+        if (!customDate) return;
+        const cbNote = callbackNote.trim() || undefined;
+        if (customTime) {
+            const iso = new Date(`${customDate}T${customTime}`).toISOString();
+            fire("CALL_AGAIN", "Dohodnutý čas", { when: iso, hasTime: true, callbackNote: cbNote });
+        } else {
+            const iso = new Date(`${customDate}T00:00`).toISOString();
+            fire("CALL_AGAIN", "Dohodnutý deň", { when: iso, hasTime: false, callbackNote: cbNote });
+        }
     }
 
     function fireWithEmail() {
@@ -121,23 +136,33 @@ export default function CallDrawer({
                                     onChange={(e) => setCallbackNote(e.target.value)}
                                     className="mb-2 text-base"
                                 />
-                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "O hodinu", { when: inHours(1) })}>O hodinu</Button>
-                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "Zajtra", { when: tomorrow9() })}>Zajtra ráno</Button>
-                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "O týždeň", { when: inDays(7) })}>O týždeň</Button>
+                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "O hodinu", { when: inHours(1), hasTime: true, callbackNote: callbackNote.trim() || undefined })}>O hodinu</Button>
+                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "Zajtra", { when: dayIn(1), hasTime: false, callbackNote: callbackNote.trim() || undefined })}>Zajtra</Button>
+                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "O týždeň", { when: dayIn(7), hasTime: false, callbackNote: callbackNote.trim() || undefined })}>O týždeň</Button>
                                 <div className="flex gap-2">
                                     <input
-                                        type="datetime-local"
+                                        type="date"
                                         data-vaul-no-drag
                                         value={customDate}
                                         onChange={(e) => setCustomDate(e.target.value)}
                                         onClick={(e) => { e.stopPropagation(); (e.currentTarget as HTMLInputElement).showPicker?.(); }}
                                         className={nativeDateCls}
                                     />
-                                    <Button className="h-12" disabled={!customDate}
-                                        onClick={() => fire("CALL_AGAIN", "Dohodnutý termín", { when: new Date(customDate).toISOString() })}>
+                                    <input
+                                        type="time"
+                                        data-vaul-no-drag
+                                        value={customTime}
+                                        onChange={(e) => setCustomTime(e.target.value)}
+                                        onClick={(e) => { e.stopPropagation(); (e.currentTarget as HTMLInputElement).showPicker?.(); }}
+                                        className="h-12 w-28 rounded-md border px-3 text-[16px] [color-scheme:light_dark]"
+                                    />
+                                    <Button className="h-12" disabled={!customDate} onClick={fireScheduledCustom}>
                                         OK
                                     </Button>
                                 </div>
+                                <p className="px-1 text-xs text-muted-foreground">
+                                    Čas nechaj prázdny, ak nie je dohodnutý presný čas (napr. „v piatok").
+                                </p>
                                 <Button variant="ghost" className="w-full" onClick={() => setStep("main")}>← Späť</Button>
                             </>
                         )}

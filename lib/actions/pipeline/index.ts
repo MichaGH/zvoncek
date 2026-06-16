@@ -296,6 +296,7 @@ export async function setNextAction(
     kind: NextActionKind | null,
     at: string | null,
     note: string | null,
+    hasTime: boolean = false,
 ) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
@@ -310,7 +311,7 @@ export async function setNextAction(
             });
             if (!current) throw new Error("Lead not found");
 
-            const next = nextActionData(kind, at ? new Date(at) : null, note);
+            const next = nextActionData(kind, at ? new Date(at) : null, note, hasTime);
             const hadNextAction = Boolean(
                 current.nextActionKind || current.nextActionAt || current.nextActionNote,
             );

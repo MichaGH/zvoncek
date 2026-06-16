@@ -14,7 +14,7 @@ import InfoDrawer from "./InfoDrawer";
 import { Button } from "@/components/ui/button";
 import { CalendarClock, Clock, RotateCcw, Sparkles } from "lucide-react";
 
-type Opts = { note?: string; callbackNote?: string; when?: string; email?: string };
+type Opts = { note?: string; callbackNote?: string; when?: string; hasTime?: boolean; email?: string };
 type RemoveAction = { type: "remove"; leadId: string };
 
 export default function CallQueue({ board }: { board: CallsBoard }) {

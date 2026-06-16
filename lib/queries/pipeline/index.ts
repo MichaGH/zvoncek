@@ -19,6 +19,7 @@ type PipelineLead = {
     projectType: ProjectType | null;
     nextActionKind: NextActionKind | null;
     nextActionAt: Date | null;
+    nextActionHasTime: boolean;
     nextActionNote: string | null;
     price: { toString(): string } | null;
     owner: { firstName: string } | null;
@@ -40,6 +41,7 @@ function toPipelineRow(lead: PipelineLead) {
         projectType: lead.projectType,
         nextActionKind: lead.nextActionKind,
         nextActionAt: lead.nextActionAt?.toISOString() ?? null,
+        nextActionHasTime: lead.nextActionHasTime,
         nextActionNote: lead.nextActionNote,
         price: lead.price ? Number(lead.price) : null,
         owner: lead.owner?.firstName ?? null,
@@ -91,6 +93,7 @@ export async function getPipelineList({
             projectType: true,
             nextActionKind: true,
             nextActionAt: true,
+            nextActionHasTime: true,
             nextActionNote: true,
             price: true,
             owner: { select: { firstName: true } },

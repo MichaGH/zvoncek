@@ -13,6 +13,7 @@ import {
     STATUS_VARIANT,
 } from "@/lib/dictionaries";
 import type { PipelineListRow } from "@/lib/queries/pipeline";
+import UrgencyLabel from "@/components/shared/UrgencyLabel";
 
 function formatDate(iso: string | null) {
     if (!iso) return "—";
@@ -72,10 +73,6 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                 </TableHeader>
                 <TableBody>
                     {rows.map((row) => {
-                        const overdue =
-                            row.nextActionAt &&
-                            new Date(row.nextActionAt) < new Date() &&
-                            (row.status === "ACTIVE" || row.status === "NEW");
                         const href = `/dashboard/pipeline/${row.id}`;
                         return (
                             <TableRow
@@ -136,16 +133,17 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                         <span className="text-muted-foreground">—</span>
                                     )}
                                 </TableCell>
-                                <TableCell
-                                    className={`max-w-0 align-middle text-sm ${overdue ? "font-medium text-destructive" : ""}`}
-                                >
+                                <TableCell className="max-w-0 align-middle text-sm">
                                     {row.nextActionKind ? (
                                         <div className="flex min-w-0 flex-col">
-                                            <span className="truncate">
+                                            <span className="flex min-w-0 items-center gap-1.5 truncate">
                                                 {NEXT_ACTION_LABEL[row.nextActionKind]}
-                                                <span className="ml-1.5 tabular-nums">
-                                                    · {formatDate(row.nextActionAt)}
-                                                </span>
+                                                {row.nextActionAt && (
+                                                    <UrgencyLabel
+                                                        at={row.nextActionAt}
+                                                        hasTime={row.nextActionHasTime}
+                                                    />
+                                                )}
                                             </span>
                                             <span className="truncate text-xs font-normal text-muted-foreground">
                                                 {row.nextActionNote || NBSP}

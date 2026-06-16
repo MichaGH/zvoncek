@@ -13,7 +13,7 @@ import { hasNextAction, leadStateForOutcome } from "@/lib/domain/leadFlow";
 import { can } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";
 
-type Opts = { note?: string; callbackNote?: string; when?: string; email?: string };
+type Opts = { note?: string; callbackNote?: string; when?: string; hasTime?: boolean; email?: string };
 type LogCallInput = { leadId: string; outcome: CallOutcome } & Opts;
 
 function revalidateCalls() {
@@ -29,9 +29,9 @@ export async function logCall(input: LogCallInput) {
     if (!can(session.user, "calls.work")) return { error: "Nemáš oprávnenie." };
     const userId = session.user.id;
 
-    const { leadId, outcome, note, callbackNote, when, email } = input;
+    const { leadId, outcome, note, callbackNote, when, hasTime, email } = input;
     const date = when ? new Date(when) : null;
-    const flow = leadStateForOutcome(outcome, date, callbackNote ?? null);
+    const flow = leadStateForOutcome(outcome, date, callbackNote ?? null, hasTime ?? false);
     const extra = email?.trim() ? { email: email.trim() } : {};
 
     try {

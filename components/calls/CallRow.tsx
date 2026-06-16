@@ -1,9 +1,9 @@
 "use client";
 
-import { StickyNote, Clock, Info, Phone } from "lucide-react";
+import { StickyNote, Info, Phone } from "lucide-react";
 import { QueueLead } from "@/lib/queries/calls";
-import { fmtScheduled, fmtAgo } from "@/lib/utils"
-
+import { fmtAgo } from "@/lib/utils";
+import UrgencyLabel from "@/components/shared/UrgencyLabel";
 
 export default function CallRow({
     lead, tone, onOpen, onInfo,
@@ -14,8 +14,6 @@ export default function CallRow({
     onInfo: () => void;
 }) {
     const name = lead.companyName ?? lead.website ?? "—";
-    const scheduled = fmtScheduled(lead.callbackAt);
-    const overdue = lead.callbackAt && new Date(lead.callbackAt) <= new Date();
 
     return (
         // Celý row je cursor-pointer. Klik na row = onOpen, okrem pravých buttonov.
@@ -46,11 +44,12 @@ export default function CallRow({
                     </span>
                 )}
 
-                {tone === "urgent" && scheduled && (
-                    <span className={`flex min-w-0 items-center gap-1 text-xs ${overdue ? "font-medium text-destructive" : "text-muted-foreground"}`}>
-                        <Clock className="h-3 w-3 shrink-0" />
-                        <span className="shrink-0 whitespace-nowrap">{scheduled}</span>
-                        {lead.callbackNote && <span className="min-w-0 truncate font-normal">· {lead.callbackNote}</span>}
+                {tone === "urgent" && lead.callbackAt && (
+                    <span className="flex min-w-0 items-center gap-1 text-xs">
+                        <UrgencyLabel at={lead.callbackAt} hasTime={lead.callbackHasTime} />
+                        {lead.callbackNote && (
+                            <span className="min-w-0 truncate text-muted-foreground">· {lead.callbackNote}</span>
+                        )}
                     </span>
                 )}
             </div>
