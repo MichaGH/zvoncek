@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Eye, FileText, Mail, Paintbrush } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
     ACTIVITY_LABEL,
@@ -86,13 +88,45 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                 <TableCell className="max-w-0 align-middle font-medium">
                                     <Link
                                         href={href}
-                                        className="block"
+                                        className="flex min-w-0 items-center gap-2"
                                         onClick={(e) => e.stopPropagation()}
                                     >
-                                        <span className="block truncate">{row.name}</span>
-                                        <span className="block truncate text-xs font-normal text-muted-foreground">
-                                            {row.phone ?? "—"}
-                                        </span>
+                                        <div className="min-w-0 flex-1">
+                                            <span className="block truncate">{row.name}</span>
+                                            <span className="block truncate text-xs font-normal text-muted-foreground">
+                                                {row.phone ?? "—"}
+                                            </span>
+                                        </div>
+                                        {(row.hasDesignSent || row.quoteSentAt || row.aboutUsSentAt) && (
+                                            <TooltipProvider delayDuration={200}>
+                                                <div className="flex shrink-0 items-center gap-1">
+                                                    {row.hasDesignSent && (
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <Paintbrush className="h-3 w-3 text-muted-foreground" />
+                                                            </TooltipTrigger>
+                                                            <TooltipContent>Návrh odoslaný</TooltipContent>
+                                                        </Tooltip>
+                                                    )}
+                                                    {row.quoteSentAt && (
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <FileText className="h-3 w-3 text-muted-foreground" />
+                                                            </TooltipTrigger>
+                                                            <TooltipContent>Cenová ponuka odoslaná</TooltipContent>
+                                                        </Tooltip>
+                                                    )}
+                                                    {row.aboutUsSentAt && (
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <Mail className="h-3 w-3 text-muted-foreground" />
+                                                            </TooltipTrigger>
+                                                            <TooltipContent>Email o nás odoslaný</TooltipContent>
+                                                        </Tooltip>
+                                                    )}
+                                                </div>
+                                            </TooltipProvider>
+                                        )}
                                     </Link>
                                 </TableCell>
                                 <TableCell className="align-middle">
@@ -138,10 +172,11 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                         <div className="flex min-w-0 flex-col">
                                             <span className="flex min-w-0 items-center gap-1.5 truncate">
                                                 {NEXT_ACTION_LABEL[row.nextActionKind]}
-                                                {row.nextActionAt && (
+                                                {(row.nextActionAt || row.nextActionMode === "IN_PROGRESS") && (
                                                     <UrgencyLabel
                                                         at={row.nextActionAt}
                                                         hasTime={row.nextActionHasTime}
+                                                        mode={row.nextActionMode}
                                                     />
                                                 )}
                                             </span>
@@ -153,8 +188,22 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                         <span className="text-muted-foreground">—</span>
                                     )}
                                 </TableCell>
-                                <TableCell className="align-middle text-right tabular-nums">
-                                    {row.price ? `${row.price} €` : "—"}
+                                <TableCell className="align-middle">
+                                    <div className="flex items-center justify-end gap-1">
+                                        {row.priceDisclosed && (
+                                            <TooltipProvider delayDuration={200}>
+                                                <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                        <Eye className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>Klient pozná cenu</TooltipContent>
+                                                </Tooltip>
+                                            </TooltipProvider>
+                                        )}
+                                        <span className="tabular-nums">
+                                            {row.price ? `${row.price} €` : "—"}
+                                        </span>
+                                    </div>
                                 </TableCell>
                                 <TableCell className="max-w-0 truncate align-middle text-muted-foreground">
                                     {row.owner ?? "—"}

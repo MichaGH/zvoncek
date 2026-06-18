@@ -1,7 +1,7 @@
 "use server";
 
 import { auth } from "@/auth";
-import { ActivityType, LeadStatus, NextActionKind, ProjectType } from "@/app/generated/prisma/enums";
+import { ActivityType, LeadStatus, NextActionKind, NextActionMode, ProjectType } from "@/app/generated/prisma/enums";
 import {
     createAuditActivity,
     createBusinessActivity,
@@ -153,7 +153,8 @@ export async function saveQuote(
     return { success: true };
 }
 
-// Revertovateľný prepínač „cena odoslaná klientovi" (email/SMS/aj len ústne).
+// Označiť cenovú ponuku (email) ako odoslanú. Automaticky nastaví priceDisclosed=true
+// a naplánuje follow-up hovor o týždeň. Revertovateľné (sent=false).
 export async function setQuoteSent(leadId: string, sent: boolean) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
@@ -185,7 +186,7 @@ export async function setQuoteSent(leadId: string, sent: boolean) {
 
                 await tx.lead.update({
                     where: { id: leadId },
-                    data: { quoteSentAt: at, ...next },
+                    data: { quoteSentAt: at, priceDisclosed: true, ...next },
                 });
                 await tx.activity.create({
                     data: createBusinessActivity({
@@ -219,6 +220,35 @@ export async function setQuoteSent(leadId: string, sent: boolean) {
                 });
             }
         });
+    } catch {
+        return { error: "Nepodarilo sa uložiť." };
+    }
+    revalidatePipeline(leadId);
+    return { success: true };
+}
+
+// Checkbox „klient pozná cenu" – nezávislý od CP emailu (napr. povedaná cena ústne,
+// alebo cena bola v dizajnovom návrhu). Loguje len AUDIT aktivitu, neprepisuje
+// posledný obchodný krok.
+export async function setPriceDisclosed(leadId: string, disclosed: boolean) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
+    const userId = session.user.id;
+
+    try {
+        await prisma.$transaction([
+            prisma.lead.update({ where: { id: leadId }, data: { priceDisclosed: disclosed } }),
+            prisma.activity.create({
+                data: createAuditActivity({
+                    leadId,
+                    userId,
+                    type: "CONTACT_UPDATED",
+                    source: "PIPELINE",
+                    note: disclosed ? "Klient oboznámený s cenou" : "Oboznámenie s cenou zrušené",
+                }),
+            }),
+        ]);
     } catch {
         return { error: "Nepodarilo sa uložiť." };
     }
@@ -297,6 +327,7 @@ export async function setNextAction(
     at: string | null,
     note: string | null,
     hasTime: boolean = false,
+    mode: NextActionMode = "SCHEDULED",
 ) {
     const session = await auth();
     if (!session?.user?.id) return { error: "Nie si prihlásený." };
@@ -311,7 +342,7 @@ export async function setNextAction(
             });
             if (!current) throw new Error("Lead not found");
 
-            const next = nextActionData(kind, at ? new Date(at) : null, note, hasTime);
+            const next = nextActionData(kind, at ? new Date(at) : null, note, hasTime, mode);
             const hadNextAction = Boolean(
                 current.nextActionKind || current.nextActionAt || current.nextActionNote,
             );
@@ -409,6 +440,60 @@ export async function logSent(
         });
     } catch {
         return { error: "Nepodarilo sa zapísať." };
+    }
+    revalidatePipeline(leadId);
+    return { success: true };
+}
+
+export async function markLost(leadId: string, reason: string | null) {
+    const session = await auth();
+    if (!session?.user?.id) return { error: "Nie si prihlásený." };
+    if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
+    const userId = session.user.id;
+
+    try {
+        await prisma.$transaction(async (tx) => {
+            const current = await tx.lead.findUnique({
+                where: { id: leadId },
+                select: { nextActionKind: true, nextActionAt: true, nextActionNote: true },
+            });
+            if (!current) throw new Error("not found");
+            const hadNext = Boolean(current.nextActionKind || current.nextActionAt || current.nextActionNote);
+
+            await tx.lead.update({
+                where: { id: leadId },
+                data: {
+                    status: "LOST",
+                    lostReason: reason?.trim() || null,
+                    nextActionKind: null,
+                    nextActionAt: null,
+                    nextActionNote: null,
+                    nextActionHasTime: false,
+                },
+            });
+            await tx.activity.create({
+                data: createAuditActivity({
+                    leadId,
+                    userId,
+                    type: "STATUS_CHANGED",
+                    source: "PIPELINE",
+                    note: reason?.trim() ? `Stratená: ${reason.trim()}` : "Označené ako stratené",
+                }),
+            });
+            if (hadNext) {
+                await tx.activity.create({
+                    data: createPlanningActivity({
+                        leadId,
+                        userId,
+                        type: "NEXT_ACTION_CLEARED",
+                        source: "PIPELINE",
+                        note: "Ďalší krok zmazaný (príležitosť stratená)",
+                    }),
+                });
+            }
+        });
+    } catch {
+        return { error: "Nepodarilo sa uložiť." };
     }
     revalidatePipeline(leadId);
     return { success: true };

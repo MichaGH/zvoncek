@@ -3,6 +3,7 @@ import {
     CallOutcome,
     LeadStatus,
     NextActionKind,
+    NextActionMode,
 } from "@/app/generated/prisma/enums";
 
 export type LeadFlowData = {
@@ -14,6 +15,7 @@ export type LeadFlowData = {
     nextActionKind?: NextActionKind | null;
     nextActionAt?: Date | null;
     nextActionHasTime?: boolean;
+    nextActionMode?: NextActionMode;
     nextActionNote?: string | null;
     lostReason?: string | null;
 };
@@ -45,6 +47,7 @@ export function leadStateForOutcome(
                 nextActionKind: "CALL",
                 nextActionAt: when ?? null,
                 nextActionHasTime: hasTime,
+                nextActionMode: "SCHEDULED",
                 nextActionNote: callbackNote || "Dohodnutý spätný hovor",
             };
         case "BAD_NUMBER":
@@ -75,6 +78,7 @@ export function leadStateForOutcome(
                 nextActionKind: "SEND_QUOTE",
                 nextActionAt: new Date(), // dnes – deň bez presného času → svieti "dnes"
                 nextActionHasTime: false,
+                nextActionMode: "SCHEDULED",
                 nextActionNote: "Poslať cenovú ponuku",
             };
         case "WANTS_DESIGN":
@@ -83,8 +87,9 @@ export function leadStateForOutcome(
                 callbackKind: null,
                 callbackAt: null,
                 nextActionKind: "SEND_DESIGN",
-                nextActionAt: new Date(),
+                nextActionAt: new Date(), // dátum vyžiadania – ráta sa „trvá X dní"
                 nextActionHasTime: false,
+                nextActionMode: "IN_PROGRESS", // rozpracované, nie termín → modré, nie červené
                 nextActionNote: "Vytvoriť a poslať dizajnový návrh",
             };
         case "WANTS_EMAIL":
@@ -95,6 +100,7 @@ export function leadStateForOutcome(
                 nextActionKind: "SEND_EMAIL",
                 nextActionAt: new Date(),
                 nextActionHasTime: false,
+                nextActionMode: "SCHEDULED",
                 nextActionNote: "Napísať email / poslať informácie o nás",
             };
         case "SNOOZE":
@@ -107,6 +113,7 @@ export function leadStateForOutcome(
                 nextActionKind: "CALL",
                 nextActionAt: when ?? null,
                 nextActionHasTime: false,
+                nextActionMode: "SCHEDULED",
                 nextActionNote: callbackNote || "Znovu osloviť neskôr",
             };
         case "POSITIVE":
