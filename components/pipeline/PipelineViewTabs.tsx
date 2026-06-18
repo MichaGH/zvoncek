@@ -37,21 +37,16 @@ export default function PipelineViewTabs({
     }
 
     return (
-        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
-            <span className="shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Zobraziť
-            </span>
-            <div className="flex flex-wrap items-center gap-1 rounded-lg bg-muted p-1">
-                <Pill k={null} label="Všetko" />
-                <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden />
-                {todo.map((v) => (
-                    <Pill key={v.key} k={v.key} label={v.label} />
-                ))}
-                <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden />
-                {running.map((v) => (
-                    <Pill key={v.key} k={v.key} label={v.label} />
-                ))}
-            </div>
+        <div className="flex flex-wrap items-center gap-1 rounded-lg bg-muted p-1">
+            <Pill k={null} label="Všetko" />
+            <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden />
+            {todo.map((v) => (
+                <Pill key={v.key} k={v.key} label={v.label} />
+            ))}
+            <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden />
+            {running.map((v) => (
+                <Pill key={v.key} k={v.key} label={v.label} />
+            ))}
         </div>
     );
 }
