@@ -37,7 +37,13 @@ function formatDate(iso: string | null) {
 
 const NBSP = " ";
 
-export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
+export default function PipelineTable({
+    rows,
+    showStatus = false,
+}: {
+    rows: PipelineListRow[];
+    showStatus?: boolean;
+}) {
     const router = useRouter();
 
     if (rows.length === 0) {
@@ -53,20 +59,20 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
             <Table className="w-full table-fixed">
                 <colgroup>
                     <col className="w-[4%]" />
-                    <col className="w-[24%]" />
+                    <col className={showStatus ? "w-[24%]" : "w-[28%]"} />
                     <col className="w-[8%]" />
-                    <col className="w-[9%]" />
-                    <col className="w-[19%]" />
-                    <col className="w-[19%]" />
+                    {showStatus && <col className="w-[9%]" />}
+                    <col className={showStatus ? "w-[19%]" : "w-[21%]"} />
+                    <col className={showStatus ? "w-[19%]" : "w-[21%]"} />
                     <col className="w-[8%]" />
-                    <col className="w-[9%]" />
+                    <col className={showStatus ? "w-[9%]" : "w-[10%]"} />
                 </colgroup>
                 <TableHeader>
                     <TableRow>
                         <TableHead className="pl-4">#</TableHead>
                         <TableHead>Firma</TableHead>
                         <TableHead>Typ</TableHead>
-                        <TableHead>Stav</TableHead>
+                        {showStatus && <TableHead>Stav</TableHead>}
                         <TableHead>Posledný krok</TableHead>
                         <TableHead>Ďalší krok</TableHead>
                         <TableHead className="text-right">Cena</TableHead>
@@ -138,11 +144,13 @@ export default function PipelineTable({ rows }: { rows: PipelineListRow[] }) {
                                         <span className="text-muted-foreground">—</span>
                                     )}
                                 </TableCell>
-                                <TableCell className="align-middle">
-                                    <Badge variant={STATUS_VARIANT[row.status]} className="font-normal">
-                                        {STATUS_LABEL[row.status]}
-                                    </Badge>
-                                </TableCell>
+                                {showStatus && (
+                                    <TableCell className="align-middle">
+                                        <Badge variant={STATUS_VARIANT[row.status]} className="font-normal">
+                                            {STATUS_LABEL[row.status]}
+                                        </Badge>
+                                    </TableCell>
+                                )}
                                 <TableCell className="max-w-0 align-middle text-sm">
                                     {row.lastActivity ? (
                                         <div className="flex min-w-0 flex-col">

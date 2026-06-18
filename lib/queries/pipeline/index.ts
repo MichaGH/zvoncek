@@ -11,6 +11,38 @@ import type {
 
 export const PIPELINE_PAGE_SIZE = 50;
 
+// Sekundárne pohľady v pipeline (param `view`). Sú to "šošovky" nad stavom ACTIVE,
+// nie striktné rozdelenie – jeden lead môže vyhovovať viacerým. Each = Prisma where.
+export const PIPELINE_VIEWS = [
+    { key: "call", label: "Volať", group: "todo" },
+    { key: "quote", label: "Poslať CP", group: "todo" },
+    { key: "email", label: "Poslať email", group: "todo" },
+    { key: "design", label: "Návrh v procese", group: "todo" },
+    { key: "quote_sent", label: "Odoslaná CP", group: "running" },
+    { key: "design_sent", label: "Odoslaný návrh", group: "running" },
+] as const;
+
+export type PipelineViewKey = (typeof PIPELINE_VIEWS)[number]["key"];
+
+function pipelineViewWhere(view?: string) {
+    switch (view) {
+        case "call":
+            return { nextActionKind: "CALL" as const };
+        case "quote":
+            return { nextActionKind: "SEND_QUOTE" as const };
+        case "email":
+            return { nextActionKind: "SEND_EMAIL" as const };
+        case "design":
+            return { nextActionMode: "IN_PROGRESS" as const };
+        case "quote_sent":
+            return { quoteSentAt: { not: null } };
+        case "design_sent":
+            return { designs: { some: { deletedAt: null, sentAt: { not: null } } } };
+        default:
+            return {};
+    }
+}
+
 type PipelineLead = {
     id: string;
     number: number;
@@ -75,15 +107,18 @@ export type PipelineListRow = ReturnType<typeof toPipelineRow>;
 export async function getPipelineList({
     status,
     query,
+    view,
     take = PIPELINE_PAGE_SIZE,
 }: {
     status?: LeadStatus;
     query?: string;
+    view?: string;
     take?: number;
 }): Promise<{ rows: PipelineListRow[]; hasMore: boolean }> {
     const leads = await prisma.lead.findMany({
         where: {
             ...(status ? { status } : {}),
+            ...pipelineViewWhere(view),
             ...(query
                 ? {
                       OR: [
