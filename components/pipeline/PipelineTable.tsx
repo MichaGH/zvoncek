@@ -174,20 +174,20 @@ export default function PipelineTable({
                     <Link
                         key={row.id}
                         href={`/dashboard/pipeline/${row.id}`}
-                        className="block rounded-lg border bg-card p-3 transition-colors active:bg-muted/60"
+                        className="block rounded-xl border bg-card p-4 shadow-sm transition-colors active:bg-muted/50"
                     >
-                        {/* Hlavička: číslo + meno + telefón | typ + ikonky */}
-                        <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                                <div className="flex items-baseline gap-2">
-                                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                                        #{row.number}
-                                    </span>
-                                    <span className="truncate font-medium">{row.name}</span>
-                                </div>
-                                <span className="block truncate text-xs text-muted-foreground">
-                                    {row.phone ?? "—"}
+                        {/* Hlavička: #číslo · (názov / telefón) | ikonky + typ + stav */}
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-baseline gap-2">
+                                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                                    #{row.number}
                                 </span>
+                                <div className="min-w-0">
+                                    <div className="truncate font-medium leading-tight">{row.name}</div>
+                                    <div className="truncate text-xs text-muted-foreground">
+                                        {row.phone ?? "—"}
+                                    </div>
+                                </div>
                             </div>
                             <div className="flex shrink-0 items-center gap-1.5">
                                 <SentIcons row={row} />
@@ -204,31 +204,33 @@ export default function PipelineTable({
                             </div>
                         </div>
 
-                        {/* Kroky */}
-                        <div className="mt-3 space-y-2 border-t pt-3 text-sm">
-                            <div className="flex gap-2">
-                                <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
-                                    Posledný
-                                </span>
-                                <div className="min-w-0 flex-1">
+                        {/* Kroky – label nad obsahom, rovnomerné medzery */}
+                        <div className="mt-3 space-y-2.5 border-t pt-3">
+                            <div>
+                                <div className="mb-0.5 text-xs uppercase tracking-wide text-muted-foreground">
+                                    Posledný krok
+                                </div>
+                                <div className="text-sm">
                                     <LastActivityContent row={row} />
                                 </div>
                             </div>
-                            <div className="flex gap-2">
-                                <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
-                                    Ďalší
-                                </span>
-                                <div className="min-w-0 flex-1">
+                            <div>
+                                <div className="mb-0.5 text-xs uppercase tracking-wide text-muted-foreground">
+                                    Ďalší krok
+                                </div>
+                                <div className="text-sm">
                                     <NextActionContent row={row} />
                                 </div>
                             </div>
                         </div>
 
-                        {/* Päta: cena + rieši */}
-                        <div className="mt-3 flex items-center justify-between border-t pt-2 text-sm">
-                            <PriceWithEye row={row} />
+                        {/* Päta: cena + rieši (kompaktne, naľavo) */}
+                        <div className="mt-3 flex items-center gap-2 border-t pt-3 text-sm">
+                            <span className="font-medium">
+                                <PriceWithEye row={row} />
+                            </span>
                             <span className="truncate text-muted-foreground">
-                                {row.owner ? `Rieši: ${row.owner}` : "Nikto"}
+                                · Rieši {row.owner ?? "nikto"}
                             </span>
                         </div>
                     </Link>
