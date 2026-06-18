@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Phone, Pencil, Check, Plus } from "lucide-react";
+import { Phone, Pencil, Check, Plus, XCircle } from "lucide-react";
 import { LeadStatus, NextActionKind, ProjectType } from "@/app/generated/prisma/enums";
 import { DashboardContent, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ import {
     changeOwner,
     changeStatus,
     logSent,
+    markLost,
     setNextAction,
     setProjectType,
     updateLead,
@@ -100,6 +101,7 @@ export default function PipelineDetail({
     const [nextKind, setNextKind] = useState<NextActionKind>("CALL");
     const [nextDate, setNextDate] = useState("");
     const [nextTime, setNextTime] = useState("");
+    const [nextInProgress, setNextInProgress] = useState(false);
     const [nextNote, setNextNote] = useState("");
     const [savingNext, setSavingNext] = useState(false);
     const [editingNext, setEditingNext] = useState(false);
@@ -107,6 +109,9 @@ export default function PipelineDetail({
     const [busy, setBusy] = useState(false);
     const [businessNote, setBusinessNote] = useState("");
     const [showAllHistory, setShowAllHistory] = useState(true);
+
+    const [lostReason, setLostReason] = useState(lead.lostReason ?? "");
+    const [savingLost, setSavingLost] = useState(false);
 
     const hasNextAction = Boolean(lead.nextActionKind || lead.nextActionAt || lead.nextActionNote);
     const businessActivities = lead.activities.filter((a) => a.category === "BUSINESS");
@@ -146,6 +151,7 @@ export default function PipelineDetail({
         setNextKind("CALL");
         setNextDate("");
         setNextTime("");
+        setNextInProgress(false);
         setNextNote("");
         setEditingNext(false);
     }
@@ -155,6 +161,7 @@ export default function PipelineDetail({
         setNextKind(lead.nextActionKind ?? "CALL");
         setNextDate(parts.date);
         setNextTime(lead.nextActionHasTime ? parts.time : "");
+        setNextInProgress(lead.nextActionMode === "IN_PROGRESS");
         setNextNote(lead.nextActionNote ?? "");
         setEditingNext(true);
     }
@@ -164,15 +171,26 @@ export default function PipelineDetail({
         setNextKind("CALL");
         setNextDate("");
         setNextTime("");
+        setNextInProgress(false);
         setNextNote("");
         setEditingNext(true);
     }
 
     async function saveNextAction() {
-        // Dátum + voliteľný čas: čas vyplnený = presný, prázdny = len deň.
         let iso: string | null = null;
         let hasTime = false;
-        if (nextDate) {
+        let mode: "SCHEDULED" | "IN_PROGRESS" = "SCHEDULED";
+
+        if (nextInProgress) {
+            // Rozpracované: nemá termín. nextActionAt = dátum začatia. Ak už bolo
+            // rozpracované, zachováme pôvodný začiatok (aby sa „trvá X dní" nereštartlo).
+            mode = "IN_PROGRESS";
+            iso =
+                lead.nextActionMode === "IN_PROGRESS" && lead.nextActionAt
+                    ? lead.nextActionAt
+                    : new Date().toISOString();
+        } else if (nextDate) {
+            // Dátum + voliteľný čas: čas vyplnený = presný, prázdny = len deň.
             if (nextTime) {
                 iso = new Date(`${nextDate}T${nextTime}`).toISOString();
                 hasTime = true;
@@ -181,7 +199,7 @@ export default function PipelineDetail({
             }
         }
         setSavingNext(true);
-        await setNextAction(lead.id, nextKind, iso, nextNote.trim() || null, hasTime);
+        await setNextAction(lead.id, nextKind, iso, nextNote.trim() || null, hasTime, mode);
         setSavingNext(false);
         resetNextEditor();
         router.refresh();
@@ -326,6 +344,7 @@ export default function PipelineDetail({
                                         kind={lead.nextActionKind}
                                         at={lead.nextActionAt ?? null}
                                         hasTime={lead.nextActionHasTime}
+                                        mode={lead.nextActionMode}
                                         note={lead.nextActionNote ?? null}
                                     />
                                 )}
@@ -354,25 +373,40 @@ export default function PipelineDetail({
                                             </div>
                                             <div className="grid gap-1.5">
                                                 <Label className="text-xs text-muted-foreground">Kedy</Label>
-                                                <div className="flex gap-2">
-                                                    <Input
-                                                        type="date"
-                                                        value={nextDate}
-                                                        onChange={(event) => setNextDate(event.target.value)}
-                                                        onClick={(e) => (e.currentTarget as HTMLInputElement).showPicker?.()}
-                                                        className="flex-1 [color-scheme:light_dark]"
+                                                {nextInProgress ? (
+                                                    <p className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                                                        Rozpracované – bez termínu. Zobrazí sa „trvá X dní".
+                                                    </p>
+                                                ) : (
+                                                    <>
+                                                        <div className="flex gap-2">
+                                                            <Input
+                                                                type="date"
+                                                                value={nextDate}
+                                                                onChange={(event) => setNextDate(event.target.value)}
+                                                                onClick={(e) => (e.currentTarget as HTMLInputElement).showPicker?.()}
+                                                                className="flex-1 [color-scheme:light_dark]"
+                                                            />
+                                                            <Input
+                                                                type="time"
+                                                                value={nextTime}
+                                                                onChange={(event) => setNextTime(event.target.value)}
+                                                                onClick={(e) => (e.currentTarget as HTMLInputElement).showPicker?.()}
+                                                                className="w-28 [color-scheme:light_dark]"
+                                                            />
+                                                        </div>
+                                                        <p className="text-xs text-muted-foreground">
+                                                            Čas nechaj prázdny, ak nie je dohodnutý presný čas.
+                                                        </p>
+                                                    </>
+                                                )}
+                                                <label className="mt-1 flex cursor-pointer items-center gap-2 text-sm">
+                                                    <Checkbox
+                                                        checked={nextInProgress}
+                                                        onCheckedChange={(v) => setNextInProgress(v === true)}
                                                     />
-                                                    <Input
-                                                        type="time"
-                                                        value={nextTime}
-                                                        onChange={(event) => setNextTime(event.target.value)}
-                                                        onClick={(e) => (e.currentTarget as HTMLInputElement).showPicker?.()}
-                                                        className="w-28 [color-scheme:light_dark]"
-                                                    />
-                                                </div>
-                                                <p className="text-xs text-muted-foreground">
-                                                    Čas nechaj prázdny, ak nie je dohodnutý presný čas.
-                                                </p>
+                                                    <span>Rozpracované (bez termínu, počíta dni)</span>
+                                                </label>
                                             </div>
                                         </div>
                                         <div className="grid gap-1.5">
@@ -470,11 +504,12 @@ export default function PipelineDetail({
                             </CardContent>
                         </Card>
 
-                        {/* Cenová ponuka */}
+                        {/* Cena */}
                         <CenovaPonukaCard
                             leadId={lead.id}
                             price={lead.price}
                             priceNote={lead.priceNote}
+                            priceDisclosed={lead.priceDisclosed}
                             quoteSentAt={lead.quoteSentAt}
                         />
 
@@ -508,6 +543,60 @@ export default function PipelineDetail({
                                     {lead.aboutUsSentAt && <Check className="mr-1.5 h-3.5 w-3.5" />}
                                     {lead.aboutUsSentAt ? "Označené ako poslané" : "Označiť ako poslané"}
                                 </Button>
+                            </CardContent>
+                        </Card>
+
+                        {/* Nemajú záujem */}
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-base">Výsledok</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                {lead.status === "LOST" ? (
+                                    <div className="space-y-2">
+                                        <div className="flex items-center gap-2 text-sm">
+                                            <XCircle className="h-4 w-4 shrink-0 text-destructive" />
+                                            <span className="font-medium">Nemajú záujem</span>
+                                        </div>
+                                        {lead.lostReason && (
+                                            <p className="text-sm text-muted-foreground">{lead.lostReason}</p>
+                                        )}
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={busy}
+                                            onClick={async () => {
+                                                await runBusiness(() => changeStatus(lead.id, "ACTIVE"));
+                                            }}
+                                        >
+                                            Znovu otvoriť
+                                        </Button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <Textarea
+                                            placeholder='Dôvod (nepovinné) – napr. "cena príliš vysoká", "vybrali konkurenciu"'
+                                            value={lostReason}
+                                            onChange={(e) => setLostReason(e.target.value)}
+                                            className="min-h-[72px]"
+                                        />
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                            disabled={savingLost}
+                                            onClick={async () => {
+                                                setSavingLost(true);
+                                                await markLost(lead.id, lostReason || null);
+                                                setSavingLost(false);
+                                                router.refresh();
+                                            }}
+                                        >
+                                            <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                                            {savingLost ? "Ukladám…" : "Nemajú záujem"}
+                                        </Button>
+                                    </>
+                                )}
                             </CardContent>
                         </Card>
 
@@ -653,11 +742,13 @@ function NextActionDisplay({
     kind,
     at,
     hasTime,
+    mode,
     note,
 }: {
     kind: string | null;
     at: string | null;
     hasTime: boolean;
+    mode: "SCHEDULED" | "IN_PROGRESS";
     note: string | null;
 }) {
     return (
@@ -665,7 +756,9 @@ function NextActionDisplay({
             <span className="text-sm font-semibold">
                 {kind ? NEXT_ACTION_LABEL[kind as NextActionKind] : "Ďalší krok"}
             </span>
-            {at && <UrgencyLabel at={at} hasTime={hasTime} className="text-sm" />}
+            {(at || mode === "IN_PROGRESS") && (
+                <UrgencyLabel at={at} hasTime={hasTime} mode={mode} className="text-sm" />
+            )}
             {note && <span className="text-sm text-muted-foreground">{note}</span>}
         </div>
     );

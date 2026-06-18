@@ -1,13 +1,47 @@
 import prisma from "@/lib/db";
+import { nextActionSort } from "@/lib/overdue";
 import type {
     ActivityType,
     CallOutcome,
     LeadStatus,
     NextActionKind,
+    NextActionMode,
     ProjectType,
 } from "@/app/generated/prisma/enums";
 
 export const PIPELINE_PAGE_SIZE = 50;
+
+// Sekundárne pohľady v pipeline (param `view`). Sú to "šošovky" nad stavom ACTIVE,
+// nie striktné rozdelenie – jeden lead môže vyhovovať viacerým. Each = Prisma where.
+export const PIPELINE_VIEWS = [
+    { key: "call", label: "Volať", group: "todo" },
+    { key: "quote", label: "Poslať CP", group: "todo" },
+    { key: "email", label: "Poslať email", group: "todo" },
+    { key: "design", label: "Návrh v procese", group: "todo" },
+    { key: "quote_sent", label: "Odoslaná CP", group: "running" },
+    { key: "design_sent", label: "Odoslaný návrh", group: "running" },
+] as const;
+
+export type PipelineViewKey = (typeof PIPELINE_VIEWS)[number]["key"];
+
+function pipelineViewWhere(view?: string) {
+    switch (view) {
+        case "call":
+            return { nextActionKind: "CALL" as const };
+        case "quote":
+            return { nextActionKind: "SEND_QUOTE" as const };
+        case "email":
+            return { nextActionKind: "SEND_EMAIL" as const };
+        case "design":
+            return { nextActionMode: "IN_PROGRESS" as const };
+        case "quote_sent":
+            return { quoteSentAt: { not: null } };
+        case "design_sent":
+            return { designs: { some: { deletedAt: null, sentAt: { not: null } } } };
+        default:
+            return {};
+    }
+}
 
 type PipelineLead = {
     id: string;
@@ -20,8 +54,13 @@ type PipelineLead = {
     nextActionKind: NextActionKind | null;
     nextActionAt: Date | null;
     nextActionHasTime: boolean;
+    nextActionMode: NextActionMode;
     nextActionNote: string | null;
     price: { toString(): string } | null;
+    priceDisclosed: boolean;
+    quoteSentAt: Date | null;
+    aboutUsSentAt: Date | null;
+    designs: { id: string }[];
     owner: { firstName: string } | null;
     activities: {
         type: ActivityType;
@@ -42,8 +81,13 @@ function toPipelineRow(lead: PipelineLead) {
         nextActionKind: lead.nextActionKind,
         nextActionAt: lead.nextActionAt?.toISOString() ?? null,
         nextActionHasTime: lead.nextActionHasTime,
+        nextActionMode: lead.nextActionMode,
         nextActionNote: lead.nextActionNote,
         price: lead.price ? Number(lead.price) : null,
+        priceDisclosed: lead.priceDisclosed,
+        quoteSentAt: lead.quoteSentAt?.toISOString() ?? null,
+        aboutUsSentAt: lead.aboutUsSentAt?.toISOString() ?? null,
+        hasDesignSent: lead.designs.length > 0,
         owner: lead.owner?.firstName ?? null,
         lastActivity: lead.activities[0]
             ? {
@@ -63,15 +107,18 @@ export type PipelineListRow = ReturnType<typeof toPipelineRow>;
 export async function getPipelineList({
     status,
     query,
+    view,
     take = PIPELINE_PAGE_SIZE,
 }: {
     status?: LeadStatus;
     query?: string;
+    view?: string;
     take?: number;
 }): Promise<{ rows: PipelineListRow[]; hasMore: boolean }> {
     const leads = await prisma.lead.findMany({
         where: {
             ...(status ? { status } : {}),
+            ...pipelineViewWhere(view),
             ...(query
                 ? {
                       OR: [
@@ -94,8 +141,17 @@ export async function getPipelineList({
             nextActionKind: true,
             nextActionAt: true,
             nextActionHasTime: true,
+            nextActionMode: true,
             nextActionNote: true,
             price: true,
+            priceDisclosed: true,
+            quoteSentAt: true,
+            aboutUsSentAt: true,
+            designs: {
+                where: { deletedAt: null, sentAt: { not: null } },
+                select: { id: true },
+                take: 1,
+            },
             owner: { select: { firstName: true } },
             activities: {
                 where: { category: "BUSINESS" },
@@ -110,6 +166,17 @@ export async function getPipelineList({
 
     const hasMore = leads.length > take;
     const rows = leads.slice(0, take).map(toPipelineRow);
+
+    // Kategorické zoradenie: urgentné → rozpracované (návrhy) → budúce → čaká sa → žiadne.
+    // (DB radí len podľa nextActionAt; urgentnosť/mód sa rátajú v JS.)
+    const now = new Date();
+    rows.sort((a, b) => {
+        const ra = nextActionSort(a.nextActionMode, a.nextActionKind, a.nextActionAt, a.nextActionHasTime, now);
+        const rb = nextActionSort(b.nextActionMode, b.nextActionKind, b.nextActionAt, b.nextActionHasTime, now);
+        if (ra.rank !== rb.rank) return ra.rank - rb.rank;
+        return ra.tie - rb.tie;
+    });
+
     return { rows, hasMore };
 }
 

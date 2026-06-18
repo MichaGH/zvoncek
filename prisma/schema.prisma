@@ -65,6 +65,7 @@ model Lead {
   nextActionKind    NextActionKind?
   nextActionAt      DateTime?
   nextActionHasTime Boolean         @default(false) // true = presný čas; false = len deň
+  nextActionMode    NextActionMode  @default(SCHEDULED) // SCHEDULED = termín (urgentnosť); IN_PROGRESS = rozpracované (trvá X dní)
   nextActionNote    String? // "overiť či prišiel mail s návrhom"
 
   callbackKind    CallbackKind? // prečo je v CALLING fronte
@@ -78,8 +79,9 @@ model Lead {
   designUrl     String?
   aboutUsSentAt DateTime? // info o nás / odpoveď na ich mail
 
-  price     Decimal? @db.Decimal(10, 2) // celková nastrelená cena – tá sa zobrazuje
-  priceNote String? // rozpis/poznámka: "499 stránka + 299 admin systém" – na hover
+  price          Decimal? @db.Decimal(10, 2) // celková nastrelená cena – tá sa zobrazuje
+  priceNote      String? // rozpis/poznámka: "499 stránka + 299 admin systém" – na hover
+  priceDisclosed Boolean  @default(false) // klient cenu pozná (ústne aj mailom)
 
   lostReason String? // "nemajú záujem", "zlé číslo"
 
@@ -199,6 +201,14 @@ enum NextActionKind {
   SEND_EMAIL
   WAITING_FOR_CLIENT
   CUSTOM
+}
+
+// Ako interpretovať/zobraziť nextActionAt – nezávislé od kindu:
+// SCHEDULED = nextActionAt je termín, ráta sa urgentnosť (future/soon/due/late)
+// IN_PROGRESS = rozpracované, nextActionAt je dátum začatia, zobrazí sa „trvá X dní"
+enum NextActionMode {
+  SCHEDULED
+  IN_PROGRESS
 }
 
 enum LeadOrigin {

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Pencil } from "lucide-react";
+import { Check, Pencil } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,10 +10,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { saveQuote, setQuoteSent } from "@/lib/actions/pipeline";
+import { saveQuote, setPriceDisclosed, setQuoteSent } from "@/lib/actions/pipeline";
 
 function fmtDate(iso: string | null) {
-    if (!iso) return "—";
+    if (!iso) return "";
     return new Date(iso).toLocaleDateString("sk-SK", {
         day: "numeric",
         month: "numeric",
@@ -25,15 +25,17 @@ export default function CenovaPonukaCard({
     leadId,
     price,
     priceNote,
+    priceDisclosed,
     quoteSentAt,
 }: {
     leadId: string;
     price: number | null;
     priceNote: string | null;
+    priceDisclosed: boolean;
     quoteSentAt: string | null;
 }) {
     const router = useRouter();
-    const sent = Boolean(quoteSentAt);
+    const quoteSent = Boolean(quoteSentAt);
     const [editing, setEditing] = useState(false);
     const [busy, setBusy] = useState(false);
     const [priceInput, setPriceInput] = useState(price != null ? String(price) : "");
@@ -52,9 +54,23 @@ export default function CenovaPonukaCard({
         router.refresh();
     }
 
-    async function toggleSent(next: boolean) {
+    async function toggleDisclosed(next: boolean) {
         setBusy(true);
-        await setQuoteSent(leadId, next);
+        await setPriceDisclosed(leadId, next);
+        setBusy(false);
+        router.refresh();
+    }
+
+    async function markQuoteSent() {
+        setBusy(true);
+        await setQuoteSent(leadId, true);
+        setBusy(false);
+        router.refresh();
+    }
+
+    async function revertQuoteSent() {
+        setBusy(true);
+        await setQuoteSent(leadId, false);
         setBusy(false);
         router.refresh();
     }
@@ -68,14 +84,7 @@ export default function CenovaPonukaCard({
     return (
         <Card>
             <CardHeader className="flex items-center justify-between">
-                <div className="flex min-w-0 items-center gap-2">
-                    <CardTitle className="text-base">Cenová ponuka</CardTitle>
-                    {sent && (
-                        <Badge variant="secondary" className="shrink-0 font-normal">
-                            Odoslané {fmtDate(quoteSentAt)}
-                        </Badge>
-                    )}
-                </div>
+                <CardTitle className="text-base">Cena</CardTitle>
                 {!editing && (
                     <Button
                         size="sm"
@@ -88,42 +97,63 @@ export default function CenovaPonukaCard({
                     </Button>
                 )}
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent>
                 {!editing ? (
-                    <>
-                        <div>
-                            <p className={`text-2xl font-medium tabular-nums${price == null ? " text-muted-foreground" : ""}`}>
-                                {price != null ? `${price} €` : "— €"}
-                            </p>
-                            {price != null && (
-                                <p className="text-xs text-muted-foreground">
-                                    {sent
-                                        ? "Klient videl túto cenu"
-                                        : "Interná cena · klientovi ešte neodoslaná"}
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        {/* Ľavá polovica – cena + klient pozná */}
+                        <div className="space-y-2">
+                            <div className="flex items-baseline gap-3">
+                                <p className={`text-2xl font-medium tabular-nums${price == null ? " text-muted-foreground" : ""}`}>
+                                    {price != null ? `${price} €` : "— €"}
+                                </p>
+                                <label className={`flex items-center gap-1.5 text-sm text-muted-foreground${price == null ? " opacity-40" : " cursor-pointer"}`}>
+                                    <Checkbox
+                                        checked={priceDisclosed}
+                                        disabled={busy || price == null}
+                                        onCheckedChange={(v) => toggleDisclosed(v === true)}
+                                    />
+                                    <span>Klient pozná cenu</span>
+                                </label>
+                            </div>
+                            {price == null && (
+                                <p className="text-xs text-muted-foreground">Najprv nastav cenu.</p>
+                            )}
+                            {priceNote && (
+                                <p className="whitespace-pre-wrap text-sm text-muted-foreground">
+                                    {priceNote}
                                 </p>
                             )}
                         </div>
-                        {priceNote && (
-                            <p className="whitespace-pre-wrap text-sm text-muted-foreground">
-                                {priceNote}
-                            </p>
-                        )}
-                        <label className="flex cursor-pointer items-center gap-2 rounded-md border bg-muted/30 p-2.5 text-sm">
-                            <Checkbox
-                                checked={sent}
-                                disabled={busy}
-                                onCheckedChange={(v) => toggleSent(v === true)}
-                            />
-                            <span>
-                                Cena bola klientovi odoslaná
-                                {sent && quoteSentAt ? ` · ${fmtDate(quoteSentAt)}` : ""}
-                            </span>
-                        </label>
-                        <p className="text-xs text-muted-foreground">
-                            Zaškrtni keď si cenu klientovi reálne poslal (email/SMS/aj ústne).
-                            Dá sa kedykoľvek odškrtnúť.
-                        </p>
-                    </>
+
+                        {/* Pravá polovica – cenová ponuka (email) */}
+                        <div className="flex flex-col justify-center gap-1.5">
+                            {quoteSent ? (
+                                <>
+                                    <Badge variant="secondary" className="w-fit font-normal">
+                                        <Check className="mr-1 h-3 w-3" />
+                                        CP odoslaná {fmtDate(quoteSentAt)}
+                                    </Badge>
+                                    <button
+                                        className="w-fit text-xs text-muted-foreground underline-offset-2 hover:underline disabled:opacity-50"
+                                        disabled={busy}
+                                        onClick={revertQuoteSent}
+                                    >
+                                        zrušiť
+                                    </button>
+                                </>
+                            ) : (
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="w-fit"
+                                    disabled={busy || price == null}
+                                    onClick={markQuoteSent}
+                                >
+                                    CP bola odoslaná
+                                </Button>
+                            )}
+                        </div>
+                    </div>
                 ) : (
                     <div className="space-y-2">
                         <div className="grid gap-1.5">

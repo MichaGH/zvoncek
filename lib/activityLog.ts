@@ -3,6 +3,7 @@ import type {
     ActivityType,
     CallOutcome,
     NextActionKind,
+    NextActionMode,
 } from "@/app/generated/prisma/enums";
 
 type ActivityPayload = {
@@ -40,6 +41,7 @@ export type NextActionData = {
     nextActionKind: NextActionKind | null;
     nextActionAt: Date | null;
     nextActionHasTime: boolean;
+    nextActionMode: NextActionMode;
     nextActionNote: string | null;
 };
 
@@ -48,16 +50,20 @@ export function nextActionData(
     at?: Date | null,
     note?: string | null,
     hasTime: boolean = false,
+    mode: NextActionMode = "SCHEDULED",
 ): NextActionData {
     return {
         nextActionKind: kind,
         nextActionAt: at ?? null,
         nextActionHasTime: hasTime,
+        nextActionMode: mode,
         nextActionNote: note?.trim() || null,
     };
 }
 
-export function describeNextAction(data: Omit<NextActionData, "nextActionHasTime">): string {
+export function describeNextAction(
+    data: Omit<NextActionData, "nextActionHasTime" | "nextActionMode">,
+): string {
     if (!data.nextActionKind) return "Ďalší krok bol vymazaný";
 
     const parts: string[] = [data.nextActionKind];

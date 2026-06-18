@@ -1,193 +1,247 @@
-# Zvonček — Agent Instructions
+# Zvonček - Agent Instructions
 
-## What this app is
+This file is the operational memory for coding agents working on Zvonček.
+Keep it short, current, and strict. Detailed product flow lives in
+`docs/app-workflow.md`.
 
-Internal CRM + calling dashboard for **The Grand Points**, a small webdesign company.
-Stack: Next.js 16 App Router · TypeScript · Prisma 7 + Neon Postgres (`@prisma/adapter-pg`) · NextAuth v5 Credentials · shadcn/ui · vaul drawer · Tailwind 4.
+## What This App Is
 
-The app is a real internal tool and a learning project. Do not add features beyond what is explicitly asked.
+Zvonček is an internal CRM and calling dashboard for The Grand Points, a small
+web design company.
 
----
+Stack:
+- Next.js App Router
+- TypeScript
+- Prisma + Postgres
+- NextAuth Credentials
+- shadcn/ui
+- vaul drawers
+- Tailwind CSS
 
-## Critical naming rules
+This is a real internal tool and also a learning project. Do not add features
+outside the requested scope.
 
-The central Prisma model is `Lead`. **Never rename it** — not in the schema, not in relations, not in generated imports.
+## Core Domain Rule
 
-In business terms a `Lead` can be:
-- a raw contact to call,
-- a call target,
-- an active pipeline opportunity (once interested),
-- a won/lost record.
+The central Prisma model is `Lead`. Never rename it.
 
-Route and UI names should describe the business view (`pipeline`, `calls`, `contacts`), not the Prisma model.
+Business meaning changes by workflow stage:
+- `NEW` lead = raw contact prepared for calling
+- `CALLING` / `SNOOZED` lead = call queue item
+- `ACTIVE` lead = manager pipeline opportunity
+- `WON`, `LOST`, `UNREACHABLE` lead = final or inactive result
 
----
+Routes and UI should use business names such as contacts, calls, pipeline, and
+statistics. Do not rename Prisma `Lead` to Contact/Client/Opportunity.
 
-## Roles and who does what
+## Roles
 
-There are **4 roles**. Permission checks must use `can(user, permission)` from `lib/permissions.ts` — **never check roles directly in components or actions**.
+There are four roles:
+
+- `SCOUT`
+- `TELESALES`
+- `MANAGER`
+- `ADMIN`
+
+Permission checks must go through `can(user, permission)` from
+`lib/permissions.ts`. Do not check roles directly in actions/components unless
+the code is explicitly doing role-specific presentation and cannot be expressed
+as a permission.
 
 ### SCOUT
-Adds raw contacts to the database. That is their only job.
-- Can see and manage **only their own** contacts (scoped server-side via `createdById`).
-- Cannot call, cannot see pipeline, cannot see other users' contacts.
-- Contacts they added become "locked" (read-only) once they have been called by TELESALES.
+
+SCOUT only adds and manages raw contacts.
+
+Allowed workflow:
+- sees contacts only
+- creates contacts
+- sees only their own contacts, scoped server-side by `createdById`
+- can edit/delete their own contact only while it is still `NEW`
+- once telesales has touched the contact, it is locked/read-only for SCOUT
+
+SCOUT cannot call, cannot see pipeline, and cannot see other users' contacts.
 
 ### TELESALES
-Works the **marketing call queue** (`/dashboard/calls`). That is their only job.
-- Calls contacts, logs outcomes (NO_ANSWER, CALL_AGAIN, NOT_INTERESTED, WANTS_QUOTE, WANTS_DESIGN, WANTS_EMAIL, POSITIVE, SNOOZE…).
-- Can view their own call history (`/dashboard/calls/history`).
-- Can quickly add a new contact (contacts.create).
-- **TELESALES has no access to pipeline or leads.** They hand off a lead by logging a positive outcome; from that point the MANAGER takes over. TELESALES never sees or edits pipeline data.
+
+TELESALES works the call queue at `/dashboard/calls`.
+
+Allowed workflow:
+- sees callable contacts
+- logs call outcomes
+- can view call history
+- may quickly create a contact if needed
+- hands off interested contacts to pipeline by logging a positive outcome
+
+TELESALES must not manage pipeline data. After a contact becomes an active
+pipeline opportunity, TELESALES should not edit pipeline fields. Call-history
+revert/correction exists only to fix a mistaken call outcome, and should remain
+stage-locked once the manager has meaningfully touched the opportunity.
+
+`Lead.lockedById` / `lockedAt` exists for future multi-telesales contact
+assignment. Keep it in mind when changing queue behavior.
 
 ### MANAGER
-Handles the full **pipeline** for active business opportunities and everything else except admin.
-- Sees all contacts, all call history, all pipeline.
-- Creates/updates quotes, designs, email sends.
-- Manages lead owners, follow-ups, project types.
-- Can revert call history rows (with stage-lock: locked when price/design/owner/WON/LOST touched).
+
+MANAGER works the business pipeline at `/dashboard/pipeline`.
+
+Allowed workflow:
+- sees all contacts, call history, and pipeline opportunities
+- manages status, owner, project type, price, quote sent state, email sent state
+- creates and updates designs/proposals
+- manages tracking URLs and design versions
+- owns follow-up planning via `nextAction*`
 
 ### ADMIN
-All permissions including `admin.access` and `users.manage`.
 
----
+ADMIN has all permissions and admin pages. Admin functionality is still growing;
+keep changes conservative and explicit.
 
-## Permission system (`lib/permissions.ts`)
+## Main Routes
 
-Single source of truth. The `ROLE_PERMISSIONS` record maps each role to a flat list of `Permission` strings.
+Current implemented routes:
 
-Key permissions:
-- `today.view` — dashboard home
-- `calls.view` / `calls.work` — call queue (view vs act)
-- `callHistory.access` / `callHistory.viewAll` / `callHistory.revert`
-- `contacts.access` / `contacts.viewAll` / `contacts.create` / `contacts.deleteOwnUncalled` / `contacts.deleteAny`
-- `pipeline.view` / `pipeline.manage`
-- `stats.view` / `stats.viewAll`
-- `admin.access` / `users.manage`
+- `/dashboard` - role-aware home
+- `/dashboard/contacts` - contacts database
+- `/dashboard/contacts/new` - add contacts
+- `/dashboard/calls` - telesales call queue
+- `/dashboard/calls/history` - call history
+- `/dashboard/pipeline` - manager pipeline table
+- `/dashboard/pipeline/[id]` - pipeline detail
+- `/dashboard/stats` - statistics page, currently unfinished and expected to be redesigned
+- `/dashboard/admin` - admin area
+- `/dashboard/admin/users` - user management
 
-Usage:
-```ts
-import { can } from "@/lib/permissions";
-if (!can(session.user, "pipeline.manage")) return { error: "Nemáš oprávnenie." };
-```
+If product discussion says `/dashboard/statistics` or `/dashboard/contacts/add`,
+map that to the current implementation unless the task explicitly asks to rename
+routes.
 
-Route guard lives in `auth.config.ts` via `requiredPermissionForPath(path)`.
+## Workflow Summary
 
----
+The app flow is:
 
-## Database rules
+`SCOUT adds contacts -> TELESALES calls contacts -> interested contacts move to MANAGER pipeline -> MANAGER closes or loses opportunity`
 
-- **`prisma db push` only.** Never `prisma migrate dev`. There is no migrations folder.
-- Schema file: `prisma/schema.prisma`.
-- Generated client: `app/generated/prisma/` (custom output, not `node_modules/.prisma`).
-- Import enums from `@/app/generated/prisma/enums`, client from `@/lib/db`.
-- After schema changes run `npx prisma db push` then `npx prisma generate`.
-- If `db push` is blocked by a destructive change and you are sure no live data will be lost, `--accept-data-loss` is acceptable.
+Detailed workflow is documented in `docs/app-workflow.md`.
 
----
+Important state split:
 
-## Key schema models
+- Calls use `callbackKind`, `callbackAt`, `callbackHasTime`, `callbackNote`
+- Pipeline uses `nextActionKind`, `nextActionAt`, `nextActionHasTime`, `nextActionNote`
 
-```
-Lead            — central record (contact + opportunity + result)
-Activity        — append-only audit log (type, note, meta JSON with field diffs)
-User            — app user with Role enum
-Design          — a design proposal attached to a Lead (soft-delete via deletedAt)
-DesignVersion   — version bump of a Design (label, url, note)
-Tracker         — 1:1 with Design, holds a unique token for link tracking
-TrackerEvent    — PAGE_VIEW or ENGAGED_VIEW logged by the public ingest endpoint
-```
+The `*HasTime` flag matters everywhere:
 
-Enums: `Role` (SCOUT TELESALES MANAGER ADMIN), `LeadStatus`, `LeadOrigin`, `ProjectType` (WEBSITE ESHOP CATALOG WEBAPP PORTFOLIO OTHER), `ActivityType`, `CallOutcome`, `TrackedEventType` (PAGE_VIEW ENGAGED_VIEW).
+- `false` means the client gave only a day, so UI should show day-level labels
+- `true` means the client gave an exact time, so UI should show exact-time urgency
 
----
+Shared urgency/display logic lives in `lib/overdue.ts` and
+`components/shared/UrgencyLabel.tsx`.
 
-## Business views
+## Call Outcomes
 
-### `/dashboard` (Dnes)
-Dashboard home. Visible to all logged-in users (each role sees what is relevant).
+TELESALES drawer outcomes:
 
-### `/dashboard/calls`
-**TELESALES only.** Marketing call queue. Shows contacts grouped by status/snooze. Caller logs outcomes via `CallDrawer`. Snoozed contacts appear in a "Spiace" group.
+- interested:
+  - wants design
+  - wants quote
+  - wants email/about-us info
+  - optional email collection after this path
+- no answer
+- agreed callback time
+- snooze / contact later
+- not interested
+- bad or non-functional number
+- note
 
-### `/dashboard/calls/history`
-Call history. TELESALES sees own rows; MANAGER/ADMIN can switch to "Všetci" to see all users. Has a revert action (Vrátiť) guarded by stage-lock.
+Outcome-to-state transition logic belongs in `lib/domain/leadFlow.ts`.
 
-### `/dashboard/pipeline`
-**MANAGER/ADMIN only.** Table of active opportunities. Shows: #, Firma, Telefón, Typ projektu, Posledný krok, Ďalší krok, Cena, Stav. Fixed row height.
+## Pipeline Detail
 
-### `/dashboard/pipeline/[id]`
-Full detail view for one opportunity. Two-column layout (main + sidebar).
+Pipeline detail is the manager workspace for one opportunity.
 
-Main column cards (in order):
-1. **Ďalší krok** — next action editor + Posledný krok display + Zaznamenať udalosť
-2. **Cenová ponuka** — price + note + revertible "sent" checkbox
-3. **Dizajn & Tracking** — design list with tracked URLs
-4. **Email "O nás"** — about-us email sent toggle
-5. **História** — activity log with revert actions
+Important sections:
+- next action
+- last business step
+- client/contact data
+- quote
+- design and tracking
+- about-us email
+- history
 
-Sidebar: **Údaje** (contact fields, pencil-icon edit), status/owner/projectType pills, phone number.
+Design tracking flow:
+- manager creates a `Design`
+- app creates a `Tracker` with token
+- public script reads `?p=TOKEN`
+- script posts view/engagement events to `/api/p`
+- confidence summary is derived in `lib/tracking/confidence.ts`
 
-### `/dashboard/contacts`
-Contact database. SCOUT sees only their own (server-scoped). MANAGER sees all with filters. Rows grayed when `status !== NEW` (already called → locked).
+## Permissions And Security
 
-### `/dashboard/admin`
-Admin-only placeholder. Returns `notFound()` for non-admins.
+Single source of truth:
 
----
+- `lib/permissions.ts`
+- `auth.config.ts` route guard via `requiredPermissionForPath(path)`
 
-## Proposal tracking system
+Rules:
+- every server action must authenticate and check permissions before changing data
+- role-scoped queries must enforce scope server-side
+- UI hiding is not security
+- use `notFound()` or redirect only after server-side permission checks
 
-Tracks whether clients actually viewed design proposals.
+Known code smell to watch: call history correction actions should be checked for
+permission coverage before expanding them.
 
-**Flow:**
-1. MANAGER creates a `Design` on the lead. Zvonček auto-creates a `Tracker` with a unique token.
-2. `DesignTrackingCard` shows two URLs: plain URL (clickable) + tracked URL (`https://zvoncek.com/?p=TOKEN`) as muted text.
-3. Manager copies the tracked URL and sends it to the client (email, messenger, etc.).
-4. Client's browser loads `?p=TOKEN` on the proposal site, which has the universal snippet `public/scripts/tracker.js` embedded.
-5. Snippet POSTs to `https://zvoncek.com/api/p` (always 204). Logs `PAGE_VIEW` immediately, then `ENGAGED_VIEW` after 8 s active time or scroll event.
-6. Confidence summary: none / weak (all bot) / medium (pageview only) / high (engaged) / very_high (multi-day or viewed after version update).
+## Database Rules
 
-**Ingest:** `app/api/p/route.ts` — public, no auth, always returns 204.
-**Snippet:** `public/scripts/tracker.js` — reads `?p=TOKEN`, strips it from URL with `history.replaceState`, POSTs events.
-**Confidence:** `lib/tracking/confidence.ts` → `summarizeEvents(events, currentVersion)`.
+- Use `prisma db push`, not `prisma migrate dev`
+- Schema file: `prisma/schema.prisma`
+- Generated Prisma client output: `app/generated/prisma/`
+- Import enums from `@/app/generated/prisma/enums`
+- Import Prisma client from `@/lib/db`
+- After schema changes, run:
+  - `npx prisma db push`
+  - `npx prisma generate`
 
----
+Do not modify generated Prisma files manually.
 
-## Folder conventions
+## Important Files
 
-```
-lib/queries/calls/index.ts      — call queue queries
-lib/queries/calls/history.ts    — history queries (accepts userId|null for all-users)
-lib/queries/contacts/index.ts   — contacts list + overview (createdById scoping)
-lib/queries/pipeline/index.ts   — pipeline table query
-lib/queries/tracking/index.ts   — resolveTrackerToken, getDesignsForLead
-lib/actions/calls/index.ts      — logCall, snooze, resetLeadToCalls
-lib/actions/contacts/index.ts   — createContact, updateContact, deleteContact
-lib/actions/pipeline/index.ts   — updateLead, saveQuote, setQuoteSent, setProjectType, setOwner…
-lib/actions/tracking/index.ts   — createDesign, addDesignVersion, updateDesignMeta, removeDesign, setDesignSent
-lib/permissions.ts              — ROLE_PERMISSIONS, can(), canAny(), requiredPermissionForPath()
-lib/dictionaries.ts             — STATUS_LABEL/VARIANT, OUTCOME_LABEL, ACTIVITY_LABEL, PROJECT_TYPE_LABEL, ROLE_LABEL, CONFIDENCE_LABEL/VARIANT
-lib/leadFlow.ts                 — outcome → lead state transitions (CallOutcome → LeadStatus + ActivityType)
-```
+- `prisma/schema.prisma` - database schema
+- `lib/db.ts` - Prisma client
+- `lib/permissions.ts` - permissions
+- `lib/domain/leadFlow.ts` - call outcome state transitions
+- `lib/overdue.ts` - shared urgency/date display logic
+- `lib/activityLog.ts` - activity payload helpers
+- `lib/dictionaries.ts` - UI labels for enums
+- `lib/actions/contacts/index.ts` - contact mutations
+- `lib/actions/calls/index.ts` - call queue mutations
+- `lib/actions/pipeline/index.ts` - pipeline mutations
+- `lib/actions/tracking/index.ts` - design/tracking mutations
+- `lib/queries/*` - server read models
+- `app/api/p/route.ts` - public tracking ingest
+- `public/p.js` and `public/scripts/tracker.js` - public tracking snippets
 
----
+## UI Conventions
 
-## UI conventions
+- Use shadcn/ui components from `components/ui/*`
+- Drawers use vaul
+- Icon-only buttons use `variant="ghost"` and `size="icon"` or equivalent tight ghost styling
+- Use `Pencil`, `Trash2`, and `Lock` from `lucide-react` for standard edit/delete/locked actions
+- Preserve the shared dashboard layout components in `components/dashboard/DashboardPage.tsx`
+- Do not introduce broad layout changes unless requested
 
-- shadcn/ui components. Import from `@/components/ui/*`.
-- `CardHeader` with actions: use `className="flex-row items-center justify-between space-y-0 pb-3"`. Structure must be `<CardTitle> + <div className="flex gap-1">{buttons}</div>` — no extra wrapper divs.
-- Icon-only buttons: `variant="ghost" size="icon"` (no outline box). Pencil = `Pencil`, trash = `Trash2`, lock = `Lock` from `lucide-react`.
-- Scrollbar layout shift fix in `app/globals.css`: `scrollbar-gutter: stable` + `--removed-body-scroll-bar-size: 0px !important`.
-- Drawers use `vaul` (not shadcn Sheet).
-- `DashboardContent` width prop: use `"full"` for two-column pipeline detail, default for single-column pages.
+## Statistics
 
----
+The statistics page is not finished. Do not treat current stats as final product
+truth. Future stats should reflect real role responsibilities; for example,
+SCOUT does not make calls, so call-performance stats for SCOUT are not useful.
 
-## Safety rules
+## Safety Rules
 
-- Preserve existing behavior unless the task explicitly asks to change it.
-- All server actions must check permissions with `can(session.user, "...")` before doing anything.
-- Queries that are role-scoped (scout contacts, user-specific history) must enforce the scope **server-side** — never rely on UI hiding alone.
-- After changes: fix broken imports, check `tsc --noEmit`, summarize changed files.
-- Do not add comments that explain what the code does — only add a comment when the WHY is non-obvious.
+- Preserve existing workflow design unless the task explicitly changes it
+- Keep edits scoped
+- Do not rename Prisma `Lead`
+- Do not manually edit generated files
+- Do not rely on client-side hiding for permissions
+- Do not add explanatory comments unless the reason is non-obvious
+- After code changes, fix imports and run TypeScript/checks when practical
+- Summarize changed files and any checks that could not be run
