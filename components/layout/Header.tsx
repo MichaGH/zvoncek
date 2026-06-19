@@ -6,6 +6,7 @@ import { can, type Permission } from "@/lib/permissions";
 import { logout } from "@/lib/actions";
 import { LogOut } from "lucide-react";
 import DarkModeToggle from "@/components/layout/DarkModeToggle";
+import Logo from "@/components/Logo";
 
 const NAV: { href: string; label: string; perm: Permission | null }[] = [
     { href: "/dashboard",          label: "Dashboard",  perm: null              },
@@ -29,16 +30,12 @@ export default async function Header() {
 
     return (
         <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur">
-            <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
+            <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
 
                 {/* ── Left: logo + desktop nav ─────────────────────── */}
                 <div className="flex items-center gap-6">
-                    <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
-                        <svg viewBox="0 0 40 50" height="24" fill="none" aria-hidden="true" className="w-auto shrink-0">
-                            <path d="M10 8 Q20 2 30 8" stroke="#6366f1" strokeWidth="1.7" strokeLinecap="round"/>
-                            <path d="M3 36 L8 36 C5 30 12 20 13 14 Q20 8 27 14 C28 20 35 30 32 36 L37 36" stroke="currentColor" strokeWidth="2.3" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                            <circle cx="20" cy="44" r="3" fill="#6366f1"/>
-                        </svg>
+                    <Link href="/" className="flex items-center gap-2.5 text-xl font-semibold tracking-tight">
+                        <Logo className="h-8 w-auto shrink-0" />
                         Zvonček
                     </Link>
 
