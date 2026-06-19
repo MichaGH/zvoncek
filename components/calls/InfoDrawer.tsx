@@ -58,7 +58,7 @@ export default function InfoDrawer({ lead, onClose }: { lead: QueueLead | null; 
         }
     }
 
-    if (!lead) return <Drawer open={false} />;
+    if (!lead) return <Drawer open={false} repositionInputs={false} />;
     const L = lead;
     const name = L.companyName ?? L.website ?? "—";
 

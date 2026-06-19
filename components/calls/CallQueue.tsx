@@ -136,7 +136,7 @@ export default function CallQueue({ board }: { board: CallsBoard }) {
                 onClose={() => setOpenLead(null)}
                 onOutcome={handleOutcome}
             />
-            <InfoDrawer lead={infoLead} onClose={() => setInfoLead(null)} />
+            <InfoDrawer key={infoLead?.id ?? "closed"} lead={infoLead} onClose={() => setInfoLead(null)} />
         </>
     );
 }
