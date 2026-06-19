@@ -93,7 +93,7 @@ export default function CallQueue({ board }: { board: CallsBoard }) {
         <>
             <div className="grid gap-6 lg:grid-cols-2">
                 {/* ĽAVÝ STĹPEC */}
-                <div className="space-y-6">
+                <div className="min-w-0 space-y-6">
                     <Group
                         icon={<CalendarClock className="h-4 w-4" />}
                         title="Dohodnuté hovory" hint="majú dohodnutý čas"
@@ -115,7 +115,7 @@ export default function CallQueue({ board }: { board: CallsBoard }) {
                 </div>
 
                 {/* PRAVÝ STĹPEC */}
-                <div className="space-y-6">
+                <div className="min-w-0 space-y-6">
                     <Group
                         icon={<Sparkles className="h-4 w-4" />}
                         title="Nové firmy" hint="ešte nevolané"

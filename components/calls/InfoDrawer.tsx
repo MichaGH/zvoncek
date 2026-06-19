@@ -63,53 +63,56 @@ export default function InfoDrawer({ lead, onClose }: { lead: QueueLead | null; 
     const name = L.companyName ?? L.website ?? "—";
 
     return (
-        <Drawer open={!!lead} onOpenChange={handleOpenChange}>
-            <DrawerContent>
-                <div className="mx-auto w-full max-w-md">
-                    <DrawerHeader>
-                        <div className="flex items-center justify-between">
-                            <DrawerTitle className="flex items-center gap-2">
-                                <span className="text-muted-foreground tabular-nums">#{L.number}</span>
-                                {!editing && name}
-                            </DrawerTitle>
-                            {!editing ? (
-                                <Button variant="ghost" size="sm" onClick={startEdit} className="h-8 gap-1.5 text-muted-foreground">
-                                    <Pencil className="h-3.5 w-3.5" />
-                                    Upraviť
+        // repositionInputs={false}: vaul defaultne presúva drawer hore keď sa focusne
+        // input → na mobile drawer vyletí mimo obrazovky. Vypneme to (rovnako ako CallDrawer).
+        <Drawer open={!!lead} onOpenChange={handleOpenChange} repositionInputs={false}>
+            <DrawerContent className="data-[vaul-drawer-direction=bottom]:max-h-[90dvh]">
+                <DrawerHeader className="flex-none pb-2">
+                    <div className="mx-auto flex w-full max-w-md items-center justify-between">
+                        <DrawerTitle className="flex min-w-0 items-center gap-2">
+                            <span className="shrink-0 text-muted-foreground tabular-nums">#{L.number}</span>
+                            {!editing && <span className="truncate">{name}</span>}
+                        </DrawerTitle>
+                        {!editing ? (
+                            <Button variant="ghost" size="sm" onClick={startEdit} className="h-8 shrink-0 gap-1.5 text-muted-foreground">
+                                <Pencil className="h-3.5 w-3.5" />
+                                Upraviť
+                            </Button>
+                        ) : (
+                            <div className="flex shrink-0 gap-1">
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={cancelEdit} disabled={saving}>
+                                    <X className="h-4 w-4" />
                                 </Button>
-                            ) : (
-                                <div className="flex gap-1">
-                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={cancelEdit} disabled={saving}>
-                                        <X className="h-4 w-4" />
-                                    </Button>
-                                    <Button size="icon" className="h-8 w-8" onClick={saveEdit} disabled={saving}>
-                                        <Check className="h-4 w-4" />
-                                    </Button>
-                                </div>
-                            )}
-                        </div>
-                        <DrawerDescription className="sr-only">Detaily firmy</DrawerDescription>
-                    </DrawerHeader>
+                                <Button size="icon" className="h-8 w-8" onClick={saveEdit} disabled={saving}>
+                                    <Check className="h-4 w-4" />
+                                </Button>
+                            </div>
+                        )}
+                    </div>
+                    <DrawerDescription className="sr-only">Detaily firmy</DrawerDescription>
+                </DrawerHeader>
 
-                    <div className="space-y-3 px-4 pb-6">
+                {/* flex-1 + overflow-y-auto: drawer má pevnú výšku, obsah scrolluje interne */}
+                <div className="flex-1 overflow-y-auto overscroll-contain">
+                    <div className="mx-auto w-full max-w-md space-y-3 px-4 pb-6">
                         {editing ? (
                             /* ── EDIT MODE ── */
                             <div className="space-y-2">
                                 <div className="space-y-1">
                                     <label className="text-xs text-muted-foreground">Názov firmy</label>
-                                    <Input value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="Názov firmy" />
+                                    <Input data-vaul-no-drag value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="Názov firmy" className="text-base" />
                                 </div>
                                 <div className="space-y-1">
                                     <label className="text-xs text-muted-foreground">Web</label>
-                                    <Input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="www.firma.sk" />
+                                    <Input data-vaul-no-drag value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="www.firma.sk" className="text-base" />
                                 </div>
                                 <div className="space-y-1">
                                     <label className="text-xs text-muted-foreground">Telefón</label>
-                                    <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+421 900 000 000" type="tel" />
+                                    <Input data-vaul-no-drag value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+421 900 000 000" type="tel" className="text-base" />
                                 </div>
                                 <div className="space-y-1">
                                     <label className="text-xs text-muted-foreground">Email</label>
-                                    <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@firma.sk" type="email" />
+                                    <Input data-vaul-no-drag value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@firma.sk" type="email" className="text-base" />
                                 </div>
                                 <Button className="mt-2 w-full" onClick={saveEdit} disabled={saving}>
                                     {saving ? "Ukladám…" : "Uložiť zmeny"}
