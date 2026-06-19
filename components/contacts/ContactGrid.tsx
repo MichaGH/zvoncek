@@ -207,7 +207,85 @@ export default function ContactGrid({ initialCallable }: { initialCallable: numb
                 )}
             </div>
 
-            <div className="overflow-x-auto rounded-lg border bg-card">
+            {/* MOBILE: jedna karta na riadok (md:hidden). Rovnaká logika ako desktop
+                spreadsheet – blur uloží, nový riadok pribudne automaticky. */}
+            <div className="space-y-3 md:hidden">
+                {rows.map((row) => {
+                    const saved = row.status === "saved";
+                    const isEditing = saved && editingSavedId === row.savedId;
+                    const noop = () => {};
+                    return (
+                        <div
+                            key={row.id}
+                            onBlur={(e) => { if (!saved) handleRowBlur(row.id, e); }}
+                            className={cn(
+                                "space-y-2 rounded-xl border bg-card p-3",
+                                saved && !isEditing && "border-emerald-200 bg-emerald-50/60",
+                                isEditing && "bg-accent/30",
+                                row.status === "error" && "border-destructive/30 bg-destructive/5",
+                            )}
+                        >
+                            <div className="flex items-center justify-between">
+                                <span className="text-xs font-medium text-muted-foreground tabular-nums">
+                                    {saved ? `#${row.savedNumber}` : "Nový kontakt"}
+                                </span>
+                                <StatusCell
+                                    row={row}
+                                    isEditing={isEditing}
+                                    editPending={editPending}
+                                    onRetry={() => saveRow(row.id)}
+                                    onStartEdit={() => startEditSaved(row)}
+                                    onSaveEdit={() => row.savedId && saveEditSaved(row.savedId)}
+                                    onCancelEdit={cancelEditSaved}
+                                    onDelete={() => deleteSaved(row)}
+                                />
+                            </div>
+                            <MobileField
+                                label="Web"
+                                value={isEditing ? editForm.website : row.website}
+                                onChange={isEditing ? (v) => setEditForm((f) => ({ ...f, website: v })) : (v) => updateField(row.id, "website", v)}
+                                onKeyDown={saved ? noop : (e) => handleKeyDown(row.id, e)}
+                                disabled={saved && !isEditing}
+                                placeholder="kovac.sk"
+                            />
+                            <MobileField
+                                label="Telefón"
+                                value={isEditing ? editForm.phone : row.phone}
+                                onChange={isEditing ? (v) => setEditForm((f) => ({ ...f, phone: v })) : (v) => updateField(row.id, "phone", v)}
+                                onKeyDown={saved ? noop : (e) => handleKeyDown(row.id, e)}
+                                disabled={saved && !isEditing}
+                                placeholder="0905 123 456"
+                                inputMode="tel"
+                            />
+                            <MobileField
+                                label="Firma"
+                                value={isEditing ? editForm.companyName : row.companyName}
+                                onChange={isEditing ? (v) => setEditForm((f) => ({ ...f, companyName: v })) : (v) => updateField(row.id, "companyName", v)}
+                                onKeyDown={saved ? noop : (e) => handleKeyDown(row.id, e)}
+                                disabled={saved && !isEditing}
+                                placeholder="Autoservis Kováč"
+                            />
+                            <MobileField
+                                label="Poznámka"
+                                value={isEditing ? editForm.note : row.note}
+                                onChange={isEditing ? (v) => setEditForm((f) => ({ ...f, note: v })) : (v) => updateField(row.id, "note", v)}
+                                onKeyDown={saved ? noop : (e) => handleKeyDown(row.id, e)}
+                                disabled={saved && !isEditing}
+                                placeholder="stará stránka, len vizitka…"
+                            />
+                            {row.status === "error" && row.error && (
+                                <p className="text-xs text-destructive">{row.error}</p>
+                            )}
+                            {isEditing && editError && (
+                                <p className="text-xs text-destructive">{editError}</p>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+
+            {/* DESKTOP: spreadsheet (hidden md:block) */}
+            <div className="hidden overflow-x-auto rounded-lg border bg-card md:block">
                 <div className="min-w-[820px]">
                     <div className="grid grid-cols-[1fr_0.9fr_1.4fr_1.6fr_5.5rem] border-b bg-muted/50 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         <HeaderCell>Web</HeaderCell>
@@ -327,6 +405,41 @@ function GridInput({ value, onChange, onKeyDown, disabled, placeholder, inputMod
                 inputMode={inputMode}
                 autoComplete="off"
                 className="w-full bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:bg-accent/40 disabled:cursor-default disabled:text-muted-foreground"
+            />
+        </div>
+    );
+}
+
+function MobileField({
+    label,
+    value,
+    onChange,
+    onKeyDown,
+    disabled,
+    placeholder,
+    inputMode,
+}: {
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    onKeyDown: (e: React.KeyboardEvent) => void;
+    disabled?: boolean;
+    placeholder?: string;
+    inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"];
+}) {
+    return (
+        <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">{label}</label>
+            <input
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                onKeyDown={onKeyDown}
+                disabled={disabled}
+                placeholder={placeholder}
+                inputMode={inputMode}
+                autoComplete="off"
+                // text-base zabráni iOS auto-zoomu pri focuse
+                className="w-full rounded-md border bg-transparent px-3 py-2 text-base outline-none placeholder:text-muted-foreground/50 focus:border-ring disabled:cursor-default disabled:text-muted-foreground"
             />
         </div>
     );
