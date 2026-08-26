@@ -89,9 +89,21 @@ export const PROJECT_TYPE_LABEL: Record<ProjectType, string> = {
 
 export const ROLE_LABEL: Record<Role, string> = {
     SCOUT: "Pridávač kontaktov",
+    SCOUT_LEADER: "Vedúci pridávačov",
     TELESALES: "Marketing (volania)",
     MANAGER: "Manažér",
     ADMIN: "Admin",
+};
+
+// Poradie rolí pre výbery (admin formuláre). Jediné miesto – nová rola sa dopĺňa tu.
+export const ROLES: Role[] = ["SCOUT", "SCOUT_LEADER", "TELESALES", "MANAGER", "ADMIN"];
+
+export const ROLE_VARIANT: Record<Role, "default" | "secondary" | "outline" | "destructive"> = {
+    ADMIN: "destructive",
+    MANAGER: "default",
+    TELESALES: "secondary",
+    SCOUT_LEADER: "default",
+    SCOUT: "outline",
 };
 
 // Tracking confidence – "signál, nie dôkaz". Pozri docs/tracking-system-plan.md.

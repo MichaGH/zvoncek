@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { can } from "@/lib/permissions";
 import { usernameSchema, emailSchema, passwordSchema } from "@/lib/domain/validation";
 import { z } from "zod";
-import type { Role } from "@/app/generated/prisma/enums";
+import { Role } from "@/app/generated/prisma/enums";
 
 type Result<T = void> = { ok: true; data?: T } | { ok: false; error: string };
 
@@ -31,7 +31,7 @@ const CreateUserSchema = z.object({
     username: usernameSchema,
     email: z.union([emailSchema, z.literal("")]).optional(),
     phone: z.string().max(30).optional(),
-    role: z.enum(["SCOUT", "TELESALES", "MANAGER", "ADMIN"]),
+    role: z.enum(Role),
     password: passwordSchema,
 });
 
@@ -88,7 +88,7 @@ const UpdateProfileSchema = z.object({
     username: usernameSchema,
     email: z.union([emailSchema, z.literal("")]).optional(),
     phone: z.string().max(30).optional(),
-    role: z.enum(["SCOUT", "TELESALES", "MANAGER", "ADMIN"]),
+    role: z.enum(Role),
     note: z.string().max(500).optional(),
 });
 

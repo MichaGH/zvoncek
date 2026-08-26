@@ -15,10 +15,16 @@ import {
 import {
     getCallStats,
     getCallStatsByUser,
+    getCallsDaily,
     getContactPoolStats,
     getContactsAddedStats,
+    getContactsAddedDaily,
+    getContactsAddingLog,
     getStatsUsers,
+    type AddingByUser,
 } from "@/lib/queries/stats";
+import { getTeamOptions, getTeamPeople, getTeamScopeForLeader } from "@/lib/queries/teams";
+import ActivityHeatmap from "@/components/stats/ActivityHeatmap";
 import { OUTCOME_LABEL, STATUS_LABEL } from "@/lib/dictionaries";
 import { resolveRange, toDateInput } from "@/lib/stats/range";
 import { can } from "@/lib/permissions";
@@ -54,54 +60,173 @@ const STATUS_ORDER: LeadStatus[] = [
 export default async function StatsPage({
     searchParams,
 }: {
-    searchParams: Promise<{ period?: string; from?: string; to?: string; userId?: string }>;
+    searchParams: Promise<{
+        period?: string;
+        from?: string;
+        to?: string;
+        userId?: string;
+        team?: string;
+    }>;
 }) {
     const session = await auth();
     if (!session?.user?.id) return null;
 
-    const { period, from, to, userId } = await searchParams;
-    const canFilterUsers = can(session.user, "stats.viewAll");
-
-    // Bez práva vidieť všetkých → len vlastné čísla.
-    const selectedUserId = canFilterUsers ? userId : session.user.id;
+    const { period, from, to, userId, team } = await searchParams;
+    const canViewAll = can(session.user, "stats.viewAll"); // manager/admin – všetko
+    const canViewTeam = can(session.user, "stats.viewTeam"); // vedúci – len jeho tím
+    const isLeaderView = canViewTeam && !canViewAll;
     const range = resolveRange({ period, from, to });
 
-    const [callStats, perUser, pool, contactsAdded, users] = await Promise.all([
-        getCallStats({ range, userId: selectedUserId }),
-        canFilterUsers ? getCallStatsByUser({ range }) : Promise.resolve([]),
-        getContactPoolStats(),
-        getContactsAddedStats({ range, userId: selectedUserId }),
-        canFilterUsers ? getStatsUsers() : Promise.resolve([]),
-    ]);
+    // ── Scope (vždy server-side). Presne jedno z scopeUserId / scopeUserIds. ──
+    let scopeUserId: string | undefined;
+    let scopeUserIds: string[] | undefined;
+    let statsUsers: { id: string; firstName: string; lastName: string }[] = [];
+    let teamOptions: { id: string; name: string }[] = [];
+    let leaderPeople: { id: string; name: string; isLeader: boolean }[] = [];
+    let teamName: string | undefined;
+
+    if (canViewAll) {
+        const [users, teams] = await Promise.all([getStatsUsers(), getTeamOptions()]);
+        statsUsers = users;
+        teamOptions = teams;
+        if (userId) {
+            scopeUserId = userId;
+        } else if (team) {
+            const tp = await getTeamPeople(team);
+            scopeUserIds = tp?.ids ?? [];
+            teamName = tp?.name;
+        }
+    } else if (canViewTeam) {
+        const scope = await getTeamScopeForLeader(session.user.id);
+        const ids = scope?.ids ?? [session.user.id];
+        leaderPeople = scope?.people ?? [];
+        teamName = scope?.name;
+        if (userId && ids.includes(userId)) {
+            scopeUserId = userId;
+        } else {
+            scopeUserIds = ids;
+        }
+    } else {
+        // Fallback: len vlastné čísla.
+        scopeUserId = session.user.id;
+    }
+
+    const showCallSections = canViewAll;
+    const showPool = canViewAll;
+    const effectiveIds = scopeUserId ? [scopeUserId] : (scopeUserIds ?? []);
+    const showAddingLog = isLeaderView || (canViewAll && effectiveIds.length > 0);
+    const showPerUserBreakdown = !scopeUserId; // agregát (všetci / tím)
+
+    // Okno heatmapy = zvolené obdobie hore (heatmapa sa naň „zoomne").
+    // Pri „Všetko" (bez from) fallback na 26 týždňov; strop ~53 týždňov.
+    const DAY_MS = 86_400_000;
+    const startToday = new Date();
+    startToday.setHours(0, 0, 0, 0);
+    const hmTo = range.to ?? new Date(startToday.getTime() + DAY_MS); // vrátane dneška
+    let hmFrom = range.from ?? new Date(startToday.getTime() - DAY_MS * (7 * 26 - 1));
+    const HM_MAX_MS = DAY_MS * 7 * 53;
+    if (hmTo.getTime() - hmFrom.getTime() > HM_MAX_MS) {
+        hmFrom = new Date(hmTo.getTime() - HM_MAX_MS);
+    }
+    const heatmapLabel = range.key === "all" ? "posledných 26 týždňov" : range.label;
+
+    const [callStats, perUser, pool, contactsAdded, addingLog, addsDaily, callsDaily] =
+        await Promise.all([
+            showCallSections
+                ? getCallStats({ range, userId: scopeUserId, userIds: scopeUserIds })
+                : Promise.resolve(null),
+            canViewAll && !scopeUserId && !scopeUserIds
+                ? getCallStatsByUser({ range })
+                : Promise.resolve([]),
+            showPool ? getContactPoolStats() : Promise.resolve(null),
+            getContactsAddedStats({ range, userId: scopeUserId, userIds: scopeUserIds }),
+            showAddingLog
+                ? getContactsAddingLog({ range, userIds: effectiveIds })
+                : Promise.resolve([]),
+            // Heatmapa pridávania – vidia všetci s prístupom na štatistiky (kontaktové dáta).
+            getContactsAddedDaily({ userId: scopeUserId, userIds: scopeUserIds, from: hmFrom, to: hmTo }),
+            // Heatmapa volaní – LEN manager/admin (lídrovi sa ani nefetchne).
+            showCallSections
+                ? getCallsDaily({ userId: scopeUserId, userIds: scopeUserIds, from: hmFrom, to: hmTo })
+                : Promise.resolve([]),
+        ]);
 
     return (
         <DashboardPage>
             <DashboardPageHeader
                 title="Štatistiky"
-                description={`Volania marketingu · ${range.label}`}
+                description={
+                    isLeaderView
+                        ? `Tím ${teamName ?? "—"} · ${range.label}`
+                        : `Volania marketingu · ${range.label}`
+                }
             >
                 <StatsPeriodPicker
                     current={range.key}
-                    userId={selectedUserId}
+                    userId={scopeUserId}
+                    team={team}
                     from={toDateInput(range.from)}
                     to={range.to ? toDateInput(new Date(range.to.getTime() - 1)) : ""}
                 />
             </DashboardPageHeader>
 
-            {canFilterUsers && (
+            {/* Výber (manager/admin): kto + tím */}
+            {canViewAll && (
+                <div className="mb-6 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs text-muted-foreground w-12">Kto</span>
+                        <Button asChild size="sm" variant={!scopeUserId && !team ? "default" : "outline"}>
+                            <Link href={periodHref({ period: range.key, from, to })}>Všetci</Link>
+                        </Button>
+                        {statsUsers.map((user) => (
+                            <Button
+                                key={user.id}
+                                asChild
+                                size="sm"
+                                variant={scopeUserId === user.id ? "default" : "outline"}
+                            >
+                                <Link href={periodHref({ period: range.key, from, to, userId: user.id })}>
+                                    {user.firstName} {user.lastName}
+                                </Link>
+                            </Button>
+                        ))}
+                    </div>
+                    {teamOptions.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs text-muted-foreground w-12">Tím</span>
+                            {teamOptions.map((t) => (
+                                <Button
+                                    key={t.id}
+                                    asChild
+                                    size="sm"
+                                    variant={team === t.id ? "default" : "outline"}
+                                >
+                                    <Link href={periodHref({ period: range.key, from, to, team: t.id })}>
+                                        {t.name}
+                                    </Link>
+                                </Button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Výber (vedúci): celý tím / konkrétny člen */}
+            {isLeaderView && leaderPeople.length > 0 && (
                 <div className="mb-6 flex flex-wrap gap-2">
-                    <Button asChild size="sm" variant={!selectedUserId ? "default" : "outline"}>
-                        <Link href={periodHref({ period: range.key, from, to })}>Všetci</Link>
+                    <Button asChild size="sm" variant={!scopeUserId ? "default" : "outline"}>
+                        <Link href={periodHref({ period: range.key, from, to })}>Celý tím</Link>
                     </Button>
-                    {users.map((user) => (
+                    {leaderPeople.map((p) => (
                         <Button
-                            key={user.id}
+                            key={p.id}
                             asChild
                             size="sm"
-                            variant={selectedUserId === user.id ? "default" : "outline"}
+                            variant={scopeUserId === p.id ? "default" : "outline"}
                         >
-                            <Link href={periodHref({ period: range.key, from, to, userId: user.id })}>
-                                {user.firstName} {user.lastName}
+                            <Link href={periodHref({ period: range.key, from, to, userId: p.id })}>
+                                {p.name}
+                                {p.isLeader ? " (vedúci)" : ""}
                             </Link>
                         </Button>
                     ))}
@@ -109,207 +234,270 @@ export default async function StatsPage({
             )}
 
             <section className="space-y-6">
-                {/* Call overview */}
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <StatCard label="Hovory" value={callStats.totalCalls} hint="zaznamenané vo fronte" />
-                    <StatCard
-                        label="Dovolané"
-                        value={callStats.reached}
-                        hint={`${callStats.reachRate} % z hovorov`}
-                    />
-                    <StatCard
-                        label="Záujem"
-                        value={callStats.interested}
-                        hint="CP / návrh / email / pozitívne"
-                    />
-                    <StatCard label="Bez záujmu" value={callStats.notInterested} />
-                </div>
+                {/* Call overview – len manager/admin */}
+                {showCallSections && callStats && (
+                    <>
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                            <StatCard label="Hovory" value={callStats.totalCalls} hint="zaznamenané vo fronte" />
+                            <StatCard
+                                label="Dovolané"
+                                value={callStats.reached}
+                                hint={`${callStats.reachRate} % z hovorov`}
+                            />
+                            <StatCard
+                                label="Záujem"
+                                value={callStats.interested}
+                                hint="CP / návrh / email / pozitívne"
+                            />
+                            <StatCard label="Bez záujmu" value={callStats.notInterested} />
+                        </div>
 
-                {/* Outcome breakdown + quick wants */}
-                <div className="grid gap-6 lg:grid-cols-2">
-                    <Card>
-                        <CardHeader className="pb-3">
-                            <CardTitle className="text-base">Výsledky hovorov</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                            {callStats.totalCalls === 0 ? (
-                                <p className="text-sm text-muted-foreground">
-                                    Žiadne hovory v tomto období.
-                                </p>
-                            ) : (
-                                OUTCOME_ORDER.map((outcome) => (
-                                    <StatBar
-                                        key={outcome}
-                                        label={OUTCOME_LABEL[outcome]}
-                                        count={callStats.byOutcome[outcome]}
-                                        total={callStats.totalCalls}
-                                        accent={
-                                            GOOD.includes(outcome)
-                                                ? "good"
-                                                : BAD.includes(outcome)
-                                                  ? "bad"
-                                                  : "muted"
-                                        }
+                        <div className="grid gap-6 lg:grid-cols-2">
+                            <Card>
+                                <CardHeader className="pb-3">
+                                    <CardTitle className="text-base">Výsledky hovorov</CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                    {callStats.totalCalls === 0 ? (
+                                        <p className="text-sm text-muted-foreground">
+                                            Žiadne hovory v tomto období.
+                                        </p>
+                                    ) : (
+                                        OUTCOME_ORDER.map((outcome) => (
+                                            <StatBar
+                                                key={outcome}
+                                                label={OUTCOME_LABEL[outcome]}
+                                                count={callStats.byOutcome[outcome]}
+                                                total={callStats.totalCalls}
+                                                accent={
+                                                    GOOD.includes(outcome)
+                                                        ? "good"
+                                                        : BAD.includes(outcome)
+                                                          ? "bad"
+                                                          : "muted"
+                                                }
+                                            />
+                                        ))
+                                    )}
+                                </CardContent>
+                            </Card>
+
+                            <Card>
+                                <CardHeader className="pb-3">
+                                    <CardTitle className="text-base">Čo chceli</CardTitle>
+                                </CardHeader>
+                                <CardContent className="grid grid-cols-3 gap-4">
+                                    <Mini label="Cenová ponuka" value={callStats.byOutcome.WANTS_QUOTE} />
+                                    <Mini label="Návrh" value={callStats.byOutcome.WANTS_DESIGN} />
+                                    <Mini label="Email" value={callStats.byOutcome.WANTS_EMAIL} />
+                                </CardContent>
+                            </Card>
+                        </div>
+
+                        <div className="grid items-start gap-6 lg:grid-cols-2">
+                            <Card>
+                                <CardHeader className="pb-3">
+                                    <CardTitle className="text-base">Heatmapa volaní</CardTitle>
+                                </CardHeader>
+                                <CardContent>
+                                    <ActivityHeatmap
+                                        data={callsDaily}
+                                        palette="sky"
+                                        noun="hovory"
+                                        label={`Koľko hovorov sa uskutočnilo v ktorý deň · ${heatmapLabel}`}
                                     />
-                                ))
+                                </CardContent>
+                            </Card>
+
+                            {perUser.length > 0 && (
+                                <Card>
+                                    <CardHeader className="pb-3">
+                                        <CardTitle className="text-base">Výkon podľa volajúceho</CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="px-0">
+                                        <Table>
+                                            <TableHeader>
+                                                <TableRow>
+                                                    <TableHead className="pl-(--card-spacing)">Volajúci</TableHead>
+                                                    <TableHead className="text-right">Hovory</TableHead>
+                                                    <TableHead className="text-right">Dovolané</TableHead>
+                                                    <TableHead className="text-right">Záujem</TableHead>
+                                                    <TableHead className="pr-(--card-spacing) text-right">Bez záujmu</TableHead>
+                                                </TableRow>
+                                            </TableHeader>
+                                            <TableBody>
+                                                {perUser.map((u) => (
+                                                    <TableRow key={u.userId}>
+                                                        <TableCell className="pl-(--card-spacing) font-medium">{u.name}</TableCell>
+                                                        <TableCell className="text-right tabular-nums">{u.calls}</TableCell>
+                                                        <TableCell className="text-right tabular-nums">{u.reached}</TableCell>
+                                                        <TableCell className="text-right tabular-nums">{u.interested}</TableCell>
+                                                        <TableCell className="pr-(--card-spacing) text-right tabular-nums">
+                                                            {u.notInterested}
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))}
+                                            </TableBody>
+                                        </Table>
+                                    </CardContent>
+                                </Card>
                             )}
-                        </CardContent>
-                    </Card>
-
-                    <Card>
-                        <CardHeader className="pb-3">
-                            <CardTitle className="text-base">Čo chceli</CardTitle>
-                        </CardHeader>
-                        <CardContent className="grid grid-cols-3 gap-4">
-                            <Mini label="Cenová ponuka" value={callStats.byOutcome.WANTS_QUOTE} />
-                            <Mini label="Návrh" value={callStats.byOutcome.WANTS_DESIGN} />
-                            <Mini label="Email" value={callStats.byOutcome.WANTS_EMAIL} />
-                        </CardContent>
-                    </Card>
-                </div>
-
-                {/* Per-user performance (managers, all users) */}
-                {canFilterUsers && !selectedUserId && perUser.length > 0 && (
-                    <Card>
-                        <CardHeader className="pb-3">
-                            <CardTitle className="text-base">Výkon podľa volajúceho</CardTitle>
-                        </CardHeader>
-                        <CardContent className="px-0">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="pl-(--card-spacing)">Volajúci</TableHead>
-                                        <TableHead className="text-right">Hovory</TableHead>
-                                        <TableHead className="text-right">Dovolané</TableHead>
-                                        <TableHead className="text-right">Záujem</TableHead>
-                                        <TableHead className="pr-(--card-spacing) text-right">Bez záujmu</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {perUser.map((u) => (
-                                        <TableRow key={u.userId}>
-                                            <TableCell className="pl-(--card-spacing) font-medium">{u.name}</TableCell>
-                                            <TableCell className="text-right tabular-nums">{u.calls}</TableCell>
-                                            <TableCell className="text-right tabular-nums">{u.reached}</TableCell>
-                                            <TableCell className="text-right tabular-nums">{u.interested}</TableCell>
-                                            <TableCell className="pr-(--card-spacing) text-right tabular-nums">
-                                                {u.notInterested}
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                        </CardContent>
-                    </Card>
+                        </div>
+                    </>
                 )}
 
-                {/* Contacts added in the selected range (data-entry productivity) */}
+                {/* Pridané kontakty – vidia všetci s prístupom na štatistiky */}
                 <div>
                     <h2 className="mb-1 text-lg font-semibold tracking-tight">Pridané kontakty</h2>
                     <p className="mb-4 text-sm text-muted-foreground">
-                        Nové firmy pridané do databázy · {range.label}.
+                        {isLeaderView
+                            ? `Nové firmy pridané tímom${teamName ? ` ${teamName}` : ""} · ${range.label}.`
+                            : `Nové firmy pridané do databázy · ${range.label}.`}
                     </p>
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                         <StatCard label="Pridané" value={contactsAdded.total} hint={range.label} />
                     </div>
 
-                    {canFilterUsers && !selectedUserId && contactsAdded.perUser.length > 0 && (
-                        <Card className="mt-4">
+                    <div className="mt-4 grid items-start gap-6 lg:grid-cols-2">
+                        <Card>
                             <CardHeader className="pb-3">
-                                <CardTitle className="text-base">Podľa používateľa</CardTitle>
+                                <CardTitle className="text-base">Heatmapa pridávania</CardTitle>
                             </CardHeader>
-                            <CardContent className="px-0">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead className="pl-(--card-spacing)">Používateľ</TableHead>
-                                            <TableHead className="pr-(--card-spacing) text-right">Pridané</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {contactsAdded.perUser.map((u) => (
-                                            <TableRow key={u.userId}>
-                                                <TableCell className="pl-(--card-spacing) font-medium">{u.name}</TableCell>
-                                                <TableCell className="pr-(--card-spacing) text-right tabular-nums">
-                                                    {u.count}
-                                                </TableCell>
+                            <CardContent>
+                                <ActivityHeatmap
+                                    data={addsDaily}
+                                    palette="emerald"
+                                    noun="pridané"
+                                    label={`Koľko kontaktov sa pridalo v ktorý deň · ${heatmapLabel}`}
+                                />
+                            </CardContent>
+                        </Card>
+
+                        {showPerUserBreakdown && contactsAdded.perUser.length > 0 && (
+                            <Card>
+                                <CardHeader className="pb-3">
+                                    <CardTitle className="text-base">Podľa používateľa</CardTitle>
+                                </CardHeader>
+                                <CardContent className="px-0">
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow>
+                                                <TableHead className="pl-(--card-spacing)">Používateľ</TableHead>
+                                                <TableHead className="pr-(--card-spacing) text-right">Pridané</TableHead>
                                             </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </CardContent>
-                        </Card>
-                    )}
+                                        </TableHeader>
+                                        <TableBody>
+                                            {contactsAdded.perUser.map((u) => (
+                                                <TableRow key={u.userId}>
+                                                    <TableCell className="pl-(--card-spacing) font-medium">{u.name}</TableCell>
+                                                    <TableCell className="pr-(--card-spacing) text-right tabular-nums">
+                                                        {u.count}
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                </CardContent>
+                            </Card>
+                        )}
+                    </div>
                 </div>
 
-                {/* Contact pool (company-wide, not time-bound) */}
-                <div>
-                    <h2 className="mb-1 text-lg font-semibold tracking-tight">Databáza kontaktov</h2>
-                    <p className="mb-4 text-sm text-muted-foreground">
-                        Aktuálny stav – nezávislé od zvoleného obdobia.
-                    </p>
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                        <StatCard label="Všetky kontakty" value={pool.total} />
-                        <StatCard
-                            label="Ešte nevolané"
-                            value={pool.uncalled}
-                            hint={`${pool.unassignedUncalled} nepriradených`}
-                        />
-                        <StatCard label="Vyhrané" value={pool.byStatus.WON} />
-                        <StatCard
-                            label="Hodnota vyhraných"
-                            value={`${pool.wonValue.toLocaleString("sk-SK")} €`}
-                        />
-                    </div>
-
-                    <div className="mt-4 grid gap-6 lg:grid-cols-2">
-                        <Card>
-                            <CardHeader className="pb-3">
-                                <CardTitle className="text-base">Podľa stavu</CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-3">
-                                {STATUS_ORDER.map((status) => (
-                                    <StatBar
-                                        key={status}
-                                        label={STATUS_LABEL[status]}
-                                        count={pool.byStatus[status]}
-                                        total={pool.total}
-                                        accent="muted"
-                                    />
+                {/* História pridávania – prvý/posledný kontakt za deň */}
+                {showAddingLog && (
+                    <div>
+                        <h2 className="mb-1 text-lg font-semibold tracking-tight">História pridávania</h2>
+                        <p className="mb-4 text-sm text-muted-foreground">
+                            Prvý a posledný pridaný kontakt v daný deň + počet · {range.label}.
+                        </p>
+                        {addingLog.length === 0 ? (
+                            <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+                                {scopeUserId
+                                    ? "Vybraná osoba v tomto období nepridala žiadny kontakt."
+                                    : "V tomto období nikto z tímu nepridal kontakt."}
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                {addingLog.map((u) => (
+                                    <AddingLogCard key={u.userId} user={u} />
                                 ))}
-                            </CardContent>
-                        </Card>
-
-                        <Card>
-                            <CardHeader className="pb-3">
-                                <CardTitle className="text-base">Nevolané – priradenie</CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-2 text-sm">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-muted-foreground">Nepriradené (spoločný fond)</span>
-                                    <span className="font-medium tabular-nums">{pool.unassignedUncalled}</span>
-                                </div>
-                                {pool.assignedUncalled.length > 0 ? (
-                                    pool.assignedUncalled.map((u) => (
-                                        <div key={u.userId} className="flex items-center justify-between">
-                                            <span>{u.name}</span>
-                                            <span className="font-medium tabular-nums">{u.count}</span>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <p className="text-xs text-muted-foreground">
-                                        Kontakty zatiaľ nie sú priradené konkrétnym volajúcim. Pripravené na
-                                        neskôr, keď bude volať viac ľudí.
-                                    </p>
-                                )}
-                            </CardContent>
-                        </Card>
+                            </div>
+                        )}
                     </div>
-                </div>
+                )}
 
-                <p className="text-xs text-muted-foreground">
-                    TODO: štatistiky z pipeline (konverzia záujem → vyhraté, reálne platby) pribudnú neskôr.
-                </p>
+                {/* Contact pool – len manager/admin */}
+                {showPool && pool && (
+                    <div>
+                        <h2 className="mb-1 text-lg font-semibold tracking-tight">Databáza kontaktov</h2>
+                        <p className="mb-4 text-sm text-muted-foreground">
+                            Aktuálny stav – nezávislé od zvoleného obdobia.
+                        </p>
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                            <StatCard label="Všetky kontakty" value={pool.total} />
+                            <StatCard
+                                label="Ešte nevolané"
+                                value={pool.uncalled}
+                                hint={`${pool.unassignedUncalled} nepriradených`}
+                            />
+                            <StatCard label="Vyhrané" value={pool.byStatus.WON} />
+                            <StatCard
+                                label="Hodnota vyhraných"
+                                value={`${pool.wonValue.toLocaleString("sk-SK")} €`}
+                            />
+                        </div>
+
+                        <div className="mt-4 grid gap-6 lg:grid-cols-2">
+                            <Card>
+                                <CardHeader className="pb-3">
+                                    <CardTitle className="text-base">Podľa stavu</CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                    {STATUS_ORDER.map((status) => (
+                                        <StatBar
+                                            key={status}
+                                            label={STATUS_LABEL[status]}
+                                            count={pool.byStatus[status]}
+                                            total={pool.total}
+                                            accent="muted"
+                                        />
+                                    ))}
+                                </CardContent>
+                            </Card>
+
+                            <Card>
+                                <CardHeader className="pb-3">
+                                    <CardTitle className="text-base">Nevolané – priradenie</CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-2 text-sm">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-muted-foreground">Nepriradené (spoločný fond)</span>
+                                        <span className="font-medium tabular-nums">{pool.unassignedUncalled}</span>
+                                    </div>
+                                    {pool.assignedUncalled.length > 0 ? (
+                                        pool.assignedUncalled.map((u) => (
+                                            <div key={u.userId} className="flex items-center justify-between">
+                                                <span>{u.name}</span>
+                                                <span className="font-medium tabular-nums">{u.count}</span>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <p className="text-xs text-muted-foreground">
+                                            Kontakty zatiaľ nie sú priradené konkrétnym volajúcim. Pripravené na
+                                            neskôr, keď bude volať viac ľudí.
+                                        </p>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        </div>
+                    </div>
+                )}
+
+                {canViewAll && (
+                    <p className="text-xs text-muted-foreground">
+                        TODO: štatistiky z pipeline (konverzia záujem → vyhraté, reálne platby) pribudnú neskôr.
+                    </p>
+                )}
             </section>
         </DashboardPage>
     );
@@ -320,11 +508,13 @@ function periodHref({
     from,
     to,
     userId,
+    team,
 }: {
     period: string;
     from?: string;
     to?: string;
     userId?: string;
+    team?: string;
 }) {
     const sp = new URLSearchParams({ period });
     if (period === "custom") {
@@ -332,6 +522,7 @@ function periodHref({
         if (to) sp.set("to", to);
     }
     if (userId) sp.set("userId", userId);
+    if (team) sp.set("team", team);
     return `/dashboard/stats?${sp.toString()}`;
 }
 
@@ -341,5 +532,55 @@ function Mini({ label, value }: { label: string; value: number }) {
             <p className="text-2xl font-semibold tabular-nums">{value}</p>
             <p className="text-xs text-muted-foreground">{label}</p>
         </div>
+    );
+}
+
+function fmtDay(dateKey: string) {
+    const [y, m, d] = dateKey.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString("sk-SK", {
+        weekday: "short",
+        day: "numeric",
+        month: "numeric",
+    });
+}
+
+function fmtTime(iso: string) {
+    return new Date(iso).toLocaleTimeString("sk-SK", { hour: "2-digit", minute: "2-digit" });
+}
+
+function AddingLogCard({ user }: { user: AddingByUser }) {
+    return (
+        <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+                <CardTitle className="text-base">{user.name}</CardTitle>
+                <span className="text-sm text-muted-foreground tabular-nums">{user.total} pridaných</span>
+            </CardHeader>
+            <CardContent className="px-0">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead className="pl-(--card-spacing)">Deň</TableHead>
+                            <TableHead className="text-right">Počet</TableHead>
+                            <TableHead className="text-right">Prvý</TableHead>
+                            <TableHead className="pr-(--card-spacing) text-right">Posledný</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {user.days.map((d) => (
+                            <TableRow key={d.date}>
+                                <TableCell className="pl-(--card-spacing)">{fmtDay(d.date)}</TableCell>
+                                <TableCell className="text-right tabular-nums">{d.count}</TableCell>
+                                <TableCell className="text-right tabular-nums text-muted-foreground">
+                                    {fmtTime(d.firstAt)}
+                                </TableCell>
+                                <TableCell className="pr-(--card-spacing) text-right tabular-nums text-muted-foreground">
+                                    {fmtTime(d.lastAt)}
+                                </TableCell>
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                </Table>
+            </CardContent>
+        </Card>
     );
 }

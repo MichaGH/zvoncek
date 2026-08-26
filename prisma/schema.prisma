@@ -32,8 +32,27 @@ model User {
   createdLeads Lead[]     @relation("CreatedLeads")
   activities   Activity[]
 
+  // Tímy: user je členom max. jedného tímu (teamId) a zároveň môže viesť max. jeden tím (leadsTeam).
+  team      Team?   @relation("TeamMembers", fields: [teamId], references: [id])
+  teamId    String?
+  leadsTeam Team?   @relation("TeamLeader")
+
   @@index([deletedAt])
   @@index([role])
+  @@index([teamId])
+}
+
+// Tím = pomenovaná skupina ľudí s jedným vedúcim. Model je zámerne rolovo
+// neutrálny: čo vedúci o tíme vidí, určujú jeho práva (SCOUT_LEADER vidí pridané
+// kontakty; budúci telesales/spoločný vedúci dostane call práva) – nie typ tímu.
+model Team {
+  id        String   @id @default(cuid())
+  name      String // custom názov, zadá admin
+  leader    User?    @relation("TeamLeader", fields: [leaderId], references: [id])
+  leaderId  String?  @unique // 1 vedúci = 1 tím; nullable kým nie je priradený
+  members   User[]   @relation("TeamMembers")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Invite {
@@ -171,6 +190,7 @@ enum CallOutcome {
 
 enum Role {
   SCOUT // pridáva kontakty (vidí len svoje, kým nie sú obvolané)
+  SCOUT_LEADER // vedie tím scoutov – vidí ich pridané kontakty, históriu a štatistiky
   TELESALES // prvotné volanie / marketing – rieši calls
   MANAGER // vidí a rieši všetko
   ADMIN // všetko + používatelia, admin stránky

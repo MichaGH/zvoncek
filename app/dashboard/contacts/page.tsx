@@ -18,6 +18,7 @@ import { CONTACTS_PAGE_SIZE, getContactsList, getContactsOverview } from "@/lib/
 import { STATUS_LABEL, STATUS_VARIANT } from "@/lib/dictionaries";
 import { can } from "@/lib/permissions";
 import { getUserOptions } from "@/lib/queries/users";
+import { getTeamOptions, getTeamPeople, getTeamScopeForLeader } from "@/lib/queries/teams";
 import { cn } from "@/lib/utils";
 import { Plus, StickyNote } from "lucide-react";
 
@@ -36,32 +37,82 @@ function formatDate(iso: string) {
 export default async function ContactsPage({
     searchParams,
 }: {
-    searchParams: Promise<{ q?: string; limit?: string; createdBy?: string; assignedTo?: string }>;
+    searchParams: Promise<{
+        q?: string;
+        limit?: string;
+        createdBy?: string;
+        assignedTo?: string;
+        team?: string;
+    }>;
 }) {
     const session = await auth();
     if (!session?.user?.id) return null;
 
-    const { q, limit, createdBy, assignedTo } = await searchParams;
+    const { q, limit, createdBy, assignedTo, team } = await searchParams;
     const parsedLimit = Number(limit);
     const take =
         Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : CONTACTS_PAGE_SIZE;
 
-    const isManager = can(session.user, "contacts.viewAll");
-    const scopeToOwn = !isManager;
-    const effectiveCreatedById = scopeToOwn ? session.user.id : (createdBy || undefined);
-    const effectiveOwnerId = isManager ? (assignedTo || undefined) : undefined;
+    const canViewAll = can(session.user, "contacts.viewAll"); // manager/admin
+    const canViewTeam = can(session.user, "contacts.viewTeam"); // vedúci pridávačov
 
-    const fetchUsers = isManager ? getUserOptions() : Promise.resolve([]);
-    const [{ rows, hasMore }, overview, users] = await Promise.all([
-        getContactsList({ query: q, take, createdById: effectiveCreatedById, ownerId: effectiveOwnerId }),
-        getContactsOverview(effectiveCreatedById),
-        fetchUsers,
+    // Scope sa vždy vyhodnotí server-side: použije sa práve jedno z
+    // createdById / createdByIds. Vedúci nikdy nevidí mimo svojho tímu.
+    let createdById: string | undefined;
+    let createdByIds: string[] | undefined;
+    let ownerId: string | undefined;
+
+    let filterUsers: { id: string; firstName: string; lastName: string }[] = [];
+    let filterTeams: { id: string; name: string }[] = [];
+    let showCreatedByFilter = false;
+    let showOwnerFilter = false;
+    let createdByLabel = "Všetci (od koho)";
+
+    if (canViewAll) {
+        // Manager/admin: voľný pohľad + filtre (človek, tím, assigned).
+        ownerId = assignedTo || undefined;
+        if (createdBy) {
+            createdById = createdBy;
+        } else if (team) {
+            const tp = await getTeamPeople(team);
+            createdByIds = tp?.ids ?? [];
+        }
+        const [allUsers, allTeams] = await Promise.all([getUserOptions(), getTeamOptions()]);
+        filterUsers = allUsers;
+        filterTeams = allTeams;
+        showCreatedByFilter = true;
+        showOwnerFilter = true;
+    } else if (canViewTeam) {
+        // Vedúci: len jeho tím. Drill na konkrétneho člena je obmedzený na tím.
+        const scope = await getTeamScopeForLeader(session.user.id);
+        const teamIds = scope?.ids ?? [session.user.id];
+        if (createdBy && teamIds.includes(createdBy)) {
+            createdById = createdBy;
+        } else {
+            createdByIds = teamIds;
+        }
+        filterUsers = (scope?.people ?? []).map((p) => ({
+            id: p.id,
+            firstName: p.name,
+            lastName: "",
+        }));
+        showCreatedByFilter = true;
+        createdByLabel = "Celý tím";
+    } else {
+        // Scout: len vlastné pridané.
+        createdById = session.user.id;
+    }
+
+    const [{ rows, hasMore }, overview] = await Promise.all([
+        getContactsList({ query: q, take, createdById, createdByIds, ownerId }),
+        getContactsOverview(createdById ? { createdById } : { createdByIds }),
     ]);
 
     const moreParams = new URLSearchParams();
     if (q) moreParams.set("q", q);
     if (createdBy) moreParams.set("createdBy", createdBy);
     if (assignedTo) moreParams.set("assignedTo", assignedTo);
+    if (team) moreParams.set("team", team);
     moreParams.set("limit", String(take + CONTACTS_PAGE_SIZE));
 
     return (
@@ -85,8 +136,12 @@ export default async function ContactsPage({
                     query={q}
                     createdBy={createdBy}
                     assignedTo={assignedTo}
-                    users={users}
-                    showFilters={isManager}
+                    team={team}
+                    users={filterUsers}
+                    teams={filterTeams}
+                    showCreatedByFilter={showCreatedByFilter}
+                    showOwnerFilter={showOwnerFilter}
+                    createdByLabel={createdByLabel}
                 />
             </DashboardPageHeader>
 

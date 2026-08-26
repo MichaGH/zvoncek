@@ -4,9 +4,11 @@ import { auth } from "@/auth";
 import prisma from "@/lib/db";
 import { createAuditActivity } from "@/lib/activityLog";
 import { can } from "@/lib/permissions";
+import { getTeamScopeForLeader } from "@/lib/queries/teams";
 import { revalidatePath } from "next/cache";
 
 // Scout smie upravovať/mazať len svoje a iba kým nie sú obvolané (status NEW).
+// Vedúci s contacts.manageTeam smie to isté pre NEW kontakty členov svojho tímu.
 // Manager/admin (contacts.deleteAny) smú hocičo.
 async function assertCanManageContact(
     user: unknown,
@@ -19,10 +21,17 @@ async function assertCanManageContact(
         select: { createdById: true, status: true },
     });
     if (!lead) return "Kontakt neexistuje.";
-    if (lead.createdById !== userId || lead.status !== "NEW") {
-        return "Môžeš upravovať len svoje ešte neobvolané kontakty.";
+
+    // Vlastný ešte neobvolaný kontakt.
+    if (lead.createdById === userId && lead.status === "NEW") return null;
+
+    // Vedúci tímu: NEW kontakt člena jeho tímu (scope vynútený server-side).
+    if (can(user, "contacts.manageTeam") && lead.status === "NEW" && lead.createdById) {
+        const scope = await getTeamScopeForLeader(userId);
+        if (scope?.ids.includes(lead.createdById)) return null;
     }
-    return null;
+
+    return "Môžeš upravovať len ešte neobvolané kontakty (svoje alebo svojho tímu).";
 }
 
 function revalidateContacts() {

@@ -7,10 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { adminCreateUser } from "@/lib/actions/admin";
-import { ROLE_LABEL } from "@/lib/dictionaries";
-import type { Role } from "@/app/generated/prisma/enums";
-
-const ROLES: Role[] = ["SCOUT", "TELESALES", "MANAGER", "ADMIN"];
+import { ROLE_LABEL, ROLES } from "@/lib/dictionaries";
 
 const PASSWORD_CHECKS = [
     { label: "Aspoň 8 znakov", test: (p: string) => p.length >= 8 },

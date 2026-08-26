@@ -1,24 +1,34 @@
-import type { Role } from "@/app/generated/prisma/enums";
+import { Role } from "@/app/generated/prisma/enums";
 
 // ── Práva (capabilities) ──────────────────────────────────────────────────────
 // Kód kontroluje PRÁVA, nie role. Pridať rolu = jeden riadok v matici nižšie.
 // Pridať právo = pridať do union + priradiť v matici + vynútiť (route/action/query).
+//
+// Tímové varianty (*.viewTeam / *.manageTeam) sú vedomé zúženie *.viewAll: vedúci
+// tímu vidí/spravuje len členov SVOJHO tímu (scoping vynútený server-side cez
+// getTeamScopeUserIds). Ten istý mechanizmus obslúži budúceho telesales/spoločného
+// vedúceho – stačí pridať rolu a priradiť jej existujúce tímové práva.
 export type Permission =
     | "today.view"
     | "calls.view"
     | "calls.work"
     | "callHistory.access"
     | "callHistory.viewAll"
+    | "callHistory.viewTeam"
     | "callHistory.revert"
     | "contacts.access"
     | "contacts.viewAll"
+    | "contacts.viewTeam"
     | "contacts.create"
     | "contacts.deleteOwnUncalled"
     | "contacts.deleteAny"
+    | "contacts.manageTeam"
     | "pipeline.view"
     | "pipeline.manage"
     | "stats.view"
     | "stats.viewAll"
+    | "stats.viewTeam"
+    | "teams.manage"
     | "admin.access"
     | "users.manage";
 
@@ -28,16 +38,21 @@ const ALL_PERMISSIONS: Permission[] = [
     "calls.work",
     "callHistory.access",
     "callHistory.viewAll",
+    "callHistory.viewTeam",
     "callHistory.revert",
     "contacts.access",
     "contacts.viewAll",
+    "contacts.viewTeam",
     "contacts.create",
     "contacts.deleteOwnUncalled",
     "contacts.deleteAny",
+    "contacts.manageTeam",
     "pipeline.view",
     "pipeline.manage",
     "stats.view",
     "stats.viewAll",
+    "stats.viewTeam",
+    "teams.manage",
     "admin.access",
     "users.manage",
 ];
@@ -46,6 +61,18 @@ const ALL_PERMISSIONS: Permission[] = [
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     // Pridávač kontaktov – vidí len svoje pridané kontakty (kým nie sú obvolané).
     SCOUT: ["today.view", "contacts.access", "contacts.create", "contacts.deleteOwnUncalled"],
+    // Vedúci tímu scoutov – vidí a spravuje kontakty/štatistiky SVOJHO tímu.
+    // `contacts.manageTeam` je zámerne oddelené: odobrať vedúcemu právo zasahovať
+    // do kontaktov tímu = zmazať tento jeden riadok, nič iné sa nemení.
+    SCOUT_LEADER: [
+        "today.view",
+        "contacts.access",
+        "contacts.create",
+        "contacts.viewTeam",
+        "contacts.manageTeam",
+        "stats.view",
+        "stats.viewTeam",
+    ],
     // Marketing / prvotné volanie – rieši calls + vlastnú históriu, môže rýchlo pridať kontakt.
     TELESALES: [
         "today.view",
@@ -81,10 +108,13 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
 // rolu vytiahneme bezpečne cez narrowing.
 type Userish = unknown;
 
+// Enum-driven narrowing: nová hodnota v Role enume je automaticky akceptovaná,
+// netreba ju dopisovať sem (jediné bývalé miesto, kde by nová rola potichu prepadla).
+const ROLE_VALUES = Object.values(Role) as string[];
+
 export function roleOf(user: Userish): Role | null {
     const r = (user as { role?: unknown } | null | undefined)?.role;
-    if (r === "SCOUT" || r === "TELESALES" || r === "MANAGER" || r === "ADMIN") return r;
-    return null;
+    return typeof r === "string" && ROLE_VALUES.includes(r) ? (r as Role) : null;
 }
 
 export function permissionsOf(user: Userish): Permission[] {

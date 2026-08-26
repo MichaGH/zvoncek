@@ -8,18 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { adminUpdateUser } from "@/lib/actions/admin";
-import { ROLE_LABEL } from "@/lib/dictionaries";
+import { ROLE_LABEL, ROLES, ROLE_VARIANT } from "@/lib/dictionaries";
 import type { AdminUserDetail } from "@/lib/queries/users";
-import type { Role } from "@/app/generated/prisma/enums";
-
-const ROLES: Role[] = ["SCOUT", "TELESALES", "MANAGER", "ADMIN"];
-
-const ROLE_VARIANT: Record<Role, "default" | "secondary" | "outline" | "destructive"> = {
-    ADMIN: "destructive",
-    MANAGER: "default",
-    TELESALES: "secondary",
-    SCOUT: "outline",
-};
 
 type Props = { user: AdminUserDetail };
 

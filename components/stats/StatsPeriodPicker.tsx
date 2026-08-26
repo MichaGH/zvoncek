@@ -9,11 +9,13 @@ import { PERIOD_PRESETS, type PeriodKey } from "@/lib/stats/range";
 export default function StatsPeriodPicker({
     current,
     userId,
+    team,
     from,
     to,
 }: {
     current: PeriodKey;
     userId?: string;
+    team?: string;
     from: string;
     to: string;
 }) {
@@ -27,6 +29,7 @@ export default function StatsPeriodPicker({
             if (value) sp.set(key, value);
         }
         if (userId) sp.set("userId", userId);
+        if (team) sp.set("team", team);
         router.push(`/dashboard/stats?${sp.toString()}`);
     }
 
