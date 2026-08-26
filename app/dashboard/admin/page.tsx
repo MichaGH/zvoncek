@@ -79,7 +79,11 @@ export default async function AdminPage() {
                         <div>
                             <span className="text-3xl font-semibold tabular-nums">{teams.length}</span>
                             <span className="ml-2 text-sm text-muted-foreground">
-                                {teams.length === 1 ? "tím" : "tímov"}
+                                {teams.length === 1
+                                    ? "tím"
+                                    : teams.length >= 2 && teams.length <= 4
+                                      ? "tímy"
+                                      : "tímov"}
                             </span>
                         </div>
                         <p className="text-xs text-muted-foreground">

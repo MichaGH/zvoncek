@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type User = { id: string; firstName: string; lastName: string };
 type Team = { id: string; name: string };
@@ -80,53 +81,74 @@ export default function ContactsFilterBar({
             </div>
 
             {teams.length > 0 && (
-                <select
-                    value={teamValue}
-                    onChange={(e) => {
-                        setTeamValue(e.target.value);
+                <Select
+                    value={teamValue || "all-teams"}
+                    onValueChange={(value) => {
+                        const nextTeam = value === "all-teams" ? "" : value;
+                        setTeamValue(nextTeam);
                         // výber tímu zruší filter na konkrétneho človeka
                         setCreatedByValue("");
-                        push({ team: e.target.value, createdBy: "" });
+                        push({ team: nextTeam, createdBy: "" });
                     }}
-                    className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
                 >
-                    <option value="">Všetky tímy</option>
-                    {teams.map((t) => (
-                        <option key={t.id} value={t.id}>
-                            {t.name}
-                        </option>
-                    ))}
-                </select>
+                    <SelectTrigger className="h-9">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all-teams">Všetky tímy</SelectItem>
+                        {teams.map((t) => (
+                            <SelectItem key={t.id} value={t.id}>
+                                {t.name}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
             )}
 
             {showCreatedByFilter && (
-                <select
-                    value={createdByValue}
-                    onChange={(e) => { setCreatedByValue(e.target.value); push({ createdBy: e.target.value }); }}
-                    className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                <Select
+                    value={createdByValue || "all-creators"}
+                    onValueChange={(value) => {
+                        const nextCreatedBy = value === "all-creators" ? "" : value;
+                        setCreatedByValue(nextCreatedBy);
+                        push({ createdBy: nextCreatedBy });
+                    }}
                 >
-                    <option value="">{createdByLabel}</option>
-                    {users.map((u) => (
-                        <option key={u.id} value={u.id}>
-                            {u.firstName} {u.lastName}
-                        </option>
-                    ))}
-                </select>
+                    <SelectTrigger className="h-9">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all-creators">{createdByLabel}</SelectItem>
+                        {users.map((u) => (
+                            <SelectItem key={u.id} value={u.id}>
+                                {u.firstName} {u.lastName}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
             )}
 
             {showOwnerFilter && (
-                <select
-                    value={assignedToValue}
-                    onChange={(e) => { setAssignedToValue(e.target.value); push({ assignedTo: e.target.value }); }}
-                    className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                <Select
+                    value={assignedToValue || "all-assignees"}
+                    onValueChange={(value) => {
+                        const nextAssignedTo = value === "all-assignees" ? "" : value;
+                        setAssignedToValue(nextAssignedTo);
+                        push({ assignedTo: nextAssignedTo });
+                    }}
                 >
-                    <option value="">Všetci (assigned)</option>
-                    {users.map((u) => (
-                        <option key={u.id} value={u.id}>
-                            {u.firstName} {u.lastName}
-                        </option>
-                    ))}
-                </select>
+                    <SelectTrigger className="h-9">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all-assignees">Všetci (assigned)</SelectItem>
+                        {users.map((u) => (
+                            <SelectItem key={u.id} value={u.id}>
+                                {u.firstName} {u.lastName}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
             )}
 
             <Button type="submit" size="sm" variant="outline">

@@ -87,15 +87,19 @@ export async function getTeamPeople(
     if (!team) return null;
 
     const people: TeamPerson[] = [];
+    const seenIds = new Set<string>();
     if (team.leader && !team.leader.deletedAt) {
         people.push({
             id: team.leader.id,
             name: `${team.leader.firstName} ${team.leader.lastName}`.trim(),
             isLeader: true,
         });
+        seenIds.add(team.leader.id);
     }
     for (const m of team.members) {
+        if (seenIds.has(m.id)) continue;
         people.push({ id: m.id, name: `${m.firstName} ${m.lastName}`.trim(), isLeader: false });
+        seenIds.add(m.id);
     }
 
     return { id: team.id, name: team.name, people, ids: people.map((p) => p.id) };

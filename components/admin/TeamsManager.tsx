@@ -116,6 +116,7 @@ export default function TeamsManager({ teams, userOptions }: Props) {
                                                 variant="ghost"
                                                 className="h-7 w-7"
                                                 onClick={() => setEditingId(team.id)}
+                                                aria-label={`Upraviť názov tímu ${team.name}`}
                                             >
                                                 <Pencil className="h-3.5 w-3.5" />
                                             </Button>
@@ -128,8 +129,14 @@ export default function TeamsManager({ teams, userOptions }: Props) {
                                 </div>
 
                                 <div className="flex items-center gap-2">
-                                    <label className="text-xs text-muted-foreground">Vedúci</label>
+                                    <label
+                                        htmlFor={`team-leader-${team.id}`}
+                                        className="text-xs text-muted-foreground"
+                                    >
+                                        Vedúci
+                                    </label>
                                     <select
+                                        id={`team-leader-${team.id}`}
                                         value={team.leader?.id ?? ""}
                                         onChange={(e) => handleLeader(team.id, e.target.value)}
                                         disabled={pending}
@@ -183,10 +190,23 @@ function RenameField({
                 className="max-w-xs"
                 autoFocus
             />
-            <Button size="icon" variant="ghost" className="h-8 w-8" disabled={pending || !value.trim()} onClick={() => onSave(value)}>
+            <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8"
+                disabled={pending || !value.trim()}
+                onClick={() => onSave(value)}
+                aria-label="Uložiť názov tímu"
+            >
                 <Check className="h-4 w-4" />
             </Button>
-            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onCancel}>
+            <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8"
+                onClick={onCancel}
+                aria-label="Zrušiť úpravu názvu tímu"
+            >
                 <X className="h-4 w-4" />
             </Button>
         </div>

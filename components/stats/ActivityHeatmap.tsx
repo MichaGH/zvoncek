@@ -89,16 +89,16 @@ export default function ActivityHeatmap({
     const weeks = chunk(cells, 7);
 
     // Popisok mesiaca nad stĺpcom, kde sa mesiac mení.
-    let lastMonth = -1;
-    const monthLabels = weeks.map((week) => {
+    const weekMonths = weeks.map((week) => {
         const firstReal = week.find((c): c is DailyCount => c !== null);
-        if (!firstReal) return "";
-        const mo = parseKey(firstReal.date).getMonth();
-        if (mo !== lastMonth) {
-            lastMonth = mo;
-            return MONTHS_SK[mo];
-        }
-        return "";
+        return firstReal ? parseKey(firstReal.date).getMonth() : null;
+    });
+    const monthLabels = weekMonths.map((month, index) => {
+        if (month === null) return "";
+        const previousMonth = weekMonths
+            .slice(0, index)
+            .reduce<number | null>((previous, value) => value ?? previous, null);
+        return month !== previousMonth ? MONTHS_SK[month] : "";
     });
 
     return (
@@ -145,7 +145,9 @@ export default function ActivityHeatmap({
                                 return (
                                     <Tooltip key={di}>
                                         <TooltipTrigger asChild>
-                                            <div
+                                            <button
+                                                type="button"
+                                                aria-label={`${cell.count} ${noun} · ${humanDate(cell.date)}`}
                                                 className={`rounded-[3px] ${classes[levelOf(cell.count)]}`}
                                                 style={{ width: CELL, height: CELL }}
                                             />

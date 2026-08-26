@@ -79,6 +79,12 @@ export async function setTeamLeader(teamId: string, leaderId: string | null): Pr
     if (!guard.ok) return guard;
 
     if (leaderId) {
+        const leader = await prisma.user.findUnique({
+            where: { id: leaderId, deletedAt: null },
+            select: { id: true },
+        });
+        if (!leader) return { ok: false, error: "Používateľ neexistuje." };
+
         const alreadyLeads = await prisma.team.findUnique({
             where: { leaderId },
             select: { id: true },
