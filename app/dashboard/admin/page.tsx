@@ -6,14 +6,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { can } from "@/lib/permissions";
 import { getAdminUserStats } from "@/lib/queries/users";
+import { getTeamOptions } from "@/lib/queries/teams";
 import { ROLE_LABEL } from "@/lib/dictionaries";
-import { Users, ArrowRight } from "lucide-react";
+import { Users, UsersRound, ArrowRight } from "lucide-react";
 
 export default async function AdminPage() {
     const session = await auth();
     if (!can(session?.user, "admin.access")) notFound();
 
-    const stats = await getAdminUserStats();
+    const [stats, teams] = await Promise.all([getAdminUserStats(), getTeamOptions()]);
 
     return (
         <DashboardPage>
@@ -56,6 +57,36 @@ export default async function AdminPage() {
                         </div>
                         <Button asChild size="sm" variant="outline" className="w-full">
                             <Link href="/dashboard/admin/users/new">Nový používateľ</Link>
+                        </Button>
+                    </CardContent>
+                </Card>
+
+                {/* Teams card */}
+                <Card className="flex flex-col">
+                    <CardHeader className="flex items-center justify-between pb-3">
+                        <div className="flex items-center gap-2">
+                            <UsersRound className="h-4 w-4 text-muted-foreground" />
+                            <CardTitle className="text-base">Tímy</CardTitle>
+                        </div>
+                        <Button asChild size="sm" variant="ghost" className="h-8 px-2">
+                            <Link href="/dashboard/admin/teams">
+                                Spravovať
+                                <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                            </Link>
+                        </Button>
+                    </CardHeader>
+                    <CardContent className="flex-1 space-y-3">
+                        <div>
+                            <span className="text-3xl font-semibold tabular-nums">{teams.length}</span>
+                            <span className="ml-2 text-sm text-muted-foreground">
+                                {teams.length === 1 ? "tím" : "tímov"}
+                            </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            Tímy a ich vedúci (vedúci vidí kontakty a štatistiky svojho tímu).
+                        </p>
+                        <Button asChild size="sm" variant="outline" className="w-full">
+                            <Link href="/dashboard/admin/teams">Otvoriť tímy</Link>
                         </Button>
                     </CardContent>
                 </Card>

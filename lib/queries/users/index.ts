@@ -52,6 +52,9 @@ export async function getAdminUserDetail(id: string) {
             deletedAt: true,
             lastLoginAt: true,
             createdAt: true,
+            teamId: true,
+            team: { select: { id: true, name: true } },
+            leadsTeam: { select: { id: true, name: true } },
         },
     });
 }

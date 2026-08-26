@@ -2,6 +2,7 @@ import prisma from "@/lib/db";
 import type { CallOutcome, LeadStatus } from "@/app/generated/prisma/enums";
 import { CallOutcome as CallOutcomeEnum, LeadStatus as LeadStatusEnum } from "@/app/generated/prisma/enums";
 import type { DateRange } from "@/lib/stats/range";
+import { dateKey } from "@/lib/queries/today";
 
 // Stats queries live here so pages stay thin. All time-bound metrics take a
 // resolved DateRange; only marketing-call metrics are implemented for now, but
@@ -41,15 +42,17 @@ export type CallStats = {
 export async function getCallStats({
     range,
     userId,
+    userIds,
 }: {
     range: DateRange;
     userId?: string;
+    userIds?: string[]; // tímový scope – vynútený na stránke
 }): Promise<CallStats> {
     const createdAt = rangeFilter(range);
     const where = {
         type: "CALL" as const,
         source: "CALL_QUEUE" as const,
-        ...(userId ? { userId } : {}),
+        ...(userId ? { userId } : userIds ? { userId: { in: userIds } } : {}),
         ...(createdAt ? { createdAt } : {}),
     };
 
@@ -208,14 +211,16 @@ export type ContactsAddedStats = {
 export async function getContactsAddedStats({
     range,
     userId,
+    userIds,
 }: {
     range: DateRange;
     userId?: string;
+    userIds?: string[]; // tímový scope – vynútený na stránke
 }): Promise<ContactsAddedStats> {
     const createdAt = rangeFilter(range);
     const where = {
         deletedAt: null,
-        createdById: userId ? userId : { not: null },
+        createdById: userId ? userId : userIds ? { in: userIds } : { not: null },
         ...(createdAt ? { createdAt } : {}),
     };
 
@@ -245,6 +250,149 @@ export async function getContactsAddedStats({
         .sort((a, b) => b.count - a.count);
 
     return { total, perUser };
+}
+
+// ── Denné počty pre heatmapu (fixné okno, nezávislé od period filtra) ──────────
+// Heatmapa ukazuje dlhodobý denný obraz („kto koľko kedy pridal / volal"), preto
+// má vlastné okno posledných N dní bez ohľadu na zvolené obdobie hore.
+
+export type DailyCount = { date: string; count: number };
+
+// Enumeruje dni v [from, to) – heatmapa sa tak „zoomne" presne na zvolené obdobie.
+function enumerateRange(from: Date, to: Date): string[] {
+    const keys: string[] = [];
+    const d = new Date(from);
+    d.setHours(0, 0, 0, 0);
+    const end = to.getTime();
+    let guard = 0;
+    while (d.getTime() < end && guard < 400) {
+        keys.push(dateKey(d));
+        d.setDate(d.getDate() + 1);
+        guard += 1;
+    }
+    return keys;
+}
+
+function bucketDaily(dates: Date[], keys: string[]): DailyCount[] {
+    const counts = new Map<string, number>();
+    for (const dt of dates) {
+        const k = dateKey(dt);
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    return keys.map((k) => ({ date: k, count: counts.get(k) ?? 0 }));
+}
+
+export async function getContactsAddedDaily({
+    userId,
+    userIds,
+    from,
+    to,
+}: {
+    userId?: string;
+    userIds?: string[];
+    from: Date;
+    to: Date;
+}): Promise<DailyCount[]> {
+    const keys = enumerateRange(from, to);
+    const createdBy = userId ? userId : userIds ? { in: userIds } : { not: null };
+    const leads = await prisma.lead.findMany({
+        where: { deletedAt: null, createdById: createdBy, createdAt: { gte: from, lt: to } },
+        select: { createdAt: true },
+    });
+    return bucketDaily(leads.map((l) => l.createdAt), keys);
+}
+
+export async function getCallsDaily({
+    userId,
+    userIds,
+    from,
+    to,
+}: {
+    userId?: string;
+    userIds?: string[];
+    from: Date;
+    to: Date;
+}): Promise<DailyCount[]> {
+    const keys = enumerateRange(from, to);
+    const uid = userId ? userId : userIds ? { in: userIds } : undefined;
+    const acts = await prisma.activity.findMany({
+        where: {
+            type: "CALL",
+            source: "CALL_QUEUE",
+            ...(uid ? { userId: uid } : {}),
+            createdAt: { gte: from, lt: to },
+        },
+        select: { createdAt: true },
+    });
+    return bucketDaily(acts.map((a) => a.createdAt), keys);
+}
+
+// ── História pridávania (prvý/posledný kontakt za deň) ────────────────────────
+// Pre vedúceho: „kedy scout pridával" – prvý a posledný pridaný kontakt v daný
+// deň + počet. Nie je to sledovanie času za PC, len stopy v dátach z Lead.createdAt.
+
+export type AddingDay = { date: string; count: number; firstAt: string; lastAt: string };
+export type AddingByUser = { userId: string; name: string; total: number; days: AddingDay[] };
+
+export async function getContactsAddingLog({
+    range,
+    userIds,
+}: {
+    range: DateRange;
+    userIds: string[];
+}): Promise<AddingByUser[]> {
+    if (userIds.length === 0) return [];
+    const createdAt = rangeFilter(range);
+    const leads = await prisma.lead.findMany({
+        where: {
+            deletedAt: null,
+            createdById: { in: userIds },
+            ...(createdAt ? { createdAt } : {}),
+        },
+        select: { createdById: true, createdAt: true },
+        orderBy: { createdAt: "asc" },
+    });
+
+    const perUser = new Map<string, Map<string, { count: number; first: Date; last: Date }>>();
+    for (const l of leads) {
+        if (!l.createdById) continue;
+        const dayMap = perUser.get(l.createdById) ?? new Map();
+        const key = dateKey(l.createdAt);
+        const entry = dayMap.get(key);
+        if (!entry) {
+            dayMap.set(key, { count: 1, first: l.createdAt, last: l.createdAt });
+        } else {
+            entry.count += 1;
+            if (l.createdAt < entry.first) entry.first = l.createdAt;
+            if (l.createdAt > entry.last) entry.last = l.createdAt;
+        }
+        perUser.set(l.createdById, dayMap);
+    }
+
+    const ids = [...perUser.keys()];
+    const users = ids.length
+        ? await prisma.user.findMany({
+              where: { id: { in: ids } },
+              select: { id: true, firstName: true, lastName: true },
+          })
+        : [];
+    const nameById = new Map(users.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+
+    const result: AddingByUser[] = [];
+    for (const [userId, dayMap] of perUser) {
+        const days = [...dayMap.entries()]
+            .map(([date, v]) => ({
+                date,
+                count: v.count,
+                firstAt: v.first.toISOString(),
+                lastAt: v.last.toISOString(),
+            }))
+            .sort((a, b) => b.date.localeCompare(a.date));
+        const total = days.reduce((s, d) => s + d.count, 0);
+        result.push({ userId, name: nameById.get(userId) ?? "—", total, days });
+    }
+
+    return result.sort((a, b) => b.total - a.total);
 }
 
 export async function getStatsUsers() {

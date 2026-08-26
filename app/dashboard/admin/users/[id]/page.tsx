@@ -6,9 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { can } from "@/lib/permissions";
 import { getAdminUserDetail } from "@/lib/queries/users";
+import { getTeamOptions } from "@/lib/queries/teams";
 import UserProfileCard from "@/components/admin/UserProfileCard";
 import UserPasswordCard from "@/components/admin/UserPasswordCard";
 import UserStatusCard from "@/components/admin/UserStatusCard";
+import TeamAssignmentCard from "@/components/admin/TeamAssignmentCard";
 import { ArrowLeft, BarChart2 } from "lucide-react";
 
 function formatDateTime(d: Date | null) {
@@ -26,7 +28,7 @@ export default async function AdminUserDetailPage({
     if (!can(session?.user, "admin.access")) notFound();
 
     const { id } = await params;
-    const user = await getAdminUserDetail(id);
+    const [user, teamOptions] = await Promise.all([getAdminUserDetail(id), getTeamOptions()]);
     if (!user) notFound();
 
     const isSelf = session?.user?.id === id;
@@ -39,7 +41,7 @@ export default async function AdminUserDetailPage({
                 actions={
                     <div className="flex gap-2">
                         <Button asChild size="sm" variant="outline">
-                            <Link href={`/dashboard/stats/${id}`}>
+                            <Link href={`/dashboard/stats?userId=${id}`}>
                                 <BarChart2 className="mr-1.5 h-3.5 w-3.5" />
                                 Štatistiky
                             </Link>
@@ -67,6 +69,13 @@ export default async function AdminUserDetailPage({
                         userId={user.id}
                         deletedAt={user.deletedAt}
                         isSelf={isSelf}
+                    />
+
+                    <TeamAssignmentCard
+                        userId={user.id}
+                        teamId={user.teamId}
+                        leadsTeam={user.leadsTeam}
+                        teamOptions={teamOptions}
                     />
 
                     {/* Meta */}

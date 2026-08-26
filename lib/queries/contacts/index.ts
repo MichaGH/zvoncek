@@ -40,17 +40,23 @@ export async function getContactsList({
     query,
     take = CONTACTS_PAGE_SIZE,
     createdById,
+    createdByIds,
     ownerId,
 }: {
     query?: string;
     take?: number;
     createdById?: string; // scout → len vlastné pridané
+    createdByIds?: string[]; // vedúci → pridané kontakty jeho tímu (scoping vynútený na stránke)
     ownerId?: string;
 }): Promise<{ rows: ContactListRow[]; hasMore: boolean }> {
     const leads = await prisma.lead.findMany({
         where: {
             deletedAt: null,
-            ...(createdById ? { createdById } : {}),
+            ...(createdById
+                ? { createdById }
+                : createdByIds
+                  ? { createdById: { in: createdByIds } }
+                  : {}),
             ...(ownerId ? { ownerId } : {}),
             ...(query
                 ? {
@@ -84,14 +90,22 @@ export async function getContactsList({
     return { rows, hasMore };
 }
 
-export async function getContactsOverview(createdById?: string): Promise<{
+export async function getContactsOverview(
+    scopeInput: string | { createdById?: string; createdByIds?: string[] } = {},
+): Promise<{
     total: number;
     addedToday: number;
     callable: number;
 }> {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
-    const scope = createdById ? { createdById } : {};
+    // Spätná kompatibilita: string === createdById.
+    const norm = typeof scopeInput === "string" ? { createdById: scopeInput } : scopeInput;
+    const scope = norm.createdById
+        ? { createdById: norm.createdById }
+        : norm.createdByIds
+          ? { createdById: { in: norm.createdByIds } }
+          : {};
 
     const [total, addedToday, callable] = await Promise.all([
         prisma.lead.count({ where: { deletedAt: null, ...scope } }),

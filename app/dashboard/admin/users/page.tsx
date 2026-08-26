@@ -9,16 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { can } from "@/lib/permissions";
 import { getAdminUserList } from "@/lib/queries/users";
-import { ROLE_LABEL } from "@/lib/dictionaries";
+import { ROLE_LABEL, ROLE_VARIANT } from "@/lib/dictionaries";
 import { Plus, Pencil } from "lucide-react";
-import type { Role } from "@/app/generated/prisma/enums";
-
-const ROLE_VARIANT: Record<Role, "default" | "secondary" | "outline" | "destructive"> = {
-    ADMIN: "destructive",
-    MANAGER: "default",
-    TELESALES: "secondary",
-    SCOUT: "outline",
-};
 
 function formatDate(d: Date | null) {
     if (!d) return "—";

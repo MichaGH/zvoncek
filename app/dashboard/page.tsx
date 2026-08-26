@@ -8,9 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCard } from "@/components/stats/StatCard";
 import { dateKey, getTodayBoard, type TodayUrgentItem } from "@/lib/queries/today";
-import { getContactsOverview } from "@/lib/queries/contacts";
 import { can, roleOf } from "@/lib/permissions";
 import prisma from "@/lib/db";
+import Logo from "@/components/Logo";
 import { ArrowRight, CalendarDays, Phone, Plus } from "lucide-react";
 
 function greeting() {
@@ -40,38 +40,24 @@ export default async function DashboardPage() {
         month: "long",
     });
 
-    // Scout vidí len personalizovaný prehľad kontaktov, nie globálnu frontu.
-    if (role === "SCOUT") {
-        const [overview, userData] = await Promise.all([
-            getContactsOverview(session.user.id),
-            prisma.user.findUnique({ where: { id: session.user.id }, select: { firstName: true } }),
-        ]);
+    // Scout a Team líder majú (zatiaľ) jednoduchú uvítaciu stránku – ich práca
+    // žije v Kontaktoch a Štatistikách, nie v globálnej fronte volaní.
+    if (role === "SCOUT" || role === "SCOUT_LEADER") {
+        const userData = await prisma.user.findUnique({
+            where: { id: session.user.id },
+            select: { firstName: true },
+        });
         const hello = userData?.firstName ? `${greeting()}, ${userData.firstName}` : greeting();
 
         return (
             <DashboardShell>
-                <DashboardPageHeader
-                    title="Dashboard"
-                    description={`${hello} · ${todayLabel}`}
-                    actions={<RefreshButton />}
-                />
-
-                <div className="mb-6 grid gap-4 sm:grid-cols-3">
-                    <StatCard label="Dnes pridaných" value={overview.addedToday} hint="tvoje kontakty dnes" />
-                    <StatCard label="Voľných na volanie" value={overview.callable} hint="ešte sa nevolalo" />
-                    <StatCard label="Celkom tvojich" value={overview.total} hint="kontakty v databáze" />
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                    <Button asChild>
-                        <Link href="/dashboard/contacts/new">
-                            <Plus className="h-4 w-4" />
-                            Pridať kontakty
-                        </Link>
-                    </Button>
-                    <Button asChild variant="outline">
-                        <Link href="/dashboard/contacts">Moje kontakty</Link>
-                    </Button>
+                <DashboardPageHeader title="Dashboard" description={`${hello} · ${todayLabel}`} />
+                <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
+                    <Logo className="h-14 w-auto opacity-90" />
+                    <h2 className="text-2xl font-semibold tracking-tight">Vitajte v Zvončeku!</h2>
+                    <p className="max-w-sm text-sm text-muted-foreground">
+                        Všetko potrebné nájdete v hornom menu.
+                    </p>
                 </div>
             </DashboardShell>
         );
