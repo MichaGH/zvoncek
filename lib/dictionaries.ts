@@ -3,6 +3,8 @@ import {
     ActivitySource,
     ActivityType,
     CallOutcome,
+    DealRequestKind,
+    DealRequestStatus,
     LeadStatus,
     NextActionKind,
     ProjectType,
@@ -44,6 +46,7 @@ export const OUTCOME_LABEL: Record<CallOutcome, string> = {
     WANTS_EMAIL: "Máme napísať",
     SNOOZE: "Ozvať sa neskôr",
     POSITIVE: "Pozitívny posun",
+    WANTS_TO_ORDER: "Chcú objednať",
 };
 
 export const ACTIVITY_LABEL: Record<ActivityType, string> = {
@@ -63,6 +66,12 @@ export const ACTIVITY_LABEL: Record<ActivityType, string> = {
     TRACKER_ATTACHED: "Tracker pripojený",
     TRACKER_UPDATED: "Dizajn aktualizovaný",
     TRACKER_OPENED: "Klient otvoril",
+    CALLER_ASSIGNED: "Presunuté volanie",
+    CALLER_RELEASED: "Uvoľnené do fronty",
+    CALL_REVERTED: "Výsledok hovoru vrátený",
+    REQUEST_CREATED: "Požiadavka",
+    REQUEST_RESOLVED: "Požiadavka vybavená",
+    DEAL_REOPENED: "Obchod znovu otvorený",
 };
 
 export const ACTIVITY_CATEGORY_LABEL: Record<ActivityCategory, string> = {
@@ -76,6 +85,7 @@ export const ACTIVITY_SOURCE_LABEL: Record<ActivitySource, string> = {
     PIPELINE: "Pipeline",
     CONTACTS: "Kontakty",
     ADMIN: "Administrácia",
+    CLIENTS: "Klienti",
 };
 
 export const PROJECT_TYPE_LABEL: Record<ProjectType, string> = {
@@ -91,17 +101,24 @@ export const ROLE_LABEL: Record<Role, string> = {
     SCOUT: "Pridávač kontaktov",
     SCOUT_LEADER: "Vedúci pridávačov",
     TELESALES: "Marketing (volania)",
+    SALES_REP: "Obchodník",
     MANAGER: "Manažér",
     ADMIN: "Admin",
 };
 
 // Poradie rolí pre výbery (admin formuláre). Jediné miesto – nová rola sa dopĺňa tu.
-export const ROLES: Role[] = ["SCOUT", "SCOUT_LEADER", "TELESALES", "MANAGER", "ADMIN"];
+export const ROLES: Role[] = ["SCOUT", "SCOUT_LEADER", "TELESALES", "SALES_REP", "MANAGER", "ADMIN"];
+
+// Ručne písané pole nie je typovo vynútené – pri novej hodnote Role enumu spadne hneď pri štarte.
+for (const role of Object.values(Role)) {
+    if (!ROLES.includes(role)) throw new Error(`ROLES chýba rola ${role}`);
+}
 
 export const ROLE_VARIANT: Record<Role, "default" | "secondary" | "outline" | "destructive"> = {
     ADMIN: "destructive",
     MANAGER: "default",
     TELESALES: "secondary",
+    SALES_REP: "secondary",
     SCOUT_LEADER: "default",
     SCOUT: "outline",
 };
@@ -133,4 +150,19 @@ export const NEXT_ACTION_LABEL: Record<NextActionKind, string> = {
     SEND_EMAIL: "Poslať email",
     WAITING_FOR_CLIENT: "Čakáme na klienta",
     CUSTOM: "Vlastný krok",
+};
+
+export const REQUEST_KIND_LABEL: Record<DealRequestKind, string> = {
+    PRICE: "Cena",
+    DESIGN: "Návrh",
+    EMAIL: "Email",
+    ORDER: "Objednávka",
+    REOPEN: "Znovu otvoriť",
+    OTHER: "Iné",
+};
+
+export const REQUEST_STATUS_LABEL: Record<DealRequestStatus, string> = {
+    OPEN: "Otvorená",
+    DONE: "Vybavená",
+    CANCELLED: "Zamietnutá",
 };

@@ -21,7 +21,8 @@ export const authConfig = {
                 }
                 return true;
             }
-            if (isOnAuthPage && isLoggedIn) {
+            // ?deactivated=1: stránka zistila (z DB), že účet je deaktivovaný, hoci JWT ešte platí – nepresmerovať späť.
+            if (isOnAuthPage && isLoggedIn && !nextUrl.searchParams.has("deactivated")) {
                 return Response.redirect(new URL("/dashboard", nextUrl)); // prihlásený nemá čo robiť na login/signup
             }
             return true; // všetko ostatné je verejné

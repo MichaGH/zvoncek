@@ -1,4 +1,6 @@
 import prisma from "@/lib/db";
+import { businessTodayStart } from "@/lib/domain/businessTime";
+import { POOL_WHERE } from "@/lib/queries/calls";
 import type { LeadStatus } from "@/app/generated/prisma/enums";
 
 export const CONTACTS_PAGE_SIZE = 50;
@@ -11,6 +13,8 @@ type ContactLead = {
     phone: string | null;
     note: string | null;
     status: LeadStatus;
+    assignedCallerId: string | null;
+    _count: { activities: number };
     createdAt: Date;
     creator: { firstName: string; lastName: string } | null;
     owner: { firstName: string } | null;
@@ -26,8 +30,8 @@ function toContactRow(lead: ContactLead) {
         phone: lead.phone,
         note: lead.note,
         status: lead.status,
-        // Only NEW contacts haven't been called yet – safe to edit/delete freely.
-        callable: lead.status === "NEW",
+        // Nedotknutý = NEW, nikto si ho nezobral na volanie a nemá hovor. Len vtedy ho smie meniť pridávač.
+        callable: lead.status === "NEW" && lead.assignedCallerId === null && lead._count.activities === 0,
         createdAt: lead.createdAt.toISOString(),
         addedBy: lead.creator ? `${lead.creator.firstName} ${lead.creator.lastName}`.trim() : null,
         owner: lead.owner?.firstName ?? null,
@@ -41,13 +45,15 @@ export async function getContactsList({
     take = CONTACTS_PAGE_SIZE,
     createdById,
     createdByIds,
+    assignedCallerId,
     ownerId,
 }: {
     query?: string;
     take?: number;
     createdById?: string; // scout → len vlastné pridané
     createdByIds?: string[]; // vedúci → pridané kontakty jeho tímu (scoping vynútený na stránke)
-    ownerId?: string;
+    assignedCallerId?: string; // „Volá" – kto má kontakt vo svojej práci volania
+    ownerId?: string; // „Rieši obchod"
 }): Promise<{ rows: ContactListRow[]; hasMore: boolean }> {
     const leads = await prisma.lead.findMany({
         where: {
@@ -57,6 +63,7 @@ export async function getContactsList({
                 : createdByIds
                   ? { createdById: { in: createdByIds } }
                   : {}),
+            ...(assignedCallerId ? { assignedCallerId } : {}),
             ...(ownerId ? { ownerId } : {}),
             ...(query
                 ? {
@@ -76,6 +83,8 @@ export async function getContactsList({
             phone: true,
             note: true,
             status: true,
+            assignedCallerId: true,
+            _count: { select: { activities: { where: { type: "CALL" } } } },
             createdAt: true,
             creator: { select: { firstName: true, lastName: true } },
             owner: { select: { firstName: true } },
@@ -97,8 +106,7 @@ export async function getContactsOverview(
     addedToday: number;
     callable: number;
 }> {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const startOfToday = businessTodayStart();
     // Spätná kompatibilita: string === createdById.
     const norm = typeof scopeInput === "string" ? { createdById: scopeInput } : scopeInput;
     const scope = norm.createdById
@@ -110,8 +118,8 @@ export async function getContactsOverview(
     const [total, addedToday, callable] = await Promise.all([
         prisma.lead.count({ where: { deletedAt: null, ...scope } }),
         prisma.lead.count({ where: { deletedAt: null, ...scope, createdAt: { gte: startOfToday } } }),
-        // "Voľné na volanie" = ešte sa nevolalo (status NEW).
-        prisma.lead.count({ where: { deletedAt: null, ...scope, status: "NEW" } }),
+        // "Voľné na volanie" = nedotknuté: NEW, nikým nenárokované, bez hovoru (bez scope = spoločná fronta).
+        prisma.lead.count({ where: { ...POOL_WHERE, ...scope } }),
     ]);
 
     return { total, addedToday, callable };

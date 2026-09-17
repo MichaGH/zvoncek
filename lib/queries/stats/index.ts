@@ -1,8 +1,8 @@
 import prisma from "@/lib/db";
+import { POOL_WHERE } from "@/lib/queries/calls";
 import type { CallOutcome, LeadStatus } from "@/app/generated/prisma/enums";
 import { CallOutcome as CallOutcomeEnum, LeadStatus as LeadStatusEnum } from "@/app/generated/prisma/enums";
 import type { DateRange } from "@/lib/stats/range";
-import { dateKey } from "@/lib/queries/today";
 
 // Stats queries live here so pages stay thin. All time-bound metrics take a
 // resolved DateRange; only marketing-call metrics are implemented for now, but
@@ -147,8 +147,8 @@ export async function getCallStatsByUser({
 export type ContactPoolStats = {
     total: number;
     byStatus: Record<LeadStatus, number>;
-    uncalled: number; // status NEW = never called
-    unassignedUncalled: number; // NEW with no owner — the shared backlog
+    uncalled: number; // nevolané NEW: spoločná fronta + dávky volajúcich
+    unassignedUncalled: number; // spoločná fronta (nikým nenárokované)
     assignedUncalled: { userId: string; name: string; count: number }[];
     wonValue: number;
 };
@@ -161,19 +161,19 @@ export async function getContactPoolStats(): Promise<ContactPoolStats> {
             where: { status: "WON", deletedAt: null },
             _sum: { price: true },
         }),
-        // future-proof: uncalled leads already assigned to a caller
+        // nevolané NEW v dávkach volajúcich (priradenie volania, nie vlastník obchodu)
         prisma.lead.groupBy({
-            by: ["ownerId"],
-            where: { deletedAt: null, status: "NEW", ownerId: { not: null } },
+            by: ["assignedCallerId"],
+            where: { deletedAt: null, status: "NEW", pipelineEnteredAt: null, assignedCallerId: { not: null } },
             _count: true,
         }),
-        prisma.lead.count({ where: { deletedAt: null, status: "NEW", ownerId: null } }),
+        prisma.lead.count({ where: POOL_WHERE }),
     ]);
 
     const byStatus = emptyStatusMap();
     for (const row of byStatusRaw) byStatus[row.status] = row._count;
 
-    const ownerIds = byOwnerRaw.map((r) => r.ownerId).filter((id): id is string => Boolean(id));
+    const ownerIds = byOwnerRaw.map((r) => r.assignedCallerId).filter((id): id is string => Boolean(id));
     const owners = ownerIds.length
         ? await prisma.user.findMany({
               where: { id: { in: ownerIds } },
@@ -183,10 +183,10 @@ export async function getContactPoolStats(): Promise<ContactPoolStats> {
     const ownerName = new Map(owners.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
 
     const assignedUncalled = byOwnerRaw
-        .filter((r) => r.ownerId)
+        .filter((r) => r.assignedCallerId)
         .map((r) => ({
-            userId: r.ownerId as string,
-            name: ownerName.get(r.ownerId as string) ?? "—",
+            userId: r.assignedCallerId as string,
+            name: ownerName.get(r.assignedCallerId as string) ?? "—",
             count: r._count,
         }))
         .sort((a, b) => b.count - a.count);
@@ -194,7 +194,7 @@ export async function getContactPoolStats(): Promise<ContactPoolStats> {
     return {
         total,
         byStatus,
-        uncalled: byStatus.NEW,
+        uncalled: unassignedUncalled + assignedUncalled.reduce((sum, u) => sum + u.count, 0),
         unassignedUncalled,
         assignedUncalled,
         wonValue: wonAgg._sum.price ? Number(wonAgg._sum.price) : 0,
@@ -250,6 +250,15 @@ export async function getContactsAddedStats({
         .sort((a, b) => b.count - a.count);
 
     return { total, perUser };
+}
+
+// Kľúč dňa pre heatmapu (lokálny čas servera). Štatistiky nie sú súčasťou prechodu na obchodný kalendár
+// (plán §9 „Stats – later"); celý modul počíta dni konzistentne lokálne.
+function dateKey(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
 }
 
 // ── Denné počty pre heatmapu (fixné okno, nezávislé od period filtra) ──────────

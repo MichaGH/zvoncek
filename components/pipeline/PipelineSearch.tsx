@@ -10,10 +10,12 @@ export default function PipelineSearch({
     filter,
     query = "",
     view,
+    owner,
 }: {
     filter: string;
     query?: string;
     view?: string;
+    owner?: string;
 }) {
     const router = useRouter();
     const [value, setValue] = useState(query);
@@ -22,6 +24,7 @@ export default function PipelineSearch({
         const params = new URLSearchParams();
         params.set("filter", filter);
         if (view) params.set("view", view);
+        if (owner && owner !== "all") params.set("owner", owner);
         if (q.trim()) params.set("q", q.trim());
         // limit intentionally reset on a new search
         router.push(`/dashboard/pipeline?${params.toString()}`);

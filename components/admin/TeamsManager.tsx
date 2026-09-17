@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { createTeam, renameTeam, deleteTeam, setTeamLeader } from "@/lib/actions/teams";
 import type { TeamRow } from "@/lib/queries/teams";
+import { can } from "@/lib/permissions";
 import type { UserOption } from "@/lib/queries/users";
 import { Pencil, Trash2, Check, X, Plus, Users } from "lucide-react";
 
@@ -125,6 +126,11 @@ export default function TeamsManager({ teams, userOptions }: Props) {
                                                 {team._count.members}
                                             </Badge>
                                         </div>
+                                    )}
+                                    {team.leader && !team.leader.deletedAt && can(team.leader, "deals.receive") && (
+                                        <p className="mt-1 text-xs text-muted-foreground">
+                                            Pozitívne hovory členov tímu dostane vedúci
+                                        </p>
                                     )}
                                 </div>
 

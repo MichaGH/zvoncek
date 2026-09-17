@@ -1,37 +1,38 @@
 "use server";
 
-import { auth } from "@/auth";
 import prisma from "@/lib/db";
 import { createAuditActivity } from "@/lib/activityLog";
+import { AccessError, toActionError } from "@/lib/access/errors";
+import { lockLeadWithUsers } from "@/lib/access/leads";
+import { withLockTx, type Tx } from "@/lib/access/locks";
+import type { AccessUser } from "@/lib/access/user";
+import { bump, markLeadBumped } from "@/lib/domain/revision";
 import { can } from "@/lib/permissions";
+import { requireUser } from "@/lib/access/user";
 import { getTeamScopeForLeader } from "@/lib/queries/teams";
 import { revalidatePath } from "next/cache";
 
-// Scout smie upravovať/mazať len svoje a iba kým nie sú obvolané (status NEW).
-// Vedúci s contacts.manageTeam smie to isté pre NEW kontakty členov svojho tímu.
-// Manager/admin (contacts.deleteAny) smú hocičo.
-async function assertCanManageContact(
-    user: unknown,
-    userId: string,
-    leadId: string,
-): Promise<string | null> {
-    if (can(user, "contacts.deleteAny")) return null;
-    const lead = await prisma.lead.findUnique({
-        where: { id: leadId },
-        select: { createdById: true, status: true },
-    });
-    if (!lead) return "Kontakt neexistuje.";
+// Scout smie upravovať/mazať len svoje a iba kým sú nedotknuté: NEW, nikým nenárokované, bez hovoru (§4.7).
+// Vedúci s contacts.manageTeam smie to isté pre nedotknuté kontakty členov svojho tímu.
+// Manager/admin (contacts.deleteAny) smú hocičo – pri priradenom kontakte s assignee lockom.
+// Kontrola beží v transakcii pod zámkom Lead riadku (claim môže prebehnúť súbežne).
+async function lockContactForManage(tx: Tx, user: AccessUser, leadId: string, teamIds: string[] | null) {
+    const { lead, users } = await lockLeadWithUsers(tx, leadId, [user.id]);
+    const actor = users.get(user.id);
+    if (!actor || actor.deletedAt) throw new AccessError("UNAUTHENTICATED");
+    if (lead.deletedAt) throw new AccessError("NOT_FOUND", "Kontakt neexistuje.");
+    if (can(actor, "contacts.deleteAny")) return lead;
 
-    // Vlastný ešte neobvolaný kontakt.
-    if (lead.createdById === userId && lead.status === "NEW") return null;
-
-    // Vedúci tímu: NEW kontakt člena jeho tímu (scope vynútený server-side).
-    if (can(user, "contacts.manageTeam") && lead.status === "NEW" && lead.createdById) {
-        const scope = await getTeamScopeForLeader(userId);
-        if (scope?.ids.includes(lead.createdById)) return null;
+    const calls = await tx.activity.count({ where: { leadId, type: "CALL" } });
+    const untouched = lead.status === "NEW" && lead.assignedCallerId === null && calls === 0;
+    if (untouched && lead.createdById === actor.id) return lead;
+    if (untouched && can(actor, "contacts.manageTeam") && lead.createdById && teamIds?.includes(lead.createdById)) {
+        return lead;
     }
-
-    return "Môžeš upravovať len ešte neobvolané kontakty (svoje alebo svojho tímu).";
+    throw new AccessError(
+        "FORBIDDEN",
+        "Môžeš upravovať len ešte neobvolané kontakty (svoje alebo svojho tímu), ktoré si nikto nezobral na volanie.",
+    );
 }
 
 function revalidateContacts() {
@@ -69,9 +70,9 @@ function normalizeWebsite(raw: string | undefined): string | null {
 }
 
 export async function createContact(input: CreateContactInput): Promise<CreateContactResult> {
-    const session = await auth();
-    if (!session?.user?.id) return { ok: false, error: "Nie si prihlásený." };
-    if (!can(session.user, "contacts.create")) return { ok: false, error: "Nemáš oprávnenie." };
+    const user = await requireUser();
+    if (!user) return { ok: false, error: "Nie si prihlásený." };
+    if (!can(user, "contacts.create")) return { ok: false, error: "Nemáš oprávnenie." };
 
     const companyName = input.companyName?.trim() || null;
     const website = normalizeWebsite(input.website);
@@ -91,6 +92,8 @@ export async function createContact(input: CreateContactInput): Promise<CreateCo
             select: { number: true, companyName: true, website: true },
         });
         if (existing) {
+            // Bez prístupu ku kontaktom žiadne detaily – nesmie prezradiť cudzí obchod.
+            if (!can(user, "contacts.access")) return { ok: false, error: "Toto číslo už v databáze existuje." };
             const name = existing.companyName ?? existing.website ?? "—";
             return {
                 ok: false,
@@ -102,7 +105,7 @@ export async function createContact(input: CreateContactInput): Promise<CreateCo
 
     try {
         const lead = await prisma.lead.create({
-            data: { companyName, website, phone, note, createdById: session.user.id },
+            data: { companyName, website, phone, note, createdById: user.id },
             select: { id: true, number: true },
         });
         revalidateContacts();
@@ -123,11 +126,10 @@ export async function updateContact(
     id: string,
     input: UpdateContactInput,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-    const session = await auth();
-    if (!session?.user?.id) return { ok: false, error: "Nie si prihlásený." };
-    if (!can(session.user, "contacts.access")) return { ok: false, error: "Nemáš oprávnenie." };
-    const guard = await assertCanManageContact(session.user, session.user.id, id);
-    if (guard) return { ok: false, error: guard };
+    const user = await requireUser();
+    if (!user) return { ok: false, error: "Nie si prihlásený." };
+    if (!can(user, "contacts.access")) return { ok: false, error: "Nemáš oprávnenie." };
+    const teamIds = can(user, "contacts.manageTeam") ? ((await getTeamScopeForLeader(user.id))?.ids ?? []) : null;
 
     const companyName = input.companyName?.trim() || null;
     const website = normalizeWebsite(input.website);
@@ -138,23 +140,22 @@ export async function updateContact(
     if (!phone) return { ok: false, error: "Telefón je povinný." };
 
     try {
-        await prisma.$transaction([
-            prisma.lead.update({
-                where: { id },
-                data: { companyName, website, phone, note },
-            }),
-            prisma.activity.create({
+        await withLockTx(async (tx) => {
+            const lead = await lockContactForManage(tx, user, id, teamIds);
+            await tx.lead.update({ where: { id: lead.id }, data: { companyName, website, phone, note, ...bump } });
+            markLeadBumped(tx, lead.id);
+            await tx.activity.create({
                 data: createAuditActivity({
-                    leadId: id,
-                    userId: session.user.id,
+                    leadId: lead.id,
+                    userId: user.id,
                     type: "CONTACT_UPDATED",
                     source: "CONTACTS",
                     note: "Kontakt upravený",
                 }),
-            }),
-        ]);
-    } catch {
-        return { ok: false, error: "Nepodarilo sa uložiť." };
+            });
+        });
+    } catch (error) {
+        return { ok: false, error: toActionError(error, "Nepodarilo sa uložiť.", "updateContact").error };
     }
     revalidateContacts();
     return { ok: true };
@@ -164,19 +165,18 @@ export async function updateContact(
 export async function deleteContact(
     id: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-    const session = await auth();
-    if (!session?.user?.id) return { ok: false, error: "Nie si prihlásený." };
-    if (!can(session.user, "contacts.access")) return { ok: false, error: "Nemáš oprávnenie." };
-    const guard = await assertCanManageContact(session.user, session.user.id, id);
-    if (guard) return { ok: false, error: guard };
+    const user = await requireUser();
+    if (!user) return { ok: false, error: "Nie si prihlásený." };
+    if (!can(user, "contacts.access")) return { ok: false, error: "Nemáš oprávnenie." };
+    const teamIds = can(user, "contacts.manageTeam") ? ((await getTeamScopeForLeader(user.id))?.ids ?? []) : null;
 
     try {
-        await prisma.lead.update({
-            where: { id },
-            data: { deletedAt: new Date() },
+        await withLockTx(async (tx) => {
+            const lead = await lockContactForManage(tx, user, id, teamIds);
+            await tx.lead.update({ where: { id: lead.id }, data: { deletedAt: new Date(), ...bump } });
         });
-    } catch {
-        return { ok: false, error: "Nepodarilo sa vymazať." };
+    } catch (error) {
+        return { ok: false, error: toActionError(error, "Nepodarilo sa vymazať.", "deleteContact").error };
     }
     revalidateContacts();
     return { ok: true };

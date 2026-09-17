@@ -1,18 +1,19 @@
 import Link from "next/link";
-import { auth } from "@/auth";
-import { notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { can } from "@/lib/permissions";
+import { requireUser } from "@/lib/access/user";
 import { getAdminUserStats } from "@/lib/queries/users";
 import { getTeamOptions } from "@/lib/queries/teams";
 import { ROLE_LABEL } from "@/lib/dictionaries";
 import { Users, UsersRound, ArrowRight } from "lucide-react";
 
 export default async function AdminPage() {
-    const session = await auth();
-    if (!can(session?.user, "admin.access")) notFound();
+    const viewer = await requireUser();
+    if (!viewer) redirect("/login?deactivated=1");
+    if (!can(viewer, "admin.access")) redirect("/dashboard");
 
     const [stats, teams] = await Promise.all([getAdminUserStats(), getTeamOptions()]);
 

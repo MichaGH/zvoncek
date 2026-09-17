@@ -12,6 +12,8 @@ export type Permission =
     | "today.view"
     | "calls.view"
     | "calls.work"
+    | "calls.claim"
+    | "calls.assign"
     | "callHistory.access"
     | "callHistory.viewAll"
     | "callHistory.viewTeam"
@@ -23,8 +25,12 @@ export type Permission =
     | "contacts.deleteOwnUncalled"
     | "contacts.deleteAny"
     | "contacts.manageTeam"
+    | "clients.view"
+    | "clients.work"
+    | "deals.receive"
     | "pipeline.view"
     | "pipeline.manage"
+    | "requests.resolve"
     | "stats.view"
     | "stats.viewAll"
     | "stats.viewTeam"
@@ -36,6 +42,8 @@ const ALL_PERMISSIONS: Permission[] = [
     "today.view",
     "calls.view",
     "calls.work",
+    "calls.claim",
+    "calls.assign",
     "callHistory.access",
     "callHistory.viewAll",
     "callHistory.viewTeam",
@@ -47,8 +55,12 @@ const ALL_PERMISSIONS: Permission[] = [
     "contacts.deleteOwnUncalled",
     "contacts.deleteAny",
     "contacts.manageTeam",
+    "clients.view",
+    "clients.work",
+    "deals.receive",
     "pipeline.view",
     "pipeline.manage",
+    "requests.resolve",
     "stats.view",
     "stats.viewAll",
     "stats.viewTeam",
@@ -74,19 +86,36 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
         "stats.viewTeam",
     ],
     // Marketing / prvotné volanie – rieši calls + vlastnú históriu, môže rýchlo pridať kontakt.
+    // Pozitívne hovory odovzdáva (routing cez tím), sám obchody nevlastní.
     TELESALES: [
         "today.view",
         "calls.view",
         "calls.work",
+        "calls.claim",
         "callHistory.access",
         "callHistory.revert",
         "contacts.create",
+    ],
+    // Obchodník – prvé hovory ako TELESALES + follow-upy na VLASTNÝCH obchodoch (/dashboard/clients).
+    SALES_REP: [
+        "today.view",
+        "calls.view",
+        "calls.work",
+        "calls.claim",
+        "callHistory.access",
+        "callHistory.revert",
+        "contacts.create",
+        "clients.view",
+        "clients.work",
+        "deals.receive",
     ],
     // Manažér – vidí a rieši všetko okrem admin-only vecí.
     MANAGER: [
         "today.view",
         "calls.view",
         "calls.work",
+        "calls.claim",
+        "calls.assign",
         "callHistory.access",
         "callHistory.viewAll",
         "callHistory.revert",
@@ -95,8 +124,10 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
         "contacts.create",
         "contacts.deleteOwnUncalled",
         "contacts.deleteAny",
+        "deals.receive",
         "pipeline.view",
         "pipeline.manage",
+        "requests.resolve",
         "stats.view",
         "stats.viewAll",
     ],
@@ -131,18 +162,15 @@ export function canAny(user: Userish, permissions: Permission[]): boolean {
     return permissions.some((p) => perms.includes(p));
 }
 
-// Spätná kompatibilita pre tracking/pipeline akcie.
-export function canManagePipeline(
-    user: { id?: string | null; role?: unknown } | null | undefined,
-): boolean {
-    return Boolean(user?.id) && can(user, "pipeline.manage");
-}
-
 // Ktoré právo treba na otvorenie danej cesty (route guard v auth.config).
 export function requiredPermissionForPath(path: string): Permission | null {
+    // Špecifickejšie cesty musia byť pred prefixom rodiča.
     if (path.startsWith("/dashboard/calls/history")) return "callHistory.access";
+    if (path.startsWith("/dashboard/calls/assignments")) return "calls.assign";
     if (path.startsWith("/dashboard/calls")) return "calls.view";
     if (path.startsWith("/dashboard/pipeline")) return "pipeline.view";
+    if (path.startsWith("/dashboard/clients")) return "clients.view";
+    if (path.startsWith("/dashboard/contacts/new")) return "contacts.create";
     if (path.startsWith("/dashboard/contacts")) return "contacts.access";
     if (path.startsWith("/dashboard/stats")) return "stats.view";
     if (path.startsWith("/dashboard/admin")) return "admin.access";

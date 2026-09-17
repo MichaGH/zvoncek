@@ -38,6 +38,7 @@ import {
     updateDesignMeta,
 } from "@/lib/actions/tracking";
 import type { DesignView, TrackedEventRow } from "@/lib/queries/tracking";
+import { BUSINESS_TZ } from "@/lib/domain/businessTime";
 
 function normalizeUrl(u: string) {
     return /^https?:\/\//i.test(u) ? u : `https://${u}`;
@@ -53,6 +54,7 @@ function trackedUrl(design: DesignView): string | null {
 function fmtDateTime(iso: string | null) {
     if (!iso) return "—";
     return new Date(iso).toLocaleString("sk-SK", {
+        timeZone: BUSINESS_TZ,
         day: "numeric",
         month: "numeric",
         year: "numeric",
@@ -63,7 +65,7 @@ function fmtDateTime(iso: string | null) {
 
 function fmtDate(iso: string | null) {
     if (!iso) return "—";
-    return new Date(iso).toLocaleDateString("sk-SK", { day: "numeric", month: "numeric" });
+    return new Date(iso).toLocaleDateString("sk-SK", { timeZone: BUSINESS_TZ, day: "numeric", month: "numeric" });
 }
 
 function fmtDuration(ms: number | null): string | null {

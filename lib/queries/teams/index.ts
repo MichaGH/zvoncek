@@ -9,7 +9,7 @@ export async function getTeams() {
             id: true,
             name: true,
             createdAt: true,
-            leader: { select: { id: true, firstName: true, lastName: true } },
+            leader: { select: { id: true, firstName: true, lastName: true, role: true, deletedAt: true } },
             _count: { select: { members: true } },
         },
         orderBy: { name: "asc" },

@@ -10,11 +10,22 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "sonner";
 import { saveQuote, setPriceDisclosed, setQuoteSent } from "@/lib/actions/pipeline";
+import { saveClientQuote, setClientPriceDisclosed, setClientQuoteSent } from "@/lib/actions/clients";
+import type { ActionError } from "@/lib/access/errors";
+import { BUSINESS_TZ } from "@/lib/domain/businessTime";
+
+// Rovnaká karta pre pipeline (manažér) aj moji klienti (vlastník); server akcie sa líšia guardom a zdrojom aktivity.
+const ACTIONS = {
+    pipeline: { saveQuote, setPriceDisclosed, setQuoteSent },
+    clients: { saveQuote: saveClientQuote, setPriceDisclosed: setClientPriceDisclosed, setQuoteSent: setClientQuoteSent },
+};
 
 function fmtDate(iso: string | null) {
     if (!iso) return "";
     return new Date(iso).toLocaleDateString("sk-SK", {
+        timeZone: BUSINESS_TZ,
         day: "numeric",
         month: "numeric",
         year: "numeric",
@@ -27,14 +38,23 @@ export default function CenovaPonukaCard({
     priceNote,
     priceDisclosed,
     quoteSentAt,
+    mode = "pipeline",
+    readOnly = false,
 }: {
     leadId: string;
     price: number | null;
     priceNote: string | null;
     priceDisclosed: boolean;
     quoteSentAt: string | null;
+    mode?: "pipeline" | "clients";
+    readOnly?: boolean;
 }) {
     const router = useRouter();
+    const actions = ACTIONS[mode];
+
+    function report(r: { success: true } | ActionError) {
+        if ("error" in r) toast.error(r.error);
+    }
     const quoteSent = Boolean(quoteSentAt);
     const [editing, setEditing] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -45,10 +65,11 @@ export default function CenovaPonukaCard({
         setBusy(true);
         const trimmed = priceInput.trim();
         const parsed = trimmed === "" ? null : Number(trimmed);
-        await saveQuote(leadId, {
+        const r = await actions.saveQuote(leadId, {
             price: parsed != null && Number.isFinite(parsed) ? parsed : null,
             priceNote: noteInput,
         });
+        report(r);
         setBusy(false);
         setEditing(false);
         router.refresh();
@@ -56,21 +77,21 @@ export default function CenovaPonukaCard({
 
     async function toggleDisclosed(next: boolean) {
         setBusy(true);
-        await setPriceDisclosed(leadId, next);
+        report(await actions.setPriceDisclosed(leadId, next));
         setBusy(false);
         router.refresh();
     }
 
     async function markQuoteSent() {
         setBusy(true);
-        await setQuoteSent(leadId, true);
+        report(await actions.setQuoteSent(leadId, true));
         setBusy(false);
         router.refresh();
     }
 
     async function revertQuoteSent() {
         setBusy(true);
-        await setQuoteSent(leadId, false);
+        report(await actions.setQuoteSent(leadId, false));
         setBusy(false);
         router.refresh();
     }
@@ -85,7 +106,7 @@ export default function CenovaPonukaCard({
         <Card>
             <CardHeader className="flex items-center justify-between">
                 <CardTitle className="text-base">Cena</CardTitle>
-                {!editing && (
+                {!editing && !readOnly && (
                     <Button
                         size="sm"
                         variant="ghost"
@@ -109,7 +130,7 @@ export default function CenovaPonukaCard({
                                 <label className={`flex items-center gap-1.5 text-sm text-muted-foreground${price == null ? " opacity-40" : " cursor-pointer"}`}>
                                     <Checkbox
                                         checked={priceDisclosed}
-                                        disabled={busy || price == null}
+                                        disabled={busy || price == null || readOnly}
                                         onCheckedChange={(v) => toggleDisclosed(v === true)}
                                     />
                                     <span>Klient pozná cenu</span>
@@ -135,7 +156,7 @@ export default function CenovaPonukaCard({
                                     </Badge>
                                     <button
                                         className="w-fit text-xs text-muted-foreground underline-offset-2 hover:underline disabled:opacity-50"
-                                        disabled={busy}
+                                        disabled={busy || readOnly}
                                         onClick={revertQuoteSent}
                                     >
                                         zrušiť
@@ -146,7 +167,7 @@ export default function CenovaPonukaCard({
                                     size="sm"
                                     variant="outline"
                                     className="w-fit"
-                                    disabled={busy || price == null}
+                                    disabled={busy || price == null || readOnly}
                                     onClick={markQuoteSent}
                                 >
                                     CP bola odoslaná

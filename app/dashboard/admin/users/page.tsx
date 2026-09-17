@@ -1,6 +1,5 @@
 import Link from "next/link";
-import { auth } from "@/auth";
-import { notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -8,24 +7,27 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { can } from "@/lib/permissions";
+import { requireUser } from "@/lib/access/user";
 import { getAdminUserList } from "@/lib/queries/users";
 import { ROLE_LABEL, ROLE_VARIANT } from "@/lib/dictionaries";
+import { BUSINESS_TZ } from "@/lib/domain/businessTime";
 import { Plus, Pencil } from "lucide-react";
 
 function formatDate(d: Date | null) {
     if (!d) return "—";
-    return d.toLocaleDateString("sk-SK", { day: "numeric", month: "numeric", year: "numeric" });
+    return d.toLocaleDateString("sk-SK", { timeZone: BUSINESS_TZ, day: "numeric", month: "numeric", year: "numeric" });
 }
 
 function formatDateTime(d: Date | null) {
     if (!d) return "—";
-    return d.toLocaleDateString("sk-SK", { day: "numeric", month: "numeric", year: "numeric" })
-        + " " + d.toLocaleTimeString("sk-SK", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString("sk-SK", { timeZone: BUSINESS_TZ, day: "numeric", month: "numeric", year: "numeric" })
+        + " " + d.toLocaleTimeString("sk-SK", { timeZone: BUSINESS_TZ, hour: "2-digit", minute: "2-digit" });
 }
 
 export default async function AdminUsersPage() {
-    const session = await auth();
-    if (!can(session?.user, "admin.access")) notFound();
+    const viewer = await requireUser();
+    if (!viewer) redirect("/login?deactivated=1");
+    if (!can(viewer, "admin.access")) redirect("/dashboard");
 
     const users = await getAdminUserList();
 

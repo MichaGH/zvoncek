@@ -5,28 +5,28 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription } f
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { updateLeadNote } from "@/lib/actions/calls";
-import { inHours, inMonths, dayIn } from "@/lib/utils";
-import { QueueLead } from "@/lib/queries/calls";
-import { CallOutcome } from "@/app/generated/prisma/enums";
+import type { QueueLead } from "@/lib/queries/calls";
+import type { FirstCallOutcome } from "@/lib/domain/leadFlow";
+import type { OutcomeOpts } from "./CallQueue";
 
 type Step = "main" | "scheduled" | "interested" | "email" | "snooze";
-type Opts = { note?: string; callbackNote?: string; when?: string; hasTime?: boolean; email?: string };
 
 // Po výbere záujmu uložíme pending outcome, potom prejdeme na email step
-type PendingOutcome = { outcome: CallOutcome; label: string; when?: string } | null;
+type PendingOutcome = { outcome: FirstCallOutcome; label: string } | null;
 
 // Trieda pre natívne date/datetime inputy:
 // text-[16px] – zabraňuje iOS auto-zoom pri focuse
 // [color-scheme:light_dark] – zabezpečí viditeľnosť ikonky kalendára v dark mode
 const nativeDateCls = "h-12 flex-1 rounded-md border px-3 text-[16px] [color-scheme:light_dark]";
 
+// Termíny posielame ako Schedule (dátum „YYYY-MM-DD" / čas „HH:mm"); deň a hodinu prepočíta server v Europe/Bratislava.
 export default function CallDrawer({
-    lead, onClose, onOutcome,
+    lead, recipientPreview, onClose, onOutcome,
 }: {
     lead: QueueLead | null;
+    recipientPreview: string | null;
     onClose: () => void;
-    onOutcome: (leadId: string, outcome: CallOutcome, label: string, opts?: Opts) => void;
+    onOutcome: (lead: QueueLead, outcome: FirstCallOutcome, label: string, opts: OutcomeOpts) => void;
 }) {
     const [step, setStep] = useState<Step>("main");
     const [note, setNote] = useState(lead?.note ?? "");
@@ -39,40 +39,35 @@ export default function CallDrawer({
     if (!lead) return <Drawer open={false} />;
     const L = lead;
     const name = L.companyName ?? L.website ?? "—";
+    const cbNote = () => callbackNote.trim() || undefined;
 
-    function fire(outcome: CallOutcome, label: string, opts?: Omit<Opts, "note">) {
-        const trimmed = note.trim();
-        if (trimmed !== (L.note ?? "")) updateLeadNote(L.id, trimmed);
-        onOutcome(L.id, outcome, label, {
-            note: trimmed || undefined,
-            ...opts,
-        });
+    // Poznámka ide vždy (aj prázdna) – server ju uloží ku kontaktu, ak sa zmenila, a ako poznámku hovoru.
+    function fire(outcome: FirstCallOutcome, label: string, opts: Omit<OutcomeOpts, "note"> = {}) {
+        onOutcome(L, outcome, label, { note, ...opts });
     }
 
-    function selectInterest(outcome: CallOutcome, label: string, when?: string) {
-        setPendingOutcome({ outcome, label, when });
+    function selectInterest(outcome: FirstCallOutcome, label: string) {
+        setPendingOutcome({ outcome, label });
         setStep("email");
     }
 
-    // Vlastný termín: dátum povinný, čas voliteľný. Čas vyplnený = presný dohodnutý čas,
-    // čas prázdny = len deň (mäkká pripomienka).
+    // Vlastný termín: dátum povinný, čas voliteľný. Čas vyplnený = presný dohodnutý čas, prázdny = len deň.
     function fireScheduledCustom() {
         if (!customDate) return;
-        const cbNote = callbackNote.trim() || undefined;
         if (customTime) {
-            const iso = new Date(`${customDate}T${customTime}`).toISOString();
-            fire("CALL_AGAIN", "Dohodnutý čas", { when: iso, hasTime: true, callbackNote: cbNote });
+            fire("CALL_AGAIN", "Dohodnutý čas", {
+                schedule: { kind: "dayTime", date: customDate, time: customTime },
+                callbackNote: cbNote(),
+            });
         } else {
-            const iso = new Date(`${customDate}T00:00`).toISOString();
-            fire("CALL_AGAIN", "Dohodnutý deň", { when: iso, hasTime: false, callbackNote: cbNote });
+            fire("CALL_AGAIN", "Dohodnutý deň", { schedule: { kind: "day", date: customDate }, callbackNote: cbNote() });
         }
     }
 
     function fireWithEmail() {
         if (!pendingOutcome) return;
         fire(pendingOutcome.outcome, pendingOutcome.label, {
-            callbackNote: callbackNote.trim() || undefined,
-            when: pendingOutcome.when,
+            callbackNote: cbNote(),
             email: email.trim() || undefined,
         });
     }
@@ -131,14 +126,14 @@ export default function CallDrawer({
                                 <p className="px-1 pb-1 text-sm text-muted-foreground">Kedy sa s ňou dohodla?</p>
                                 <Input
                                     data-vaul-no-drag
-                                    placeholder='Poznámka – napr. „chce poobede"'
+                                    placeholder="Poznámka – napr. „chce poobede“"
                                     value={callbackNote}
                                     onChange={(e) => setCallbackNote(e.target.value)}
                                     className="mb-2 text-base"
                                 />
-                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "O hodinu", { when: inHours(1), hasTime: true, callbackNote: callbackNote.trim() || undefined })}>O hodinu</Button>
-                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "Zajtra", { when: dayIn(1), hasTime: false, callbackNote: callbackNote.trim() || undefined })}>Zajtra</Button>
-                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "O týždeň", { when: dayIn(7), hasTime: false, callbackNote: callbackNote.trim() || undefined })}>O týždeň</Button>
+                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "O hodinu", { schedule: { kind: "inHours", hours: 1 }, callbackNote: cbNote() })}>O hodinu</Button>
+                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "Zajtra", { schedule: { kind: "daysFromToday", days: 1 }, callbackNote: cbNote() })}>Zajtra</Button>
+                                <Button variant="outline" className={big} onClick={() => fire("CALL_AGAIN", "O týždeň", { schedule: { kind: "daysFromToday", days: 7 }, callbackNote: cbNote() })}>O týždeň</Button>
                                 <div className="flex gap-2">
                                     <input
                                         type="date"
@@ -161,7 +156,7 @@ export default function CallDrawer({
                                     </Button>
                                 </div>
                                 <p className="px-1 text-xs text-muted-foreground">
-                                    Čas nechaj prázdny, ak nie je dohodnutý presný čas (napr. „v piatok").
+                                    Čas nechaj prázdny, ak nie je dohodnutý presný čas (napr. „v piatok“).
                                 </p>
                                 <Button variant="ghost" className="w-full" onClick={() => setStep("main")}>← Späť</Button>
                             </>
@@ -170,6 +165,11 @@ export default function CallDrawer({
                         {/* ── TYP ZÁUJMU ── */}
                         {step === "interested" && (
                             <>
+                                <p className="px-1 pb-1 text-xs text-muted-foreground">
+                                    {recipientPreview
+                                        ? `Pravdepodobne odovzdá: ${recipientPreview} (náhľad)`
+                                        : "Pravdepodobne nepriradené – obchod priradí manažér (náhľad)"}
+                                </p>
                                 <Button variant="outline" className={big} onClick={() => selectInterest("WANTS_DESIGN", "Chcú návrh")}>
                                     🎨 Chcú návrh zdarma
                                 </Button>
@@ -209,14 +209,14 @@ export default function CallDrawer({
                             <>
                                 <Input
                                     data-vaul-no-drag
-                                    placeholder='Poznámka – napr. „ozvať sa na jar, teraz nemajú rozpočet"'
+                                    placeholder="Poznámka – napr. „ozvať sa na jar, teraz nemajú rozpočet“"
                                     value={callbackNote}
                                     onChange={(e) => setCallbackNote(e.target.value)}
                                     className="mb-2 text-base"
                                 />
-                                <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 2 mesiace", { when: inMonths(2), callbackNote: callbackNote.trim() || undefined })}>O 2 mesiace</Button>
-                                <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 4 mesiace", { when: inMonths(4), callbackNote: callbackNote.trim() || undefined })}>O 4 mesiace</Button>
-                                <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 6 mesiacov", { when: inMonths(6), callbackNote: callbackNote.trim() || undefined })}>O 6 mesiacov</Button>
+                                <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 2 mesiace", { schedule: { kind: "monthsFromToday", months: 2 }, callbackNote: cbNote() })}>O 2 mesiace</Button>
+                                <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 4 mesiace", { schedule: { kind: "monthsFromToday", months: 4 }, callbackNote: cbNote() })}>O 4 mesiace</Button>
+                                <Button variant="outline" className={big} onClick={() => fire("SNOOZE", "O 6 mesiacov", { schedule: { kind: "monthsFromToday", months: 6 }, callbackNote: cbNote() })}>O 6 mesiacov</Button>
                                 <div className="flex gap-2">
                                     <input
                                         type="date"
@@ -227,7 +227,7 @@ export default function CallDrawer({
                                         className={nativeDateCls}
                                     />
                                     <Button className="h-12" disabled={!customDate}
-                                        onClick={() => fire("SNOOZE", "Vlastný termín", { when: new Date(customDate).toISOString(), callbackNote: callbackNote.trim() || undefined })}>
+                                        onClick={() => fire("SNOOZE", "Vlastný termín", { schedule: { kind: "day", date: customDate }, callbackNote: cbNote() })}>
                                         OK
                                     </Button>
                                 </div>

@@ -5,6 +5,7 @@ import type {
     NextActionKind,
     NextActionMode,
 } from "@/app/generated/prisma/enums";
+import { formatBusinessDateTime } from "@/lib/domain/businessTime";
 
 type ActivityPayload = {
     leadId: string;
@@ -62,12 +63,13 @@ export function nextActionData(
 }
 
 export function describeNextAction(
-    data: Omit<NextActionData, "nextActionHasTime" | "nextActionMode">,
+    data: Omit<NextActionData, "nextActionHasTime" | "nextActionMode"> & { nextActionHasTime?: boolean },
 ): string {
     if (!data.nextActionKind) return "Ďalší krok bol vymazaný";
 
     const parts: string[] = [data.nextActionKind];
-    if (data.nextActionAt) parts.push(data.nextActionAt.toLocaleString("sk-SK"));
+    // Dátum v obchodnej zóne – server beží v UTC. Deň-only bez času.
+    if (data.nextActionAt) parts.push(formatBusinessDateTime(data.nextActionAt, data.nextActionHasTime ?? true));
     if (data.nextActionNote) parts.push(data.nextActionNote);
     return parts.join(" · ");
 }

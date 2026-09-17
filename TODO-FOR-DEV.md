@@ -1,1 +1,3 @@
 CHILL: štatistiky, teraz sa daju pozrieť kompletne štatistiky každeho usera, ale napriklad scout nema zmysel pozerať calls. Tak nejako vymyslieť, aby sa dalo filtrovat všetkymi spôsobmi.. rôzne kombinacie, že buď vykon ludi, celkovy vykon oddelenia, alebo celkove šštatistiky ako končia hovory, alebo kolko sa pridava graf, alebo atď.. proste sledovať aktivity.. + tracking stats - niekde. Ale bude aj samostatna podstranka /tracking, alebo to bude v /admin
+
+NESKÔR: Pridať automatizované testy (napr. Vitest) pre oprávnenia, priradenie kontaktov volajúcim, odovzdanie do pipeline a súbežné nárokovanie kontaktov. Kritické súbežné scenáre testovať aj integračne proti PostgreSQL.

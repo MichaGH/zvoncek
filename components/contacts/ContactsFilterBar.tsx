@@ -14,6 +14,7 @@ type Props = {
     query?: string;
     createdBy?: string;
     assignedTo?: string;
+    owner?: string;
     team?: string;
     users?: User[];
     teams?: Team[];
@@ -27,6 +28,7 @@ export default function ContactsFilterBar({
     query = "",
     createdBy = "",
     assignedTo = "",
+    owner = "",
     team = "",
     users = [],
     teams = [],
@@ -38,20 +40,23 @@ export default function ContactsFilterBar({
     const [searchValue, setSearchValue] = useState(query);
     const [createdByValue, setCreatedByValue] = useState(createdBy);
     const [assignedToValue, setAssignedToValue] = useState(assignedTo);
+    const [ownerValue, setOwnerValue] = useState(owner);
     const [teamValue, setTeamValue] = useState(team);
 
     function push(
-        overrides: { q?: string; createdBy?: string; assignedTo?: string; team?: string } = {},
+        overrides: { q?: string; createdBy?: string; assignedTo?: string; owner?: string; team?: string } = {},
     ) {
         const q = overrides.q !== undefined ? overrides.q : searchValue;
         const cb = overrides.createdBy !== undefined ? overrides.createdBy : createdByValue;
         const ao = overrides.assignedTo !== undefined ? overrides.assignedTo : assignedToValue;
         const tm = overrides.team !== undefined ? overrides.team : teamValue;
+        const ow = overrides.owner !== undefined ? overrides.owner : ownerValue;
         const params = new URLSearchParams();
         if (q.trim()) params.set("q", q.trim());
         if (cb) params.set("createdBy", cb);
         if (ao) params.set("assignedTo", ao);
         if (tm) params.set("team", tm);
+        if (ow) params.set("owner", ow);
         router.push(`/dashboard/contacts?${params.toString()}`);
     }
 
@@ -141,10 +146,33 @@ export default function ContactsFilterBar({
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                        <SelectItem value="all-assignees">Všetci (assigned)</SelectItem>
+                        <SelectItem value="all-assignees">Volá: všetci</SelectItem>
                         {users.map((u) => (
                             <SelectItem key={u.id} value={u.id}>
-                                {u.firstName} {u.lastName}
+                                Volá: {u.firstName} {u.lastName}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            )}
+
+            {showOwnerFilter && (
+                <Select
+                    value={ownerValue || "all-owners"}
+                    onValueChange={(value) => {
+                        const nextOwner = value === "all-owners" ? "" : value;
+                        setOwnerValue(nextOwner);
+                        push({ owner: nextOwner });
+                    }}
+                >
+                    <SelectTrigger className="h-9">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all-owners">Rieši obchod: všetci</SelectItem>
+                        {users.map((u) => (
+                            <SelectItem key={u.id} value={u.id}>
+                                Rieši obchod: {u.firstName} {u.lastName}
                             </SelectItem>
                         ))}
                     </SelectContent>

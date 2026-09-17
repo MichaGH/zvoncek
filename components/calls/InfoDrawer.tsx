@@ -8,8 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { updateLeadContact } from "@/lib/actions/calls";
 import { toast } from "sonner";
+import { useRouter } from "next/navigation";
 
 export default function InfoDrawer({ lead, onClose }: { lead: QueueLead | null; onClose: () => void }) {
+    const router = useRouter();
     const [editing, setEditing] = useState(false);
     const [saving, setSaving] = useState(false);
 
@@ -42,12 +44,13 @@ export default function InfoDrawer({ lead, onClose }: { lead: QueueLead | null; 
             email: email.trim() || null,
         });
         setSaving(false);
-        if (r?.error) {
+        if ("error" in r) {
             toast.error(r.error);
         } else {
             toast.success("Kontakt uložený");
             setEditing(false);
         }
+        router.refresh();
     }
 
     // Keď sa drawer zatvára, resetujeme edit stav

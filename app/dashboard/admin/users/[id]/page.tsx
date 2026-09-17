@@ -1,12 +1,14 @@
 import Link from "next/link";
-import { auth } from "@/auth";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { can } from "@/lib/permissions";
+import { requireUser } from "@/lib/access/user";
 import { getAdminUserDetail } from "@/lib/queries/users";
 import { getTeamOptions } from "@/lib/queries/teams";
+import { getRemainingWork } from "@/lib/commands/admin";
+import { BUSINESS_TZ } from "@/lib/domain/businessTime";
 import UserProfileCard from "@/components/admin/UserProfileCard";
 import UserPasswordCard from "@/components/admin/UserPasswordCard";
 import UserStatusCard from "@/components/admin/UserStatusCard";
@@ -15,8 +17,8 @@ import { ArrowLeft, BarChart2 } from "lucide-react";
 
 function formatDateTime(d: Date | null) {
     if (!d) return "—";
-    return d.toLocaleDateString("sk-SK", { day: "numeric", month: "long", year: "numeric" })
-        + " " + d.toLocaleTimeString("sk-SK", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString("sk-SK", { timeZone: BUSINESS_TZ, day: "numeric", month: "long", year: "numeric" })
+        + " " + d.toLocaleTimeString("sk-SK", { timeZone: BUSINESS_TZ, hour: "2-digit", minute: "2-digit" });
 }
 
 export default async function AdminUserDetailPage({
@@ -24,14 +26,15 @@ export default async function AdminUserDetailPage({
 }: {
     params: Promise<{ id: string }>;
 }) {
-    const session = await auth();
-    if (!can(session?.user, "admin.access")) notFound();
+    const viewer = await requireUser();
+    if (!viewer) redirect("/login?deactivated=1");
+    if (!can(viewer, "admin.access")) redirect("/dashboard");
 
     const { id } = await params;
-    const [user, teamOptions] = await Promise.all([getAdminUserDetail(id), getTeamOptions()]);
+    const [user, teamOptions, work] = await Promise.all([getAdminUserDetail(id), getTeamOptions(), getRemainingWork(id)]);
     if (!user) notFound();
 
-    const isSelf = session?.user?.id === id;
+    const isSelf = viewer.id === id;
 
     return (
         <DashboardPage>
@@ -69,6 +72,7 @@ export default async function AdminUserDetailPage({
                         userId={user.id}
                         deletedAt={user.deletedAt}
                         isSelf={isSelf}
+                        work={work}
                     />
 
                     <TeamAssignmentCard

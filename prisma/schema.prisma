@@ -32,6 +32,12 @@ model User {
   createdLeads Lead[]     @relation("CreatedLeads")
   activities   Activity[]
 
+  assignedCallLeads    Lead[]        @relation("AssignedCaller")
+  handedOffLeads       Lead[]        @relation("HandedOffBy")
+  dealRequestsCreated  DealRequest[] @relation("DealRequestCreatedBy")
+  dealRequestsResolved DealRequest[] @relation("DealRequestResolvedBy")
+  revertedActivities   Activity[]    @relation("ActivityRevertedBy")
+
   // Tímy: user je členom max. jedného tímu (teamId) a zároveň môže viesť max. jeden tím (leadsTeam).
   team      Team?   @relation("TeamMembers", fields: [teamId], references: [id])
   teamId    String?
@@ -116,8 +122,22 @@ model Lead {
   lockedById String?
   lockedAt   DateTime?
 
+  // Zodpovednosť za volanie (len fáza volania). null = v spoločnej fronte / mimo fázy volania.
+  assignedCaller   User?     @relation("AssignedCaller", fields: [assignedCallerId], references: [id])
+  assignedCallerId String?
+  assignedCallerAt DateTime? // kedy priradené (audit/poradie, nikdy expirácia)
+
+  // Značka obchodu: createdAt pozitívneho prvého hovoru; maže ju len vrátenie výsledku hovoru.
+  pipelineEnteredAt DateTime?
+  handedOffBy       User?     @relation("HandedOffBy", fields: [handedOffById], references: [id])
+  handedOffById     String? // kto urobil pozitívny hovor
+  closedAt          DateTime? // len obchody: WON/LOST/UNREACHABLE; null pri ACTIVE/SNOOZED a mimo obchodov
+
+  revision Int @default(0) // optimistická verzia; +1 presne raz za biznis transakciu
+
   activities   Activity[]
   designs      Design[]
+  requests     DealRequest[]
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
@@ -125,6 +145,10 @@ model Lead {
   @@index([status, callbackKind])
   @@index([deletedAt])
   @@index([createdById, createdAt])
+  @@index([status, assignedCallerId, createdAt])
+  @@index([assignedCallerId, status, callbackKind])
+  @@index([ownerId, status])
+  @@index([pipelineEnteredAt, status])
 }
 
 enum LeadStatus {
@@ -151,6 +175,12 @@ model Activity {
   meta      Json? // štruktúrované detaily: napr. diff zmien { changes: [{ field, from, to }] } alebo verzia trackeru
   createdAt DateTime         @default(now())
 
+  idempotencyKey String?   @unique // klientom generovaný kľúč jedného pokusu o uloženie výsledku
+  leadRevision   Int? // len CALL z fronty volaní: Lead.revision po tomto hovore (podmienka vrátenia)
+  revertedAt     DateTime? // výsledok tohto hovoru bol vrátený
+  revertedBy     User?     @relation("ActivityRevertedBy", fields: [revertedById], references: [id])
+  revertedById   String?
+
   @@index([leadId])
   @@index([userId, createdAt])
   @@index([category, createdAt])
@@ -174,6 +204,12 @@ enum ActivityType {
   TRACKER_ATTACHED // pripojený tracked link (dizajn/CP)
   TRACKER_UPDATED // nová verzia – „dizajn aktualizovaný"
   TRACKER_OPENED // klient otvoril (míľnik, hlavne po update)
+  CALLER_ASSIGNED // audit: manuálny presun práce volajúceho (vlastné nárokovanie sa neloguje)
+  CALLER_RELEASED // audit: nárok vrátený do fronty (manažér/deaktivácia)
+  CALL_REVERTED // audit: výsledok hovoru vrátený (meta.revertedActivityId)
+  REQUEST_CREATED // požiadavka na manažéra
+  REQUEST_RESOLVED // požiadavka vybavená / zamietnutá
+  DEAL_REOPENED // audit: manažér znovu otvoril uzavretý obchod
 }
 
 enum CallOutcome {
@@ -186,12 +222,14 @@ enum CallOutcome {
   WANTS_EMAIL // 2g máme napísať
   SNOOZE // 2h "o X mesiacov"
   POSITIVE // videli, páči sa, posúva sa to
+  WANTS_TO_ORDER // len follow-up: klient chce ísť do toho → ORDER požiadavka
 }
 
 enum Role {
   SCOUT // pridáva kontakty (vidí len svoje, kým nie sú obvolané)
   SCOUT_LEADER // vedie tím scoutov – vidí ich pridané kontakty, históriu a štatistiky
   TELESALES // prvotné volanie / marketing – rieši calls
+  SALES_REP // obchodník: prvé hovory + follow-upy na vlastných obchodoch
   MANAGER // vidí a rieši všetko
   ADMIN // všetko + používatelia, admin stránky
 }
@@ -212,6 +250,7 @@ enum ActivitySource {
   PIPELINE
   CONTACTS
   ADMIN
+  CLIENTS // akcie z /dashboard/clients
 }
 
 enum NextActionKind {
@@ -325,4 +364,41 @@ model TrackerEvent {
 
   @@index([trackerId, occurredAt])
   @@index([type, occurredAt])
+}
+
+// ── POŽIADAVKY NA MANAŽÉRA ───────────────────────────────────────────────────
+// Max. jedna OPEN požiadavka na (leadId, kind) – vynútené v kóde pod zámkom Lead riadku.
+
+enum DealRequestKind {
+  PRICE // obchodník si nie je istý cenou
+  DESIGN // klient chce dizajnový návrh
+  EMAIL // manažér má poslať/pomôcť s emailom
+  ORDER // klient chce ísť do toho – manažér potvrdí WON
+  REOPEN // obchodník žiada znovu otvoriť uzavretý obchod
+  OTHER
+}
+
+enum DealRequestStatus {
+  OPEN
+  DONE
+  CANCELLED
+}
+
+model DealRequest {
+  id             String            @id @default(cuid())
+  lead           Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId         String
+  kind           DealRequestKind
+  status         DealRequestStatus @default(OPEN)
+  note           String?
+  createdBy      User              @relation("DealRequestCreatedBy", fields: [createdById], references: [id])
+  createdById    String
+  resolvedBy     User?             @relation("DealRequestResolvedBy", fields: [resolvedById], references: [id])
+  resolvedById   String?
+  resolutionNote String? // viditeľné obchodníkovi
+  resolvedAt     DateTime?
+  createdAt      DateTime          @default(now())
+
+  @@index([status, createdAt])
+  @@index([leadId, status, kind])
 }

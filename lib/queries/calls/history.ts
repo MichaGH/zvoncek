@@ -1,7 +1,9 @@
 import prisma from "@/lib/db";
+import type { AccessUser } from "@/lib/access/user";
+import { can } from "@/lib/permissions";
 
-// userId === null → história všetkých (len pre managerov/adminov, vynútené na stránke).
-export async function getCallHistory(userId: string | null) {
+// userId === null → história všetkých (len s callHistory.viewAll, vynútené na stránke).
+export async function getCallHistory(viewer: AccessUser, userId: string | null) {
     const activities = await prisma.activity.findMany({
         where: {
             type: "CALL",
@@ -11,9 +13,12 @@ export async function getCallHistory(userId: string | null) {
         },
         select: {
             id: true,
+            userId: true,
             outcome: true,
             note: true,
             createdAt: true,
+            leadRevision: true,
+            revertedAt: true,
             lead: {
                 select: {
                     id: true,
@@ -23,12 +28,17 @@ export async function getCallHistory(userId: string | null) {
                     phone: true,
                     email: true,
                     status: true,
-                    price: true,
-                    quoteSentAt: true,
-                    designSentAt: true,
-                    aboutUsSentAt: true,
+                    revision: true,
+                    deletedAt: true,
                     ownerId: true,
-                    designs: { where: { deletedAt: null }, select: { id: true }, take: 1 },
+                    assignedCallerId: true,
+                    pipelineEnteredAt: true,
+                    activities: {
+                        where: { type: "CALL", revertedAt: null },
+                        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                        take: 1,
+                        select: { id: true },
+                    },
                 },
             },
             user: {
@@ -39,23 +49,41 @@ export async function getCallHistory(userId: string | null) {
         take: 200,
     });
 
+    const isManager = can(viewer, "pipeline.manage");
+    const canRevertOwn = can(viewer, "callHistory.revert");
+
     return activities.map((activity) => {
         const l = activity.lead;
-        // „Zamknuté" = kontaktu sa už dotkol manažér → marketing ho nesmie vrátiť/editnuť.
-        const locked = Boolean(
-            l.price != null ||
-                l.quoteSentAt ||
-                l.designSentAt ||
-                l.aboutUsSentAt ||
-                l.ownerId ||
-                l.status === "WON" ||
-                l.designs.length > 0,
-        );
+        const isDeal = l.pipelineEnteredAt !== null;
+        // Server všetko overí znova; toto len rozhoduje, či ukázať tlačidlo.
+        const canRevert =
+            !activity.revertedAt &&
+            l.deletedAt === null &&
+            l.activities[0]?.id === activity.id &&
+            activity.leadRevision !== null &&
+            activity.leadRevision === l.revision &&
+            (isManager || (canRevertOwn && activity.userId === viewer.id));
+        const canEdit =
+            l.deletedAt === null &&
+            (isManager ||
+                (l.assignedCallerId === viewer.id &&
+                    !isDeal &&
+                    ["NEW", "CALLING", "SNOOZED"].includes(l.status)));
+        const leadHref = !isDeal
+            ? null
+            : can(viewer, "pipeline.view")
+              ? `/dashboard/pipeline/${l.id}`
+              : can(viewer, "clients.view") && l.ownerId === viewer.id
+                ? `/dashboard/clients/${l.id}`
+                : null;
         return {
             id: activity.id,
             outcome: activity.outcome,
             note: activity.note,
             createdAt: activity.createdAt.toISOString(),
+            reverted: Boolean(activity.revertedAt),
+            canRevert,
+            canEdit,
             lead: {
                 id: l.id,
                 number: l.number,
@@ -63,7 +91,8 @@ export async function getCallHistory(userId: string | null) {
                 website: l.website,
                 phone: l.phone,
                 email: l.email,
-                locked,
+                revision: l.revision,
+                href: leadHref,
             },
             user: activity.user,
         };
@@ -72,8 +101,10 @@ export async function getCallHistory(userId: string | null) {
 
 export type CallHistoryRow = Awaited<ReturnType<typeof getCallHistory>>[number];
 
+// Len používatelia, ktorí niekedy volali z fronty.
 export async function getCallHistoryUsers() {
     return prisma.user.findMany({
+        where: { activities: { some: { type: "CALL", source: "CALL_QUEUE" } } },
         select: { id: true, firstName: true, lastName: true },
         orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
     });

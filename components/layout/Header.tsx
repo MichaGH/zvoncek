@@ -1,16 +1,17 @@
-import { auth } from "@/auth";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import MobileNav from "@/components/layout/MobileNav";
 import { can, type Permission } from "@/lib/permissions";
+import { requireUser } from "@/lib/access/user";
 import { logout } from "@/lib/actions";
 import { LogOut } from "lucide-react";
 import DarkModeToggle from "@/components/layout/DarkModeToggle";
 import Logo from "@/components/Logo";
 
-const NAV: { href: string; label: string; perm: Permission | null }[] = [
+const NAV: { href: string; label: string; perm: Permission | null; hideIf?: Permission }[] = [
     { href: "/dashboard",          label: "Dashboard",  perm: null              },
     { href: "/dashboard/calls",    label: "Volania",    perm: "calls.view"      },
+    { href: "/dashboard/clients",  label: "Klienti",    perm: "clients.view", hideIf: "pipeline.view" },
     { href: "/dashboard/pipeline", label: "Pipeline",   perm: "pipeline.view"   },
     { href: "/dashboard/contacts", label: "Kontakty",   perm: "contacts.access" },
     { href: "/dashboard/stats",    label: "Štatistiky", perm: "stats.view"      },
@@ -18,15 +19,13 @@ const NAV: { href: string; label: string; perm: Permission | null }[] = [
 ];
 
 export default async function Header() {
-    const session = await auth();
-    const user = session?.user;
-    const links = user ? NAV.filter((n) => n.perm === null || can(user, n.perm)) : [];
-
-    const u = user as typeof user & {
-        username?: string;
-        firstName?: string;
-        lastName?: string;
-    };
+    // Odkazy z aktuálneho používateľa v DB – deaktivovaný účet nevidí nič.
+    const user = await requireUser();
+    const links = user
+        ? NAV.filter((n) => (n.perm === null || can(user, n.perm)) && !(n.hideIf && can(user, n.hideIf)))
+              .map(({ href, label }) => ({ href, label }))
+        : [];
+    const u = user;
 
     return (
         <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur">
@@ -56,13 +55,13 @@ export default async function Header() {
                         <>
                             {/* lg+: Michal Chovanec (michal) — plné meno, viditeľné */}
                             <span className="hidden items-center gap-1.5 text-sm lg:inline-flex">
-                                <span className="font-medium">{u.firstName} {u.lastName}</span>
-                                <span className="font-mono text-xs text-muted-foreground">({u.username})</span>
+                                <span className="font-medium">{u?.firstName} {u?.lastName}</span>
+                                <span className="font-mono text-xs text-muted-foreground">({u?.username})</span>
                             </span>
 
                             {/* md–lg: len username bez zátvoriek */}
                             <span className="hidden font-mono text-sm text-muted-foreground md:inline lg:hidden">
-                                {u.username}
+                                {u?.username}
                             </span>
 
                             <DarkModeToggle />

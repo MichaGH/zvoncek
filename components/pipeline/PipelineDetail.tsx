@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Phone, Pencil, Check, Plus, XCircle } from "lucide-react";
-import { LeadStatus, NextActionKind, ProjectType } from "@/app/generated/prisma/enums";
+import { toast } from "sonner";
+import { Phone, Pencil, Check, XCircle } from "lucide-react";
+import { LeadStatus, ProjectType } from "@/app/generated/prisma/enums";
 import { DashboardContent, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,12 +15,14 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import type { ActionError } from "@/lib/access/errors";
 import {
     addBusinessNote,
     changeOwner,
     changeStatus,
     logSent,
     markLost,
+    reopenDeal,
     setNextAction,
     setProjectType,
     updateLead,
@@ -28,16 +31,17 @@ import {
     ACTIVITY_CATEGORY_LABEL,
     ACTIVITY_LABEL,
     ACTIVITY_SOURCE_LABEL,
-    NEXT_ACTION_LABEL,
     OUTCOME_LABEL,
     PROJECT_TYPE_LABEL,
     STATUS_LABEL,
 } from "@/lib/dictionaries";
+import { BUSINESS_TZ } from "@/lib/domain/businessTime";
 import type { PipelineDetailData, PipelineUserOption } from "@/lib/queries/pipeline";
 import type { DesignView } from "@/lib/queries/tracking";
 import CenovaPonukaCard from "@/components/pipeline/CenovaPonukaCard";
 import DesignTrackingCard from "@/components/pipeline/DesignTrackingCard";
-import UrgencyLabel from "@/components/shared/UrgencyLabel";
+import RequestsCard from "@/components/pipeline/RequestsCard";
+import NextActionEditor from "@/components/deals/NextActionEditor";
 
 const QUICK_EVENTS = [
     "Klient sľúbil poslať podklady",
@@ -46,9 +50,14 @@ const QUICK_EVENTS = [
     "Máme sa ozvať po porade",
 ];
 
+// Stavový select ponúka len stavy obchodu (§8.2).
+const DEAL_STATUS_OPTIONS: LeadStatus[] = ["ACTIVE", "SNOOZED", "WON", "LOST", "UNREACHABLE"];
+const CLOSED: LeadStatus[] = ["WON", "LOST", "UNREACHABLE"];
+
 function formatDateTime(iso: string | null) {
     if (!iso) return "—";
     return new Date(iso).toLocaleString("sk-SK", {
+        timeZone: BUSINESS_TZ,
         day: "numeric",
         month: "numeric",
         year: "numeric",
@@ -59,18 +68,7 @@ function formatDateTime(iso: string | null) {
 
 function formatDate(iso: string | null) {
     if (!iso) return "—";
-    return new Date(iso).toLocaleDateString("sk-SK");
-}
-
-// ISO → lokálny dátum + čas pre <input type="date"> / <input type="time">.
-function toLocalParts(iso: string | null): { date: string; time: string } {
-    if (!iso) return { date: "", time: "" };
-    const d = new Date(iso);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return {
-        date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
-        time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
-    };
+    return new Date(iso).toLocaleDateString("sk-SK", { timeZone: BUSINESS_TZ });
 }
 
 function normalizeUrl(url: string) {
@@ -98,14 +96,6 @@ export default function PipelineDetail({
     });
     const [savingData, setSavingData] = useState(false);
 
-    const [nextKind, setNextKind] = useState<NextActionKind>("CALL");
-    const [nextDate, setNextDate] = useState("");
-    const [nextTime, setNextTime] = useState("");
-    const [nextInProgress, setNextInProgress] = useState(false);
-    const [nextNote, setNextNote] = useState("");
-    const [savingNext, setSavingNext] = useState(false);
-    const [editingNext, setEditingNext] = useState(false);
-
     const [busy, setBusy] = useState(false);
     const [businessNote, setBusinessNote] = useState("");
     const [showAllHistory, setShowAllHistory] = useState(true);
@@ -113,10 +103,14 @@ export default function PipelineDetail({
     const [lostReason, setLostReason] = useState(lead.lostReason ?? "");
     const [savingLost, setSavingLost] = useState(false);
 
-    const hasNextAction = Boolean(lead.nextActionKind || lead.nextActionAt || lead.nextActionNote);
     const businessActivities = lead.activities.filter((a) => a.category === "BUSINESS");
     const visibleActivities = showAllHistory ? lead.activities : businessActivities;
-    const showEditor = editingNext || !hasNextAction;
+    const isClosed = CLOSED.includes(lead.status);
+
+    function report(r: { success: true } | ActionError) {
+        if ("error" in r) toast.error(r.error);
+        return !("error" in r);
+    }
 
     function set<K extends keyof typeof form>(key: K, value: string) {
         setForm((current) => ({ ...current, [key]: value }));
@@ -135,7 +129,7 @@ export default function PipelineDetail({
 
     async function saveData() {
         setSavingData(true);
-        await updateLead(lead.id, {
+        const r = await updateLead(lead.id, {
             companyName: form.companyName.trim() || null,
             website: form.website.trim() || null,
             phone: form.phone.trim() || null,
@@ -143,89 +137,21 @@ export default function PipelineDetail({
             note: form.note.trim() || null,
         });
         setSavingData(false);
-        setEditingData(false);
+        if (report(r)) setEditingData(false);
         router.refresh();
     }
 
-    function resetNextEditor() {
-        setNextKind("CALL");
-        setNextDate("");
-        setNextTime("");
-        setNextInProgress(false);
-        setNextNote("");
-        setEditingNext(false);
-    }
-
-    function startEditNext() {
-        const parts = toLocalParts(lead.nextActionAt);
-        setNextKind(lead.nextActionKind ?? "CALL");
-        setNextDate(parts.date);
-        setNextTime(lead.nextActionHasTime ? parts.time : "");
-        setNextInProgress(lead.nextActionMode === "IN_PROGRESS");
-        setNextNote(lead.nextActionNote ?? "");
-        setEditingNext(true);
-    }
-
-    // „Nový krok" – otvorí editor s prázdnymi poľami.
-    function startNewNext() {
-        setNextKind("CALL");
-        setNextDate("");
-        setNextTime("");
-        setNextInProgress(false);
-        setNextNote("");
-        setEditingNext(true);
-    }
-
-    async function saveNextAction() {
-        let iso: string | null = null;
-        let hasTime = false;
-        let mode: "SCHEDULED" | "IN_PROGRESS" = "SCHEDULED";
-
-        if (nextInProgress) {
-            // Rozpracované: nemá termín. nextActionAt = dátum začatia. Ak už bolo
-            // rozpracované, zachováme pôvodný začiatok (aby sa „trvá X dní" nereštartlo).
-            mode = "IN_PROGRESS";
-            iso =
-                lead.nextActionMode === "IN_PROGRESS" && lead.nextActionAt
-                    ? lead.nextActionAt
-                    : new Date().toISOString();
-        } else if (nextDate) {
-            // Dátum + voliteľný čas: čas vyplnený = presný, prázdny = len deň.
-            if (nextTime) {
-                iso = new Date(`${nextDate}T${nextTime}`).toISOString();
-                hasTime = true;
-            } else {
-                iso = new Date(`${nextDate}T00:00`).toISOString();
-            }
-        }
-        setSavingNext(true);
-        await setNextAction(lead.id, nextKind, iso, nextNote.trim() || null, hasTime, mode);
-        setSavingNext(false);
-        resetNextEditor();
-        router.refresh();
-    }
-
-    async function clearNextAction() {
-        setSavingNext(true);
-        await setNextAction(lead.id, null, null, null);
-        setSavingNext(false);
-        resetNextEditor();
-        router.refresh();
-    }
-
-    async function runBusiness(fn: () => Promise<unknown>) {
+    async function runBusiness(fn: () => Promise<{ success: true } | ActionError>) {
         setBusy(true);
-        await fn();
+        report(await fn());
         setBusy(false);
         router.refresh();
     }
 
     async function saveBusinessNote() {
         const result = await addBusinessNote(lead.id, businessNote);
-        if (!result.error) {
-            setBusinessNote("");
-            router.refresh();
-        }
+        if (report(result)) setBusinessNote("");
+        router.refresh();
     }
 
     const phoneHref = lead.phone ? `tel:${lead.phone.replace(/\s/g, "")}` : null;
@@ -241,13 +167,18 @@ export default function PipelineDetail({
                         <span className="truncate">{lead.companyName ?? lead.website ?? "Bez mena"}</span>
                     </span>
                 }
-                description="Detail príležitosti v pipeline"
+                description={
+                    lead.handedOffBy
+                        ? `Obchod od ${formatDate(lead.pipelineEnteredAt)} · hovor: ${lead.handedOffBy.firstName} ${lead.handedOffBy.lastName}`
+                        : "Detail obchodu v pipeline"
+                }
                 actions={
                     <div className="flex flex-wrap items-center gap-2">
                         <Select
+                            key={`status-${lead.status}`}
                             defaultValue={lead.status}
                             onValueChange={async (value) => {
-                                await changeStatus(lead.id, value as LeadStatus);
+                                report(await changeStatus(lead.id, value as LeadStatus));
                                 router.refresh();
                             }}
                         >
@@ -255,15 +186,18 @@ export default function PipelineDetail({
                                 <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                                {Object.entries(STATUS_LABEL).map(([key, label]) => (
-                                    <SelectItem key={key} value={key}>{label}</SelectItem>
+                                {DEAL_STATUS_OPTIONS.map((key) => (
+                                    <SelectItem key={key} value={key}>
+                                        {STATUS_LABEL[key]}
+                                    </SelectItem>
                                 ))}
                             </SelectContent>
                         </Select>
                         <Select
+                            key={`owner-${lead.owner?.id ?? "none"}`}
                             defaultValue={lead.owner?.id ?? "none"}
                             onValueChange={async (value) => {
-                                await changeOwner(lead.id, value === "none" ? null : value);
+                                report(await changeOwner(lead.id, value === "none" ? null : value));
                                 router.refresh();
                             }}
                         >
@@ -271,7 +205,12 @@ export default function PipelineDetail({
                                 <SelectValue placeholder="Rieši" />
                             </SelectTrigger>
                             <SelectContent>
-                                <SelectItem value="none">— nikto —</SelectItem>
+                                <SelectItem value="none">— nepriradené —</SelectItem>
+                                {lead.owner && !users.some((u) => u.id === lead.owner?.id) && (
+                                    <SelectItem value={lead.owner.id} disabled>
+                                        {lead.owner.firstName} {lead.owner.lastName} (neaktívny)
+                                    </SelectItem>
+                                )}
                                 {users.map((user) => (
                                     <SelectItem key={user.id} value={user.id}>
                                         {user.firstName} {user.lastName}
@@ -282,10 +221,7 @@ export default function PipelineDetail({
                         <Select
                             defaultValue={lead.projectType ?? "none"}
                             onValueChange={async (value) => {
-                                await setProjectType(
-                                    lead.id,
-                                    value === "none" ? null : (value as ProjectType),
-                                );
+                                report(await setProjectType(lead.id, value === "none" ? null : (value as ProjectType)));
                                 router.refresh();
                             }}
                         >
@@ -316,121 +252,9 @@ export default function PipelineDetail({
                     {/* MAIN COLUMN — the workflow. order-2: na one-column layoute (split screen,
                         manager bez fullscreenu) nech je Údaje vidno hned, nie uplne dole. */}
                     <div className="order-2 space-y-6 lg:order-none lg:col-span-2">
-                        {/* Ďalší krok */}
-                        <Card>
-                            <CardHeader className="flex items-center justify-between">
-                                <CardTitle className="text-base">Ďalší krok</CardTitle>
-                                <div className="flex items-center gap-1">
-                                    <Button size="sm" variant="outline" onClick={startNewNext}>
-                                        <Plus className="mr-1.5 h-3.5 w-3.5" />
-                                        Nový
-                                    </Button>
-                                    {hasNextAction && !editingNext && (
-                                        <Button
-                                            size="sm"
-                                            variant="ghost"
-                                            className="h-8 w-8 p-0"
-                                            onClick={startEditNext}
-                                            aria-label="Upraviť ďalší krok"
-                                        >
-                                            <Pencil className="h-3.5 w-3.5" />
-                                        </Button>
-                                    )}
-                                </div>
-                            </CardHeader>
-                            <CardContent className="space-y-3">
-                                {hasNextAction && !editingNext && (
-                                    <NextActionDisplay
-                                        kind={lead.nextActionKind}
-                                        at={lead.nextActionAt ?? null}
-                                        hasTime={lead.nextActionHasTime}
-                                        mode={lead.nextActionMode}
-                                        note={lead.nextActionNote ?? null}
-                                    />
-                                )}
+                        <RequestsCard leadId={lead.id} requests={lead.requests} />
 
-                                {showEditor && (
-                                    <div className="space-y-2">
-                                        {hasNextAction && (
-                                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                                Zmeniť ďalší krok
-                                            </p>
-                                        )}
-                                        <div className="grid gap-2 sm:grid-cols-2">
-                                            <div className="grid gap-1.5">
-                                                <Label className="text-xs text-muted-foreground">Typ</Label>
-                                                <Select
-                                                    value={nextKind}
-                                                    onValueChange={(value) => setNextKind(value as NextActionKind)}
-                                                >
-                                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                                    <SelectContent>
-                                                        {Object.entries(NEXT_ACTION_LABEL).map(([key, label]) => (
-                                                            <SelectItem key={key} value={key}>{label}</SelectItem>
-                                                        ))}
-                                                    </SelectContent>
-                                                </Select>
-                                            </div>
-                                            <div className="grid gap-1.5">
-                                                <Label className="text-xs text-muted-foreground">Kedy</Label>
-                                                {nextInProgress ? (
-                                                    <p className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-                                                        Rozpracované – bez termínu. Zobrazí sa „trvá X dní".
-                                                    </p>
-                                                ) : (
-                                                    <>
-                                                        <div className="flex gap-2">
-                                                            <Input
-                                                                type="date"
-                                                                value={nextDate}
-                                                                onChange={(event) => setNextDate(event.target.value)}
-                                                                onClick={(e) => (e.currentTarget as HTMLInputElement).showPicker?.()}
-                                                                className="flex-1 [color-scheme:light_dark]"
-                                                            />
-                                                            <Input
-                                                                type="time"
-                                                                value={nextTime}
-                                                                onChange={(event) => setNextTime(event.target.value)}
-                                                                onClick={(e) => (e.currentTarget as HTMLInputElement).showPicker?.()}
-                                                                className="w-28 [color-scheme:light_dark]"
-                                                            />
-                                                        </div>
-                                                        <p className="text-xs text-muted-foreground">
-                                                            Čas nechaj prázdny, ak nie je dohodnutý presný čas.
-                                                        </p>
-                                                    </>
-                                                )}
-                                                <label className="mt-1 flex cursor-pointer items-center gap-2 text-sm">
-                                                    <Checkbox
-                                                        checked={nextInProgress}
-                                                        onCheckedChange={(v) => setNextInProgress(v === true)}
-                                                    />
-                                                    <span>Rozpracované (bez termínu, počíta dni)</span>
-                                                </label>
-                                            </div>
-                                        </div>
-                                        <div className="grid gap-1.5">
-                                            <Label className="text-xs text-muted-foreground">Poznámka</Label>
-                                            <Input
-                                                placeholder="Čo treba urobiť alebo na čo čakáme…"
-                                                value={nextNote}
-                                                onChange={(event) => setNextNote(event.target.value)}
-                                            />
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <Button size="sm" onClick={saveNextAction} disabled={savingNext}>
-                                                {savingNext ? "Ukladám…" : "Uložiť ďalší krok"}
-                                            </Button>
-                                            {editingNext && (
-                                                <Button size="sm" variant="ghost" onClick={resetNextEditor}>
-                                                    Zrušiť
-                                                </Button>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
-                            </CardContent>
-                        </Card>
+                        <NextActionEditor lead={lead} onSave={(input, revision) => setNextAction(lead.id, input, revision)} />
 
                         {/* Posledný krok & zaznamenať udalosť */}
                         <Card>
@@ -511,20 +335,23 @@ export default function PipelineDetail({
                             priceNote={lead.priceNote}
                             priceDisclosed={lead.priceDisclosed}
                             quoteSentAt={lead.quoteSentAt}
+                            mode="pipeline"
                         />
 
                         {/* Dizajn & sledovanie */}
-                        <DesignTrackingCard
-                            leadId={lead.id}
-                            designs={designs}
-                            quoteSentAt={lead.quoteSentAt}
-                        />
+                        <div id="design" className="scroll-mt-20">
+                            <DesignTrackingCard
+                                leadId={lead.id}
+                                designs={designs}
+                                quoteSentAt={lead.quoteSentAt}
+                            />
+                        </div>
 
                         {/* Email „o nás" – samostatná vec (jedna z 3, čo si klient môže vypýtať) */}
                         <Card>
                             <CardHeader className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
-                                    <CardTitle className="text-base">Email „o nás&quot;</CardTitle>
+                                    <CardTitle className="text-base">Email „o nás“</CardTitle>
                                     {lead.aboutUsSentAt && (
                                         <Badge variant="secondary" className="font-normal">
                                             Poslané {formatDate(lead.aboutUsSentAt)}
@@ -546,17 +373,20 @@ export default function PipelineDetail({
                             </CardContent>
                         </Card>
 
-                        {/* Nemajú záujem */}
+                        {/* Výsledok */}
                         <Card>
                             <CardHeader>
                                 <CardTitle className="text-base">Výsledok</CardTitle>
                             </CardHeader>
                             <CardContent className="space-y-3">
-                                {lead.status === "LOST" ? (
+                                {isClosed ? (
                                     <div className="space-y-2">
                                         <div className="flex items-center gap-2 text-sm">
                                             <XCircle className="h-4 w-4 shrink-0 text-destructive" />
-                                            <span className="font-medium">Nemajú záujem</span>
+                                            <span className="font-medium">
+                                                {STATUS_LABEL[lead.status]}
+                                                {lead.closedAt ? ` · ${formatDate(lead.closedAt)}` : ""}
+                                            </span>
                                         </div>
                                         {lead.lostReason && (
                                             <p className="text-sm text-muted-foreground">{lead.lostReason}</p>
@@ -565,9 +395,7 @@ export default function PipelineDetail({
                                             size="sm"
                                             variant="outline"
                                             disabled={busy}
-                                            onClick={async () => {
-                                                await runBusiness(() => changeStatus(lead.id, "ACTIVE"));
-                                            }}
+                                            onClick={() => runBusiness(() => reopenDeal(lead.id))}
                                         >
                                             Znovu otvoriť
                                         </Button>
@@ -575,7 +403,7 @@ export default function PipelineDetail({
                                 ) : (
                                     <>
                                         <Textarea
-                                            placeholder='Dôvod (nepovinné) – napr. "cena príliš vysoká", "vybrali konkurenciu"'
+                                            placeholder="Dôvod (nepovinné) – napr. „cena príliš vysoká“, „vybrali konkurenciu“"
                                             value={lostReason}
                                             onChange={(e) => setLostReason(e.target.value)}
                                             className="min-h-[72px]"
@@ -587,7 +415,7 @@ export default function PipelineDetail({
                                             disabled={savingLost}
                                             onClick={async () => {
                                                 setSavingLost(true);
-                                                await markLost(lead.id, lostReason || null);
+                                                report(await markLost(lead.id, lostReason || null));
                                                 setSavingLost(false);
                                                 router.refresh();
                                             }}
@@ -642,7 +470,7 @@ export default function PipelineDetail({
                                                         </p>
                                                     )}
                                                     {activity.note && (
-                                                        <p className="text-muted-foreground">{activity.note}</p>
+                                                        <p className="whitespace-pre-wrap text-muted-foreground">{activity.note}</p>
                                                     )}
                                                 </div>
                                             </div>
@@ -735,32 +563,6 @@ export default function PipelineDetail({
                 </div>
             </DashboardContent>
         </>
-    );
-}
-
-function NextActionDisplay({
-    kind,
-    at,
-    hasTime,
-    mode,
-    note,
-}: {
-    kind: string | null;
-    at: string | null;
-    hasTime: boolean;
-    mode: "SCHEDULED" | "IN_PROGRESS";
-    note: string | null;
-}) {
-    return (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-            <span className="text-sm font-semibold">
-                {kind ? NEXT_ACTION_LABEL[kind as NextActionKind] : "Ďalší krok"}
-            </span>
-            {(at || mode === "IN_PROGRESS") && (
-                <UrgencyLabel at={at} hasTime={hasTime} mode={mode} className="text-sm" />
-            )}
-            {note && <span className="text-sm text-muted-foreground">{note}</span>}
-        </div>
     );
 }
 

@@ -11,12 +11,14 @@ import {
     NEXT_ACTION_LABEL,
     OUTCOME_LABEL,
     PROJECT_TYPE_LABEL,
+    REQUEST_KIND_LABEL,
     STATUS_LABEL,
     STATUS_VARIANT,
 } from "@/lib/dictionaries";
 import type { PipelineListRow } from "@/lib/queries/pipeline";
 import UrgencyLabel from "@/components/shared/UrgencyLabel";
 import { cn } from "@/lib/utils";
+import { businessDayMonth, businessDaysBetween, businessHm, businessInputParts } from "@/lib/domain/businessTime";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POZOR: PipelineTable má DVE rozloženia z jedného `rows`:
@@ -31,27 +33,36 @@ import { cn } from "@/lib/utils";
 // v OBOCH rozloženiach samostatne (desktop tabuľka aj mobilná karta).
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Dni a čas v obchodnom kalendári (Europe/Bratislava), rovnako na serveri aj v prehliadači.
 function formatDate(iso: string | null) {
     if (!iso) return "—";
     const date = new Date(iso);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const that = new Date(date);
-    that.setHours(0, 0, 0, 0);
-    const diff = (that.getTime() - today.getTime()) / 86_400_000;
-    const time =
-        date.getHours() || date.getMinutes()
-            ? ` ${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")}`
-            : "";
+    const diff = businessDaysBetween(new Date(), date);
+    const hm = businessInputParts(date).time;
+    const time = hm !== "00:00" ? ` ${businessHm(date)}` : "";
     if (diff === 0) return `Dnes${time}`;
     if (diff === 1) return `Zajtra${time}`;
     if (diff === -1) return `Včera${time}`;
-    return date.toLocaleDateString("sk-SK", { day: "numeric", month: "numeric" }) + time;
+    return businessDayMonth(date) + time;
 }
 
 const NBSP = " ";
 
 // ── Zdieľané content komponenty (používa desktop aj mobile) ──────────────────
+
+// Otvorené požiadavky obchodníka na manažéra.
+function RequestBadges({ row }: { row: PipelineListRow }) {
+    if (!row.openRequests.length) return null;
+    return (
+        <>
+            {row.openRequests.map((r) => (
+                <Badge key={r.kind} variant="destructive" className="font-normal">
+                    {REQUEST_KIND_LABEL[r.kind]}
+                </Badge>
+            ))}
+        </>
+    );
+}
 
 function SentIcons({ row }: { row: PipelineListRow }) {
     if (!row.hasDesignSent && !row.quoteSentAt && !row.aboutUsSentAt) return null;
@@ -232,6 +243,7 @@ export default function PipelineTable({
                             <span className="truncate text-muted-foreground">
                                 · Rieši {row.owner ?? "nikto"}
                             </span>
+                            <RequestBadges row={row} />
                         </div>
                     </Link>
                 ))}
@@ -316,8 +328,11 @@ export default function PipelineTable({
                                             <PriceWithEye row={row} />
                                         </div>
                                     </TableCell>
-                                    <TableCell className="max-w-0 truncate align-middle text-muted-foreground">
-                                        {row.owner ?? "—"}
+                                    <TableCell className="max-w-0 align-middle text-muted-foreground">
+                                        <div className="flex min-w-0 flex-wrap items-center gap-1">
+                                            <span className="truncate">{row.owner ?? "—"}</span>
+                                            <RequestBadges row={row} />
+                                        </div>
                                     </TableCell>
                                 </TableRow>
                             );
