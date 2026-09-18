@@ -14,32 +14,42 @@ import {
     FOLLOW_UP_NEXT_KINDS,
     FOLLOW_UP_OUTCOMES,
 } from "@/lib/domain/leadFlow";
+import { noteWithReply, REPLY_KEYS } from "@/lib/domain/clientReplies";
 import { bump, bumpLeadOnce, markLeadBumped } from "@/lib/domain/revision";
 import { resolveSchedule, scheduleSchema } from "@/lib/domain/schedule";
 import { can } from "@/lib/permissions";
 
-// Akcie obchodníka na VLASTNÝCH obchodoch (/dashboard/clients). Guard: requireDealWork – manažér alebo vlastník
-// s clients.work; uzavreté obchody sú pre obchodníka len na čítanie (okrem REOPEN požiadavky). Zdroj CLIENTS.
+// Práca na obchode – jedna sada príkazov pre VLASTNÍKA aj manažéra (/dashboard/pipeline).
+// Guard: requireDealWork – manažér alebo vlastník s deals.work; uzavreté obchody sú pre vlastníka len na čítanie
+// (okrem REOPEN požiadavky). Manažérske zmeny stavu/vlastníka/návrhov sú v lib/commands/pipeline.ts.
+//
+// Zdroj aktivity sa určuje podľa AKTÉRA, nie podľa cesty (round 2, D-01): manažér = PIPELINE, ostatní = CLIENTS.
+// Štatistiky tak vedia rozlíšiť „follow-up obchodníka" od manažérskeho zásahu aj po zlúčení obrazoviek.
+
+function sourceFor(user: AccessUser): "PIPELINE" | "CLIENTS" {
+    return can(user, "deals.manage") ? "PIPELINE" : "CLIENTS";
+}
 
 export type Ok = { success: true };
 export type CommandResult = Ok | ActionError;
 type Actor = { id: string; firstName: string };
+type Source = "PIPELINE" | "CLIENTS";
 
 async function owned(
     user: AccessUser,
     leadId: string,
     label: string,
-    fn: (tx: Tx, lead: Lead, actor: Actor) => Promise<void>,
+    fn: (tx: Tx, lead: Lead, actor: Actor, source: Source) => Promise<void>,
     opts: { expectedRevision?: number; closedPolicy?: ClosedPolicy } = {},
 ): Promise<CommandResult> {
-    if (!can(user, "clients.work") && !can(user, "pipeline.manage")) return FORBIDDEN;
+    if (!can(user, "deals.work") && !can(user, "deals.manage")) return FORBIDDEN;
     try {
         await withLockTx(async (tx) => {
             const { lead, actor } = await requireDealWork(tx, user, leadId, {
                 expectedRevision: opts.expectedRevision,
                 closedPolicy: opts.closedPolicy ?? "reject",
             });
-            await fn(tx, lead, actor);
+            await fn(tx, lead, actor, sourceFor(user));
         });
         return { success: true };
     } catch (error) {
@@ -58,16 +68,18 @@ const followUpSchema = z.object({
     note: z.string().max(5000).nullish(),
     nextKind: z.enum(FOLLOW_UP_NEXT_KINDS).nullish(),
     lostReason: z.string().max(500).nullish(),
+    reply: z.enum(REPLY_KEYS as [string, ...string[]]).nullish(),
 });
 
 export type FollowUpInput = z.input<typeof followUpSchema>;
 
 export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promise<CommandResult> {
-    if (!can(user, "clients.work") && !can(user, "pipeline.manage")) return FORBIDDEN;
+    if (!can(user, "deals.work") && !can(user, "deals.manage")) return FORBIDDEN;
     const parsed = followUpSchema.safeParse(raw);
     if (!parsed.success) return { error: "Neplatné údaje." };
     const input = parsed.data;
-    const replayKey = { userId: user.id, leadId: input.leadId, source: "CLIENTS" as const, outcome: input.outcome };
+    const source = sourceFor(user);
+    const replayKey = { userId: user.id, leadId: input.leadId, source, outcome: input.outcome };
 
     const replay = await idempotentReplay(input.idempotencyKey, replayKey);
     if (replay) return "error" in replay ? replay : { success: true };
@@ -91,7 +103,8 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
             } catch (error) {
                 throw new AccessError("FORBIDDEN", error instanceof Error ? error.message : "Neplatný výsledok.");
             }
-            const note = input.note?.trim() || null;
+            // V histórii chceme čítať „čo povedali" bez lúštenia meta; kľúč ostáva strojovo spracovateľný.
+            const note = noteWithReply(input.reply, input.note);
 
             await tx.activity.create({
                 data: {
@@ -99,9 +112,10 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
                     userId: actor.id,
                     type: "CALL",
                     category: "BUSINESS",
-                    source: "CLIENTS",
+                    source,
                     outcome: input.outcome,
                     note,
+                    ...(input.reply ? { meta: { reply: input.reply } } : {}),
                     idempotencyKey: input.idempotencyKey,
                 },
             });
@@ -123,12 +137,12 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
                     leadId: lead.id,
                     userId: actor.id,
                     type: !next.nextActionKind ? "NEXT_ACTION_CLEARED" : lead.nextActionKind ? "NEXT_ACTION_CHANGED" : "NEXT_ACTION_SET",
-                    source: "CLIENTS",
+                    source,
                     note: describeNextAction(next),
                 }),
             });
-            if (request) await ensureOpenRequest(tx, lead.id, request, actor, note, "CLIENTS");
-            if (closes) await closeRequestsForStatus(tx, lead.id, status as "LOST" | "UNREACHABLE", actor.id, "CLIENTS");
+            if (request) await ensureOpenRequest(tx, lead.id, request, actor, note, source);
+            if (closes) await closeRequestsForStatus(tx, lead.id, status as "LOST" | "UNREACHABLE", actor.id, source);
         });
         return { success: true };
     } catch (error) {
@@ -145,32 +159,36 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
 
 // ── Detail obchodu ──────────────────────────────────────────────────────────
 
-export const setClientNextActionAs = (user: AccessUser, leadId: string, input: deal.NextActionInput, expectedRevision: number) =>
-    owned(user, leadId, "setClientNextAction", (tx, lead, actor) => deal.setNextAction(tx, actor, lead, input, "CLIENTS"), {
+export const setDealNextActionAs = (user: AccessUser, leadId: string, input: deal.NextActionInput, expectedRevision: number) =>
+    owned(user, leadId, "setDealNextAction", (tx, lead, actor, source) => deal.setNextAction(tx, actor, lead, input, source), {
         expectedRevision,
     });
 
-export const updateClientContactAs = (user: AccessUser, leadId: string, data: deal.DealContactInput) =>
-    owned(user, leadId, "updateClientContact", (tx, lead, actor) => deal.updateDealContact(tx, actor, lead, data, "CLIENTS"));
+export const updateDealContactAs = (user: AccessUser, leadId: string, data: deal.DealContactInput) =>
+    owned(user, leadId, "updateDealContact", (tx, lead, actor, source) => deal.updateDealContact(tx, actor, lead, data, source));
 
-export const saveClientQuoteAs = (user: AccessUser, leadId: string, input: { price: number | null; priceNote: string | null }) =>
-    owned(user, leadId, "saveClientQuote", (tx, lead, actor) => deal.saveQuote(tx, actor, lead, input, "CLIENTS"));
+export const saveDealQuoteAs = (user: AccessUser, leadId: string, input: { price: number | null; priceNote: string | null }) =>
+    owned(user, leadId, "saveDealQuote", (tx, lead, actor, source) => deal.saveQuote(tx, actor, lead, input, source));
 
-export const setClientQuoteSentAs = (user: AccessUser, leadId: string, sent: boolean) =>
-    owned(user, leadId, "setClientQuoteSent", (tx, lead, actor) => deal.setQuoteSent(tx, actor, lead, sent, "CLIENTS"));
+export const setDealQuoteSentAs = (user: AccessUser, leadId: string, sent: boolean) =>
+    owned(user, leadId, "setDealQuoteSent", (tx, lead, actor, source) => deal.setQuoteSent(tx, actor, lead, sent, source));
 
-export const setClientPriceDisclosedAs = (user: AccessUser, leadId: string, disclosed: boolean) =>
-    owned(user, leadId, "setClientPriceDisclosed", (tx, lead, actor) => deal.setPriceDisclosed(tx, actor, lead, disclosed, "CLIENTS"));
+export const setDealPriceDisclosedAs = (user: AccessUser, leadId: string, disclosed: boolean) =>
+    owned(user, leadId, "setDealPriceDisclosed", (tx, lead, actor, source) => deal.setPriceDisclosed(tx, actor, lead, disclosed, source));
 
-export const logClientEmailSentAs = (user: AccessUser, leadId: string) =>
-    owned(user, leadId, "logClientEmailSent", (tx, lead, actor) => deal.logSent(tx, actor, lead, "EMAIL_SENT", "CLIENTS"));
+export const logDealEmailSentAs = (user: AccessUser, leadId: string) =>
+    owned(user, leadId, "logDealEmailSent", (tx, lead, actor, source) => deal.logSent(tx, actor, lead, "EMAIL_SENT", source));
 
-export const addClientNoteAs = (user: AccessUser, leadId: string, note: string) =>
-    owned(user, leadId, "addClientNote", (tx, lead, actor) => deal.addBusinessNote(tx, actor, lead, { note }, "CLIENTS"));
+export const addDealNoteAs = (user: AccessUser, leadId: string, note: string) =>
+    owned(user, leadId, "addDealNote", (tx, lead, actor, source) => deal.addBusinessNote(tx, actor, lead, { note }, source));
 
 // ── Požiadavky obchodníka ───────────────────────────────────────────────────
 
 const REQUEST_KINDS = ["PRICE", "DESIGN", "EMAIL", "ORDER", "REOPEN", "OTHER"] as const satisfies readonly DealRequestKind[];
+
+// Pri týchto druhoch nedáva požiadavka bez textu zmysel – manažér by nevedel, čo si klient objednáva
+// alebo čo má návrh obsahovať (round 2, D-08/B-05). Vynútené na serveri, nielen v UI.
+const REQUIRE_NOTE: DealRequestKind[] = ["ORDER", "DESIGN", "OTHER"];
 
 export async function createDealRequestAs(
     user: AccessUser,
@@ -179,13 +197,16 @@ export async function createDealRequestAs(
     note: string | null,
 ): Promise<{ success: true; created: boolean } | ActionError> {
     if (!(REQUEST_KINDS as readonly string[]).includes(kind)) return { error: "Neplatný druh požiadavky." };
+    if (REQUIRE_NOTE.includes(kind) && !note?.trim()) {
+        return { error: kind === "ORDER" ? "Napíš, čo si klient objednáva." : "Napíš, čo presne treba." };
+    }
     let created = false;
     const result = await owned(
         user,
         leadId,
         "createDealRequest",
-        async (tx, lead, actor) => {
-            created = (await ensureOpenRequest(tx, lead.id, kind, actor, note, "CLIENTS")).created;
+        async (tx, lead, actor, source) => {
+            created = (await ensureOpenRequest(tx, lead.id, kind, actor, note, source)).created;
         },
         // REOPEN len na uzavretom obchode; všetky ostatné len na otvorenom.
         { closedPolicy: kind === "REOPEN" ? "reopenRequestOnly" : "reject" },
@@ -194,7 +215,7 @@ export async function createDealRequestAs(
 }
 
 export async function cancelOwnDealRequestAs(user: AccessUser, requestId: string, note: string | null): Promise<CommandResult> {
-    if (!can(user, "clients.work") && !can(user, "pipeline.manage")) return FORBIDDEN;
+    if (!can(user, "deals.work") && !can(user, "deals.manage")) return FORBIDDEN;
     try {
         await withLockTx(async (tx) => {
             const pre = await tx.dealRequest.findUnique({
@@ -204,7 +225,7 @@ export async function cancelOwnDealRequestAs(user: AccessUser, requestId: string
             if (!pre) throw new AccessError("NOT_FOUND");
             // Vlastník smie zrušiť vlastnú požiadavku na otvorenom obchode aj REOPEN na uzavretom. Stav sa overí pod zámkom;
             // ak sa medzitým zmenil, guard vráti DEAL_CLOSED/FORBIDDEN a klient sa obnoví.
-            const policy: ClosedPolicy = can(user, "pipeline.manage")
+            const policy: ClosedPolicy = can(user, "deals.manage")
                 ? "allow"
                 : ["WON", "LOST", "UNREACHABLE"].includes(pre.lead.status)
                   ? "reopenRequestOnly"
@@ -226,7 +247,7 @@ export async function cancelOwnDealRequestAs(user: AccessUser, requestId: string
                     userId: actor.id,
                     type: "REQUEST_RESOLVED",
                     category: "BUSINESS",
-                    source: "CLIENTS",
+                    source: sourceFor(user),
                     note: `Požiadavka zrušená: ${resolutionNote}`,
                     meta: { requestId: request.id, kind: request.kind, status: "CANCELLED" },
                 },

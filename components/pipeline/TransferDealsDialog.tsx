@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { transferDeals } from "@/lib/actions/pipeline";
-import type { PipelineUserOption } from "@/lib/queries/pipeline";
+import type { DealUserOption } from "@/lib/queries/deals";
 
 type Person = { id: string; firstName: string; lastName: string };
 type DealStatusKey = "ACTIVE" | "SNOOZED" | "WON" | "LOST" | "UNREACHABLE";
@@ -25,7 +25,7 @@ const STATUS_OPTIONS: { key: DealStatusKey; label: string }[] = [
 const selectCls = "h-9 w-full rounded-md border border-input bg-background px-3 text-sm";
 
 // „Presunúť obchody" (§5.5): napr. všetky otvorené obchody z Timeiných hovorov, Michal → nový obchodník.
-export default function TransferDealsDialog({ owners, callers }: { owners: PipelineUserOption[]; callers: Person[] }) {
+export default function TransferDealsDialog({ owners, callers }: { owners: DealUserOption[]; callers: Person[] }) {
     const router = useRouter();
     const [open, setOpen] = useState(false);
     const [from, setFrom] = useState("");

@@ -149,6 +149,7 @@ export const NEXT_ACTION_LABEL: Record<NextActionKind, string> = {
     SEND_DESIGN: "Poslať návrh",
     SEND_EMAIL: "Poslať email",
     WAITING_FOR_CLIENT: "Čakáme na klienta",
+    ORDER: "Objednávka – potvrdiť",
     CUSTOM: "Vlastný krok",
 };
 

@@ -39,8 +39,8 @@ export default async function DashboardPage() {
     });
     const hello = `${greeting()}, ${viewer.firstName}`;
     const canCalls = can(viewer, "calls.view");
-    const canPipeline = can(viewer, "pipeline.view");
-    const canClients = can(viewer, "clients.view") && !canPipeline;
+    const canPipeline = can(viewer, "deals.viewAll");
+    const canClients = can(viewer, "deals.view") && !canPipeline;
 
     // Pridávači kontaktov – jednoduchá uvítacia stránka (ich práca žije v Kontaktoch a Štatistikách).
     if (!canCalls && !canPipeline && !canClients) {
@@ -203,7 +203,7 @@ export default async function DashboardPage() {
                     <CardHeader className="flex-row items-center justify-between pb-3">
                         <CardTitle className="text-base">Urgentné na dnes</CardTitle>
                         <Button asChild variant="ghost" size="sm">
-                            <Link href={canCalls ? "/dashboard/calls" : canPipeline ? "/dashboard/pipeline" : "/dashboard/clients"}>
+                            <Link href={canCalls ? "/dashboard/calls" : "/dashboard/pipeline"}>
                                 Otvoriť <ArrowRight className="h-4 w-4" />
                             </Link>
                         </Button>
@@ -255,7 +255,7 @@ export default async function DashboardPage() {
                 )}
                 {canClients && (
                     <Button asChild variant="outline">
-                        <Link href="/dashboard/clients">Moji klienti</Link>
+                        <Link href="/dashboard/pipeline">Moji klienti</Link>
                     </Button>
                 )}
                 {canPipeline && (

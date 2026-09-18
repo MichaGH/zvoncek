@@ -35,7 +35,7 @@ export async function revertCallResultAs(
     activityId: string,
     expectedRevision: number,
 ): Promise<{ success: true } | ActionError> {
-    if (!can(user, "callHistory.revert") && !can(user, "pipeline.manage")) return FORBIDDEN;
+    if (!can(user, "callHistory.revert") && !can(user, "deals.manage")) return FORBIDDEN;
     const parsed = z.object({ activityId: z.string().min(1), expectedRevision: z.number().int().min(0) }).safeParse({
         activityId,
         expectedRevision,
@@ -81,7 +81,7 @@ export async function revertCallResultAs(
             }
 
             const isAuthor = activity.userId === actor.id && can(actor, "callHistory.revert");
-            if (!isAuthor && !can(actor, "pipeline.manage")) throw new AccessError("FORBIDDEN");
+            if (!isAuthor && !can(actor, "deals.manage")) throw new AccessError("FORBIDDEN");
 
             if (activity.leadRevision === null || activity.leadRevision !== lead.revision) {
                 throw new AccessError("FORBIDDEN", "Kontakt sa od hovoru zmenil – vrátenie nie je možné.");

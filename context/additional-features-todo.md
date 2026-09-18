@@ -42,22 +42,18 @@ routes are intentionally renamed.
 
 ## Priority 2 - Telesales Queue
 
-### Multi-Telesales Locking
+### Multi-Telesales Locking - SOLVED, not a todo any more
 
-Use existing fields:
+This was answered by the claim design shipped in round 1 (`context/new-feature/planning.md`):
 
-```prisma
-lockedById
-lockedAt
-```
+- a caller claims a batch of 10, and those contacts carry `assignedCallerId` until a manager transfers them or the
+  account is deactivated - no drawer lock, no expiry, nobody else sees them in the pool;
+- simultaneous work is protected by Postgres row locks inside each transaction (`FOR UPDATE`, `SKIP LOCKED` in the claim),
+  not by an application-level "someone has this open" flag.
 
-Open questions to decide:
-- does a contact lock when a telesales user opens the drawer?
-- how long before an abandoned lock expires?
-- can manager/admin unlock a contact?
-- should users see "my locked contacts" separately from free contacts?
-
-Goal: multiple callers can work without stepping on the same contact.
+`Lead.lockedById` / `Lead.lockedAt` are therefore **dead columns** - written and read nowhere. They are kept on purpose
+(dropping two unused nullable columns is a destructive migration for no benefit); see `context/new-feature/db-changes.md`
+row S-06.
 
 ### Better Call Queue Counts
 

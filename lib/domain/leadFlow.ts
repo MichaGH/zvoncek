@@ -6,6 +6,7 @@ import {
     NextActionMode,
 } from "@/app/generated/prisma/enums";
 import { businessTodayStart, nextBusinessWorkingDayStart } from "@/lib/domain/businessTime";
+import { nextStepOption } from "@/lib/domain/nextStepOptions";
 
 // Prechody stavov – čisté funkcie bez DB. Kontrola prístupu, zámky a revízia sú v akciách.
 
@@ -148,7 +149,7 @@ export function leadStateForOutcome(
     }
 }
 
-// ── Follow-up na obchode (/dashboard/clients) ──────────────────────────────────
+// ── Follow-up na obchode (/dashboard/pipeline) ─────────────────────────────────
 
 export const FOLLOW_UP_OUTCOMES = [
     "POSITIVE",
@@ -164,7 +165,9 @@ export const FOLLOW_UP_OUTCOMES = [
 
 export type FollowUpOutcome = (typeof FOLLOW_UP_OUTCOMES)[number];
 
-export const FOLLOW_UP_NEXT_KINDS = ["WAITING_FOR_CLIENT", "SEND_QUOTE", "SEND_EMAIL", "CALL"] as const;
+// Kroky, ktoré sa dajú vybrať po hovore. ORDER tu zámerne nie je – objednávku rieši výsledok
+// WANTS_TO_ORDER (vytvorí požiadavku), nech existuje jedna cesta, nie dve.
+export const FOLLOW_UP_NEXT_KINDS = ["CALL", "WAITING_FOR_CLIENT", "SEND_QUOTE", "SEND_DESIGN", "SEND_EMAIL", "CUSTOM"] as const;
 export type FollowUpNextKind = (typeof FOLLOW_UP_NEXT_KINDS)[number];
 
 export type DealFollowUpState = {
@@ -194,38 +197,37 @@ export function dealStateForFollowUp(
         case "POSITIVE": {
             const kind = input.nextKind;
             if (!kind) throw new Error("Vyber ďalší krok");
-            if (kind === "CALL" && !input.when) throw new Error("Zavolať vyžaduje termín");
-            if ((kind === "SEND_QUOTE" || kind === "SEND_EMAIL") && !input.when) {
-                return {
-                    status: "ACTIVE",
-                    closes: false,
-                    nextActionKind: kind,
-                    nextActionAt: businessTodayStart(now),
-                    nextActionHasTime: false,
-                    nextActionMode: "SCHEDULED",
-                    nextActionNote: note,
-                };
-            }
+            // Pravidlá dátumu a režimu sú v zdieľanom zozname krokov, takže UI a server nemôžu tvrdiť niečo iné.
+            const option = nextStepOption(kind);
+            if (option?.date === "required" && !input.when) throw new Error("Tento krok vyžaduje termín");
+            const startsToday = option?.date === "today" && !input.when;
             return {
                 status: "ACTIVE",
                 closes: false,
                 nextActionKind: kind,
-                nextActionAt: input.when?.at ?? null,
+                nextActionAt: input.when?.at ?? (startsToday ? businessTodayStart(now) : null),
                 nextActionHasTime: input.when?.hasTime ?? false,
-                nextActionMode: "SCHEDULED",
+                nextActionMode: option?.mode ?? "SCHEDULED",
                 nextActionNote: note,
             };
         }
-        case "NO_ANSWER":
+        case "NO_ANSWER": {
+            // Predvolene „zavolať ďalší pracovný deň"; ak si volajúci vyberie iný krok alebo termín, rešpektuje sa
+            // – výsledok hovoru (nedovolal sa) tým ostáva zaznamenaný (round 2, D-05).
+            const kind = input.nextKind ?? "CALL";
+            const option = nextStepOption(kind);
+            const fallback =
+                kind === "CALL" ? nextBusinessWorkingDayStart(now) : option?.date === "today" ? businessTodayStart(now) : null;
             return {
                 status: current.status,
                 closes: false,
-                nextActionKind: "CALL",
-                nextActionAt: nextBusinessWorkingDayStart(now),
-                nextActionHasTime: false,
-                nextActionMode: "SCHEDULED",
-                nextActionNote: "Nezdvihli – skúsiť znova",
+                nextActionKind: kind,
+                nextActionAt: input.when?.at ?? fallback,
+                nextActionHasTime: input.when?.hasTime ?? false,
+                nextActionMode: option?.mode ?? "SCHEDULED",
+                nextActionNote: note ?? "Nezdvihli – skúsiť znova",
             };
+        }
         case "CALL_AGAIN":
             if (!input.when) throw new Error("Dohodnutý hovor vyžaduje termín");
             return {
@@ -259,11 +261,12 @@ export function dealStateForFollowUp(
                 nextActionNote: "Vytvoriť a poslať dizajnový návrh",
             };
         case "WANTS_TO_ORDER":
+            // Nečaká sa na klienta, ale na manažéra – vlastný krok ORDER to na zozname aj povie (round 2, B-07).
             return {
                 status: "ACTIVE",
                 closes: false,
                 request: "ORDER",
-                nextActionKind: "WAITING_FOR_CLIENT",
+                nextActionKind: "ORDER",
                 nextActionAt: null,
                 nextActionHasTime: false,
                 nextActionMode: "SCHEDULED",

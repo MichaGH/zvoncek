@@ -25,7 +25,7 @@ async function withDesign(
     label: string,
     fn: (tx: Tx, design: { id: string; leadId: string }, actor: { id: string; firstName: string }) => Promise<void>,
 ): Promise<Result> {
-    if (!can(user, "pipeline.manage")) return FORBIDDEN;
+    if (!can(user, "deals.manage")) return FORBIDDEN;
     try {
         const leadId = await withLockTx(async (tx) => {
             const pre = await tx.design.findUnique({ where: { id: designId }, select: { leadId: true } });
@@ -46,7 +46,7 @@ export async function createDesignAs(
     user: AccessUser,
     input: { leadId: string; label?: string | null; url?: string | null; repoUrl?: string | null },
 ): Promise<Result> {
-    if (!can(user, "pipeline.manage")) return FORBIDDEN;
+    if (!can(user, "deals.manage")) return FORBIDDEN;
     const url = input.url?.trim() || null;
     const label = input.label?.trim() || null;
     const repoUrl = input.repoUrl?.trim() || null;

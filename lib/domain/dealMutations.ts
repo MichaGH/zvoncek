@@ -8,6 +8,7 @@ import type {
     ProjectType,
 } from "@/app/generated/prisma/enums";
 import { AccessError } from "@/lib/access/errors";
+import { NEXT_STEP_KINDS } from "@/lib/domain/nextStepOptions";
 import { isClosedDealStatus } from "@/lib/access/leads";
 import type { Tx } from "@/lib/access/locks";
 import {
@@ -235,7 +236,9 @@ export type NextActionInput = {
     mode?: NextActionMode;
 };
 
-const NEXT_ACTION_KINDS = ["CALL", "SEND_QUOTE", "SEND_DESIGN", "SEND_EMAIL", "WAITING_FOR_CLIENT", "CUSTOM"] as const;
+// Whitelist ide zo zdieľaného zoznamu krokov (lib/domain/nextStepOptions.ts), nie z enumu –
+// nová hodnota v schéme sa tak nestane zapisovateľnou skôr, než ju UI naozaj ponúka.
+const NEXT_ACTION_KINDS = NEXT_STEP_KINDS;
 export const nextActionInputSchema = z
     .object({
         kind: z.enum(NEXT_ACTION_KINDS).nullable(),

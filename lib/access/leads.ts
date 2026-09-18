@@ -88,8 +88,8 @@ export async function requireDealWork(
     const actor = assertActive(users.get(user.id));
     if (lead.deletedAt !== null || lead.pipelineEnteredAt === null) throw new AccessError("NOT_FOUND");
 
-    const isManager = can(actor, "pipeline.manage");
-    const isOwner = can(actor, "clients.work") && lead.ownerId === actor.id;
+    const isManager = can(actor, "deals.manage");
+    const isOwner = can(actor, "deals.work") && lead.ownerId === actor.id;
     if (!isManager && !isOwner) throw new AccessError("NOT_FOUND");
 
     const policy = opts.closedPolicy ?? "reject";
@@ -112,7 +112,7 @@ export async function requireDealManage(
 ): Promise<{ lead: Lead; actor: LockedUser; users: Map<string, LockedUser> }> {
     const { lead, users } = await lockLeadWithUsers(tx, leadId, [user.id, ...(opts.lockUserIds ?? [])]);
     const actor = assertActive(users.get(user.id));
-    if (!can(actor, "pipeline.manage")) throw new AccessError("NOT_FOUND");
+    if (!can(actor, "deals.manage")) throw new AccessError("NOT_FOUND");
     if (lead.deletedAt !== null || lead.pipelineEnteredAt === null) throw new AccessError("NOT_FOUND");
     if (opts.expectedRevision !== undefined && lead.revision !== opts.expectedRevision) {
         throw new AccessError("STALE");
@@ -128,7 +128,7 @@ export async function requireDealView(db: Db, user: AccessUser, leadId: string):
         where: { id: leadId, deletedAt: null, pipelineEnteredAt: { not: null } },
     });
     if (!lead) throw new AccessError("NOT_FOUND");
-    const allowed = can(user, "pipeline.view") || (can(user, "clients.view") && lead.ownerId === user.id);
+    const allowed = can(user, "deals.viewAll") || (can(user, "deals.view") && lead.ownerId === user.id);
     if (!allowed) throw new AccessError("NOT_FOUND");
     return lead;
 }

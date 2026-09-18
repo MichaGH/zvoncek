@@ -11,7 +11,7 @@ import type { ActionError } from "@/lib/access/errors";
 import { changeStatus, logSent, reopenDeal, resolveDealRequest, saveQuote } from "@/lib/actions/pipeline";
 import { REQUEST_KIND_LABEL } from "@/lib/dictionaries";
 import { fmtAgo } from "@/lib/utils";
-import type { DealRequestView } from "@/lib/queries/pipeline";
+import type { DealRequestView } from "@/lib/queries/deals";
 
 // „Požiadavky" na detaile obchodu (manažér). Každá požiadavka ukazuje akciu, ktorá ju reálne vybaví (§7.6/§8.2).
 // Ručné „Vybavené" má len OTHER; zamietnutie vyžaduje dôvod, ktorý uvidí obchodník.

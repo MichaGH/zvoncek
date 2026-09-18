@@ -99,12 +99,12 @@ export async function getCallerToday(user: Pick<AccessUser, "id">) {
     };
 }
 
-// ── Obchody: vlastné (clients.view) alebo všetky (pipeline.view) ─────────────
+// ── Obchody: vlastné (deals.view) alebo všetky (deals.viewAll) ─────────────
 export async function getDealsToday(user: AccessUser) {
     const now = new Date();
     const end = businessDayEnd(now);
-    const all = can(user, "pipeline.view");
-    if (!all && !can(user, "clients.view")) return null;
+    const all = can(user, "deals.viewAll");
+    if (!all && !can(user, "deals.view")) return null;
     const scope = {
         deletedAt: null,
         pipelineEnteredAt: { not: null },
@@ -143,7 +143,7 @@ export async function getDealsToday(user: AccessUser) {
         name: name(l),
         phone: l.phone,
         kind: "deal",
-        href: all ? `/dashboard/pipeline/${l.id}` : `/dashboard/clients/${l.id}`,
+        href: `/dashboard/pipeline/${l.id}`,
         at: l.nextActionAt?.toISOString() ?? null,
         hasTime: l.nextActionHasTime,
         note: all && l.owner ? `${l.owner.firstName}: ${l.nextActionNote ?? ""}` : l.nextActionNote,

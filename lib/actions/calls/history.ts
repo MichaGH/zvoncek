@@ -13,8 +13,7 @@ export async function revertCallResult(activityId: string, expectedRevision: num
         revalidatePath("/dashboard/calls");
         revalidatePath("/dashboard/calls/history");
         revalidatePath("/dashboard/pipeline");
-        revalidatePath("/dashboard/clients");
-        revalidatePath("/dashboard");
+            revalidatePath("/dashboard");
     }
     return result;
 }

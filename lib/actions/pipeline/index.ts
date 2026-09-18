@@ -13,8 +13,6 @@ import type { Schedule } from "@/lib/domain/schedule";
 function revalidatePipeline(leadId?: string) {
     revalidatePath("/dashboard/pipeline");
     if (leadId) revalidatePath(`/dashboard/pipeline/${leadId}`);
-    revalidatePath("/dashboard/clients");
-    if (leadId) revalidatePath(`/dashboard/clients/${leadId}`);
     revalidatePath("/dashboard");
 }
 

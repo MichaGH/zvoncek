@@ -209,12 +209,12 @@ export async function updateLeadContactAs(
 }
 
 async function lockForContactEdit(tx: Tx, user: AccessUser, leadId: string) {
-    if (can(user, "pipeline.manage")) {
+    if (can(user, "deals.manage")) {
         // Manažér: zámok priradeného volajúceho (ak je) + aktéra, potom Lead.
         const { lead, users } = await lockLeadWithUsers(tx, leadId, [user.id]);
         const actor = users.get(user.id);
         if (!actor || actor.deletedAt) throw new AccessError("UNAUTHENTICATED");
-        if (!can(actor, "pipeline.manage")) throw new AccessError("NOT_FOUND");
+        if (!can(actor, "deals.manage")) throw new AccessError("NOT_FOUND");
         if (lead.deletedAt) throw new AccessError("NOT_FOUND");
         return lead;
     }

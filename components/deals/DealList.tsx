@@ -1,0 +1,390 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Eye, FileText, Info, Mail, Paintbrush, Phone } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import UrgencyLabel from "@/components/shared/UrgencyLabel";
+import InteractionSheet from "@/components/deals/InteractionSheet";
+import {
+    ACTIVITY_LABEL,
+    NEXT_ACTION_LABEL,
+    OUTCOME_LABEL,
+    PROJECT_TYPE_LABEL,
+    REQUEST_KIND_LABEL,
+    STATUS_LABEL,
+    STATUS_VARIANT,
+} from "@/lib/dictionaries";
+import { businessDayMonth, businessDaysBetween, businessHm, businessInputParts } from "@/lib/domain/businessTime";
+import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
+import type { DealRow } from "@/lib/queries/deals";
+import { cn } from "@/lib/utils";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Jeden zoznam obchodov pre všetky roly (round 2, D-01/D-02/D-03).
+//   DESKTOP (`hidden md:block`) – tabuľka:  # | Firma | Typ | [Stav] | Posledný krok | Ďalší krok | Cena | [Rieši] | akcie
+//   MOBIL   (`md:hidden`)       – karty (jeden riadok = jedna karta)
+// Klik na riadok/kartu = akčné okno („čo sa stalo a čo ďalej"), ikona „i" = detail obchodu.
+// Spoločný obsah je v pod-komponentoch nižšie – formátovanie meň TAM, prejaví sa v oboch rozloženiach.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function formatDate(iso: string | null) {
+    if (!iso) return "—";
+    const date = new Date(iso);
+    const diff = businessDaysBetween(new Date(), date);
+    const hm = businessInputParts(date).time;
+    const time = hm !== "00:00" ? ` ${businessHm(date)}` : "";
+    if (diff === 0) return `Dnes${time}`;
+    if (diff === 1) return `Zajtra${time}`;
+    if (diff === -1) return `Včera${time}`;
+    return businessDayMonth(date) + time;
+}
+
+const NBSP = " ";
+
+function RequestBadges({ row }: { row: DealRow }) {
+    if (!row.openRequests.length) return null;
+    return (
+        <>
+            {row.openRequests.map((r) => (
+                <Badge key={r.id} variant="destructive" className="font-normal">
+                    {REQUEST_KIND_LABEL[r.kind]}
+                </Badge>
+            ))}
+        </>
+    );
+}
+
+function SentIcons({ row }: { row: DealRow }) {
+    if (!row.hasDesignSent && !row.quoteSentAt && !row.aboutUsSentAt) return null;
+    return (
+        <div className="flex shrink-0 items-center gap-1">
+            {row.hasDesignSent && (
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <Paintbrush className="h-3 w-3 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>Návrh odoslaný</TooltipContent>
+                </Tooltip>
+            )}
+            {row.quoteSentAt && (
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <FileText className="h-3 w-3 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>Cenová ponuka odoslaná</TooltipContent>
+                </Tooltip>
+            )}
+            {row.aboutUsSentAt && (
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <Mail className="h-3 w-3 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>Email o nás odoslaný</TooltipContent>
+                </Tooltip>
+            )}
+        </div>
+    );
+}
+
+function PriceWithEye({ row }: { row: DealRow }) {
+    return (
+        <div className="flex items-center gap-1">
+            {row.priceDisclosed && (
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <Eye className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>Klient pozná cenu</TooltipContent>
+                </Tooltip>
+            )}
+            <span className="tabular-nums">{row.price ? `${row.price} €` : "—"}</span>
+        </div>
+    );
+}
+
+// dense = desktop (orezáva text v bunke); inak (mobile) text zalamuje.
+function LastActivityContent({ row, dense }: { row: DealRow; dense?: boolean }) {
+    if (!row.lastActivity) return <span className="text-muted-foreground">—</span>;
+    return (
+        <div className="flex min-w-0 flex-col">
+            <span className={dense ? "truncate" : ""}>
+                <span className="font-medium">{ACTIVITY_LABEL[row.lastActivity.type]}</span>
+                {row.lastActivity.outcome && (
+                    <span className="ml-1 text-muted-foreground">· {OUTCOME_LABEL[row.lastActivity.outcome]}</span>
+                )}
+            </span>
+            {(row.lastActivity.note || dense) && (
+                <span className={cn("text-xs text-muted-foreground", dense && "truncate")}>
+                    {row.lastActivity.note || NBSP}
+                </span>
+            )}
+            <span className="text-xs text-muted-foreground tabular-nums">
+                {formatDate(row.lastActivity.at)}
+                {row.noAnswerStreak > 1 ? ` · ${row.noAnswerStreak}. pokus` : ""}
+            </span>
+        </div>
+    );
+}
+
+function NextActionContent({ row, dense }: { row: DealRow; dense?: boolean }) {
+    if (!row.nextActionKind) {
+        return (
+            <span className="text-muted-foreground">
+                {row.badge ? <Badge variant="destructive" className="font-normal">{row.badge}</Badge> : "—"}
+            </span>
+        );
+    }
+    return (
+        <div className="flex min-w-0 flex-col">
+            <span className={cn("flex min-w-0 items-center gap-1.5", dense && "truncate")}>
+                {NEXT_ACTION_LABEL[row.nextActionKind]}
+                {(row.nextActionAt || row.nextActionMode === "IN_PROGRESS") && (
+                    <UrgencyLabel at={row.nextActionAt} hasTime={row.nextActionHasTime} mode={row.nextActionMode} />
+                )}
+            </span>
+            {(row.nextActionNote || dense) && (
+                <span className={cn("text-xs font-normal text-muted-foreground", dense && "truncate")}>
+                    {row.nextActionNote || NBSP}
+                </span>
+            )}
+        </div>
+    );
+}
+
+// onOpenSheet sa vykreslí len v tabuľke (klik na riadok nie je fokusovateľný); na mobile je tlačidlom celá karta.
+function RowActions({ row, onOpenSheet }: { row: DealRow; onOpenSheet?: () => void }) {
+    return (
+        <div className="flex shrink-0 items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+            {row.phone && (
+                <a
+                    href={`tel:${row.phone.replace(/\s/g, "")}`}
+                    className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                    aria-label={`Zavolať ${row.name}`}
+                >
+                    <Phone className="h-4 w-4" />
+                </a>
+            )}
+            <Link
+                href={`/dashboard/pipeline/${row.id}`}
+                className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label={`Detail – ${row.name}`}
+                onClick={(e) => e.stopPropagation()}
+            >
+                <Info className="h-4 w-4" />
+            </Link>
+            {onOpenSheet && (
+                <button
+                    type="button"
+                    className="sr-only"
+                    onClick={onOpenSheet}
+                    aria-label={`Zaznamenať krok – ${row.name}`}
+                />
+            )}
+        </div>
+    );
+}
+
+export default function DealList({
+    rows,
+    caps,
+    showStatus = false,
+    showOwner = false,
+}: {
+    rows: DealRow[];
+    caps: DealCapabilities;
+    showStatus?: boolean;
+    showOwner?: boolean;
+}) {
+    const router = useRouter();
+    const [open, setOpen] = useState<DealRow | null>(null);
+
+    // Zoznam sa sám obnoví – termíny („dnes", „po termíne") starnú v reálnom čase.
+    useEffect(() => {
+        const t = setInterval(() => router.refresh(), 60_000);
+        return () => clearInterval(t);
+    }, [router]);
+
+    const sheet = (
+        <InteractionSheet
+            key={open ? `${open.id}-${open.revision}` : "closed"}
+            target={open}
+            caps={caps}
+            onClose={() => setOpen(null)}
+        />
+    );
+
+    if (rows.length === 0) {
+        return (
+            <>
+                <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
+                    Žiadne obchody v tomto pohľade.
+                </div>
+                {sheet}
+            </>
+        );
+    }
+
+    return (
+        <TooltipProvider delayDuration={200}>
+            {/* ── MOBIL: karty ──────────────────────────────────────────────── */}
+            <div className="flex flex-col gap-3 md:hidden">
+                {rows.map((row) => (
+                    <div
+                        key={row.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setOpen(row)}
+                        onKeyDown={(e) => e.key === "Enter" && setOpen(row)}
+                        className="block rounded-xl border bg-card p-4 shadow-sm transition-colors active:bg-muted/50"
+                    >
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-baseline gap-2">
+                                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">#{row.number}</span>
+                                <div className="min-w-0">
+                                    <div className="truncate font-medium leading-tight">{row.name}</div>
+                                    <div className="truncate text-xs text-muted-foreground">{row.phone ?? "—"}</div>
+                                </div>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1.5">
+                                <SentIcons row={row} />
+                                {row.projectType && (
+                                    <Badge variant="outline" className="font-normal">
+                                        {PROJECT_TYPE_LABEL[row.projectType]}
+                                    </Badge>
+                                )}
+                                {showStatus && (
+                                    <Badge variant={STATUS_VARIANT[row.status]} className="font-normal">
+                                        {STATUS_LABEL[row.status]}
+                                    </Badge>
+                                )}
+                                <RowActions row={row} />
+                            </div>
+                        </div>
+
+                        <div className="mt-3 space-y-2.5 border-t pt-3">
+                            <div>
+                                <div className="mb-0.5 text-xs uppercase tracking-wide text-muted-foreground">Ďalší krok</div>
+                                <div className="text-sm">
+                                    <NextActionContent row={row} />
+                                </div>
+                            </div>
+                            <div>
+                                <div className="mb-0.5 text-xs uppercase tracking-wide text-muted-foreground">Naposledy</div>
+                                <div className="text-sm">
+                                    <LastActivityContent row={row} />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3 text-sm">
+                            <span className="font-medium">
+                                <PriceWithEye row={row} />
+                            </span>
+                            {showOwner && <span className="truncate text-muted-foreground">· Rieši {row.owner ?? "nikto"}</span>}
+                            <RequestBadges row={row} />
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* ── DESKTOP: tabuľka ──────────────────────────────────────────── */}
+            <div className="hidden overflow-hidden rounded-lg border md:block">
+                <Table className="w-full table-fixed">
+                    <colgroup>
+                        <col className="w-[4%]" />
+                        <col className="w-[24%]" />
+                        <col className="w-[8%]" />
+                        {showStatus && <col className="w-[9%]" />}
+                        <col className="w-[20%]" />
+                        <col className="w-[20%]" />
+                        <col className="w-[8%]" />
+                        {showOwner && <col className="w-[9%]" />}
+                        <col className="w-[7%]" />
+                    </colgroup>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead className="pl-4">#</TableHead>
+                            <TableHead>Firma</TableHead>
+                            <TableHead>Typ</TableHead>
+                            {showStatus && <TableHead>Stav</TableHead>}
+                            <TableHead>Ďalší krok</TableHead>
+                            <TableHead>Naposledy</TableHead>
+                            <TableHead className="text-right">Cena</TableHead>
+                            {showOwner && <TableHead>Rieši</TableHead>}
+                            <TableHead className="text-right pr-4">Akcie</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {rows.map((row) => (
+                            <TableRow
+                                key={row.id}
+                                className="h-[4.75rem] cursor-pointer hover:bg-muted/50"
+                                onClick={() => setOpen(row)}
+                            >
+                                <TableCell className="pl-4 align-middle text-muted-foreground tabular-nums">
+                                    {row.number}
+                                </TableCell>
+                                <TableCell className="max-w-0 align-middle font-medium">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                        <div className="min-w-0 flex-1">
+                                            <span className="block truncate">{row.name}</span>
+                                            <span className="block truncate text-xs font-normal text-muted-foreground">
+                                                {row.phone ?? "—"}
+                                            </span>
+                                        </div>
+                                        <SentIcons row={row} />
+                                    </div>
+                                </TableCell>
+                                <TableCell className="align-middle">
+                                    {row.projectType ? (
+                                        <Badge variant="outline" className="font-normal">
+                                            {PROJECT_TYPE_LABEL[row.projectType]}
+                                        </Badge>
+                                    ) : (
+                                        <span className="text-muted-foreground">—</span>
+                                    )}
+                                </TableCell>
+                                {showStatus && (
+                                    <TableCell className="align-middle">
+                                        <Badge variant={STATUS_VARIANT[row.status]} className="font-normal">
+                                            {STATUS_LABEL[row.status]}
+                                        </Badge>
+                                    </TableCell>
+                                )}
+                                <TableCell className="max-w-0 align-middle text-sm">
+                                    <NextActionContent row={row} dense />
+                                </TableCell>
+                                <TableCell className="max-w-0 align-middle text-sm">
+                                    <LastActivityContent row={row} dense />
+                                </TableCell>
+                                <TableCell className="align-middle text-right">
+                                    <div className="flex items-center justify-end">
+                                        <PriceWithEye row={row} />
+                                    </div>
+                                </TableCell>
+                                {showOwner && (
+                                    <TableCell className="max-w-0 align-middle text-muted-foreground">
+                                        <div className="flex min-w-0 flex-wrap items-center gap-1">
+                                            <span className="truncate">{row.owner ?? "—"}</span>
+                                            <RequestBadges row={row} />
+                                        </div>
+                                    </TableCell>
+                                )}
+                                <TableCell className="align-middle pr-2">
+                                    <div className="flex justify-end">
+                                        <RowActions row={row} onOpenSheet={() => setOpen(row)} />
+                                    </div>
+                                </TableCell>
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                </Table>
+            </div>
+            {sheet}
+        </TooltipProvider>
+    );
+}

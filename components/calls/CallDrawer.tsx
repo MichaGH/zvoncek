@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription } from "@/components/ui/drawer";
+import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -36,7 +36,7 @@ export default function CallDrawer({
     const [pendingOutcome, setPendingOutcome] = useState<PendingOutcome>(null);
     const [email, setEmail] = useState(lead?.email ?? "");
 
-    if (!lead) return <Drawer open={false} />;
+    if (!lead) return null;
     const L = lead;
     const name = L.companyName ?? L.website ?? "—";
     const cbNote = () => callbackNote.trim() || undefined;
@@ -75,24 +75,20 @@ export default function CallDrawer({
     const big = "h-12 w-full justify-start text-base";
 
     return (
-        // repositionInputs={false}: vaul defaultne presúva drawer hore keď sa focusne input
-        // → na iOS to spôsobí, že drawer vyletí mimo obrazovky. Vypneme to.
-        <Drawer open={!!lead} onOpenChange={(o) => !o && onClose()} repositionInputs={false}>
-            {/* max-h-[90dvh]: dvh sa aktualizuje s klávesnicou na Androide; na iOS dáva aspoň buffer */}
-            <DrawerContent className="data-[vaul-drawer-direction=bottom]:max-h-[90dvh]">
-                <DrawerHeader className="flex-none pb-2">
-                    <DrawerTitle className="text-lg">
-                        {name}
-                        {L.attempts > 0 && (
-                            <span className="ml-2 text-sm font-normal text-muted-foreground">· {L.attempts}. pokus</span>
-                        )}
-                    </DrawerTitle>
-                    <DrawerDescription className="sr-only">Výsledok hovoru</DrawerDescription>
-                </DrawerHeader>
-
-                {/* flex-1 + overflow-y-auto: drawer má pevnú výšku, obsah scrolluje interne */}
-                <div className="flex-1 overflow-y-auto overscroll-contain">
-                    <div className="mx-auto w-full max-w-md space-y-2 px-4 pb-6">
+        // Na telefóne drawer (s klávesnicovými fintami vo vnútri ResponsiveSheet), na PC dialóg (round 2, D-04).
+        <ResponsiveSheet
+            open={!!lead}
+            onOpenChange={(o) => !o && onClose()}
+            title={
+                <>
+                    {name}
+                    {L.attempts > 0 && (
+                        <span className="ml-2 text-sm font-normal text-muted-foreground">· {L.attempts}. pokus</span>
+                    )}
+                </>
+            }
+        >
+                    <div className="mx-auto w-full max-w-md space-y-2 px-4 pb-6 md:max-w-none md:px-0 md:pb-0">
 
                         {/* ── HLAVNÉ MENU ── */}
                         {step === "main" && (
@@ -243,8 +239,6 @@ export default function CallDrawer({
                             className="mt-1 min-h-[60px] text-base"
                         />
                     </div>
-                </div>
-            </DrawerContent>
-        </Drawer>
+        </ResponsiveSheet>
     );
 }

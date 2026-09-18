@@ -259,6 +259,7 @@ enum NextActionKind {
   SEND_DESIGN
   SEND_EMAIL
   WAITING_FOR_CLIENT
+  ORDER // klient chce ísť do toho – čaká sa na potvrdenie manažéra (nie na klienta)
   CUSTOM
 }
 

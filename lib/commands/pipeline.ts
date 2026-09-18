@@ -10,7 +10,7 @@ import { REQUEST_KIND_LABEL } from "@/lib/dictionaries";
 import { can } from "@/lib/permissions";
 import prisma from "@/lib/db";
 
-// Manažérske mutácie obchodu (pipeline). Guard: requireDealManage (pipeline.manage + značka obchodu, akýkoľvek stav).
+// Manažérske mutácie obchodu (pipeline). Guard: requireDealManage (deals.manage + značka obchodu, akýkoľvek stav).
 // Telá sú v lib/domain/dealMutations.ts, zdieľané s client akciami.
 
 export type Ok = { success: true };
@@ -23,7 +23,7 @@ async function managed(
     fn: (tx: Tx, lead: Lead, actor: { id: string; firstName: string }) => Promise<void>,
     opts: { expectedRevision?: number; lockUserIds?: string[] } = {},
 ): Promise<CommandResult> {
-    if (!can(user, "pipeline.manage")) return FORBIDDEN;
+    if (!can(user, "deals.manage")) return FORBIDDEN;
     try {
         await withLockTx(async (tx) => {
             const { lead, actor } = await requireDealManage(tx, user, leadId, opts);
@@ -104,7 +104,7 @@ export async function resolveDealRequestAs(
     status: Exclude<DealRequestStatus, "OPEN">,
     note: string | null,
 ): Promise<CommandResult> {
-    if (!can(user, "requests.resolve") || !can(user, "pipeline.manage")) return FORBIDDEN;
+    if (!can(user, "requests.resolve") || !can(user, "deals.manage")) return FORBIDDEN;
     const text = note?.trim() || null;
     if (status === "CANCELLED" && !text) return { error: "Pri zamietnutí napíš dôvod.", code: "FORBIDDEN" };
     try {
@@ -159,7 +159,7 @@ export async function transferDealsAs(
     user: AccessUser,
     input: TransferDealsInput,
 ): Promise<{ moved: number; skipped: number } | ActionError> {
-    if (!can(user, "pipeline.manage")) return FORBIDDEN;
+    if (!can(user, "deals.manage")) return FORBIDDEN;
     const statuses = (input.statuses?.length ? input.statuses : ["ACTIVE", "SNOOZED"]).filter((s) =>
         (deal.DEAL_STATUSES as readonly string[]).includes(s),
     );
@@ -174,7 +174,7 @@ export async function transferDealsAs(
             const returned = await withLockTx(async (tx) => {
                 const users = await lockUsers(tx, [user.id, input.toOwnerId], "SHARE");
                 const actor = users.get(user.id);
-                if (!actor || actor.deletedAt || !can(actor, "pipeline.manage")) throw new AccessError("FORBIDDEN");
+                if (!actor || actor.deletedAt || !can(actor, "deals.manage")) throw new AccessError("FORBIDDEN");
                 const target = users.get(input.toOwnerId);
                 if (!target || target.deletedAt || !can(target, "deals.receive")) {
                     throw new AccessError("FORBIDDEN", "Cieľ nemôže vlastniť obchody.");

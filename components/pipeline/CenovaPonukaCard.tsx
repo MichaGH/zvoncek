@@ -12,14 +12,14 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { saveQuote, setPriceDisclosed, setQuoteSent } from "@/lib/actions/pipeline";
-import { saveClientQuote, setClientPriceDisclosed, setClientQuoteSent } from "@/lib/actions/clients";
+import { saveDealQuote, setDealPriceDisclosed, setDealQuoteSent } from "@/lib/actions/deals";
 import type { ActionError } from "@/lib/access/errors";
 import { BUSINESS_TZ } from "@/lib/domain/businessTime";
 
 // Rovnaká karta pre pipeline (manažér) aj moji klienti (vlastník); server akcie sa líšia guardom a zdrojom aktivity.
 const ACTIONS = {
     pipeline: { saveQuote, setPriceDisclosed, setQuoteSent },
-    clients: { saveQuote: saveClientQuote, setPriceDisclosed: setClientPriceDisclosed, setQuoteSent: setClientQuoteSent },
+    clients: { saveQuote: saveDealQuote, setPriceDisclosed: setDealPriceDisclosed, setQuoteSent: setDealQuoteSent },
 };
 
 function fmtDate(iso: string | null) {

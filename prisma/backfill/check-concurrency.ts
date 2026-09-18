@@ -321,13 +321,13 @@ async function makeDeal(rep: AccessUser, outcome: "WANTS_QUOTE" | "WANTS_EMAIL" 
 // Požiadavky: jedna OPEN na druh, DONE len cez biznis akciu, zamietnutie s dôvodom, uzavretie nenechá OPEN.
 tests.requests = async () => {
     const pipeline = await import("../../lib/commands/pipeline");
-    const clients = await import("../../lib/commands/clients");
+    const work = await import("../../lib/commands/dealWork");
     const manager = await makeUser("MANAGER");
     const rep = await makeUser("SALES_REP");
     const id = await makeDeal(rep);
 
     for (let i = 0; i < 2; i++) {
-        const r = await clients.logFollowUpAs(rep, { leadId: id, outcome: "WANTS_DESIGN", expectedRevision: await leadRev(id), idempotencyKey: key(), note: `pokus ${i}` });
+        const r = await work.logFollowUpAs(rep, { leadId: id, outcome: "WANTS_DESIGN", expectedRevision: await leadRev(id), idempotencyKey: key(), note: `pokus ${i}` });
         if ("error" in r) throw new Error(r.error);
     }
     const design = await prisma.dealRequest.findMany({ where: { leadId: id, kind: "DESIGN", status: "OPEN" } });
@@ -339,12 +339,12 @@ tests.requests = async () => {
     check("requests: decline without reason rejected", codeOf(noReason) !== "OK", codeOf(noReason));
 
     // PRICE request → obchodník uloží cenu → DONE; CP odoslaná → CALL o 7 dní.
-    const pr = await clients.createDealRequestAs(rep, id, "PRICE", "neviem cenu");
-    const saved = await clients.saveClientQuoteAs(rep, id, { price: 790, priceNote: null });
+    const pr = await work.createDealRequestAs(rep, id, "PRICE", "neviem cenu");
+    const saved = await work.saveDealQuoteAs(rep, id, { price: 790, priceNote: null });
     const priceReq = await prisma.dealRequest.findFirstOrThrow({ where: { leadId: id, kind: "PRICE" } });
     check("requests: rep saves price → own PRICE request DONE", codeOf(pr) === "OK" && codeOf(saved) === "OK" && priceReq.status === "DONE", `${priceReq.status} ${priceReq.resolutionNote}`);
     const before = await leadRev(id);
-    const sent = await clients.setClientQuoteSentAs(rep, id, true);
+    const sent = await work.setDealQuoteSentAs(rep, id, true);
     const afterLead = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { nextActionKind: true, nextActionAt: true, nextActionHasTime: true, revision: true, ownerId: true } });
     const { businessDate, addBusinessCalendarDays } = await import("../../lib/domain/businessTime");
     const expected = addBusinessCalendarDays(businessDate(new Date()), 7);
@@ -369,14 +369,14 @@ tests.requests = async () => {
     check("requests: design marked sent → DESIGN DONE", codeOf(ds) === "OK" && designReq.status === "DONE", designReq.status);
 
     // OTHER → manuálne DONE povolené.
-    await clients.createDealRequestAs(rep, id, "OTHER", "zavolaj mu ty");
+    await work.createDealRequestAs(rep, id, "OTHER", "zavolaj mu ty");
     const other = await prisma.dealRequest.findFirstOrThrow({ where: { leadId: id, kind: "OTHER", status: "OPEN" } });
     const otherDone = await pipeline.resolveDealRequestAs(manager, other.id, "DONE", null);
     check("requests: OTHER manual DONE allowed", codeOf(otherDone) === "OK", codeOf(otherDone));
 
     // ORDER → WON zatvorí obchod; žiadna OPEN požiadavka, closedAt nastavené.
-    await clients.logFollowUpAs(rep, { leadId: id, outcome: "WANTS_TO_ORDER", expectedRevision: await leadRev(id), idempotencyKey: key(), note: "idú do toho" });
-    await clients.createDealRequestAs(rep, id, "EMAIL", null);
+    await work.logFollowUpAs(rep, { leadId: id, outcome: "WANTS_TO_ORDER", expectedRevision: await leadRev(id), idempotencyKey: key(), note: "idú do toho" });
+    await work.createDealRequestAs(rep, id, "EMAIL", null);
     const won = await pipeline.changeStatusAs(manager, id, "WON");
     const openAfter = await prisma.dealRequest.count({ where: { leadId: id, status: "OPEN" } });
     const order = await prisma.dealRequest.findFirstOrThrow({ where: { leadId: id, kind: "ORDER" } });
@@ -384,20 +384,20 @@ tests.requests = async () => {
     check("requests: WON → ORDER DONE, others cancelled, closedAt set", codeOf(won) === "OK" && openAfter === 0 && order.status === "DONE" && closed.closedAt !== null, JSON.stringify({ openAfter, order: order.status, closed }));
 
     // Uzavretý obchod: obchodník nemôže follow-up; môže REOPEN; REOPEN na otvorenom zakázaný; manažér reopen → DONE.
-    const fu = await clients.logFollowUpAs(rep, { leadId: id, outcome: "NO_ANSWER", expectedRevision: await leadRev(id), idempotencyKey: key() });
-    const edit = await clients.updateClientContactAs(rep, id, { note: "x" });
-    const reopenReq = await clients.createDealRequestAs(rep, id, "REOPEN", "chcú ešte e-shop");
+    const fu = await work.logFollowUpAs(rep, { leadId: id, outcome: "NO_ANSWER", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const edit = await work.updateDealContactAs(rep, id, { note: "x" });
+    const reopenReq = await work.createDealRequestAs(rep, id, "REOPEN", "chcú ešte e-shop");
     check("closed deal: rep follow-up/edit rejected, REOPEN request allowed", codeOf(fu) === "ERR:DEAL_CLOSED" && codeOf(edit) === "ERR:DEAL_CLOSED" && codeOf(reopenReq) === "OK", `${codeOf(fu)} ${codeOf(edit)} ${codeOf(reopenReq)}`);
     const reopened = await pipeline.reopenDealAs(manager, id);
     const reopenStatus = await prisma.dealRequest.findFirstOrThrow({ where: { leadId: id, kind: "REOPEN" } });
     const openDeal = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { status: true, closedAt: true, ownerId: true } });
     check("closed deal: manager reopens → REOPEN DONE, owner kept", codeOf(reopened) === "OK" && reopenStatus.status === "DONE" && openDeal.status === "ACTIVE" && openDeal.closedAt === null && openDeal.ownerId === rep.id, JSON.stringify(openDeal));
-    const reopenOnOpen = await clients.createDealRequestAs(rep, id, "REOPEN", null);
+    const reopenOnOpen = await work.createDealRequestAs(rep, id, "REOPEN", null);
     check("closed deal: REOPEN on an open deal rejected", codeOf(reopenOnOpen) !== "OK", codeOf(reopenOnOpen));
 
     // Follow-up NOT_INTERESTED zatvorí obchod a zruší požiadavky.
-    await clients.createDealRequestAs(rep, id, "PRICE", null);
-    const lost = await clients.logFollowUpAs(rep, { leadId: id, outcome: "NOT_INTERESTED", expectedRevision: await leadRev(id), idempotencyKey: key(), lostReason: "drahé" });
+    await work.createDealRequestAs(rep, id, "PRICE", null);
+    const lost = await work.logFollowUpAs(rep, { leadId: id, outcome: "NOT_INTERESTED", expectedRevision: await leadRev(id), idempotencyKey: key(), lostReason: "drahé" });
     const lostLead = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { status: true, closedAt: true, lostReason: true } });
     const openLost = await prisma.dealRequest.count({ where: { leadId: id, status: "OPEN" } });
     check("follow-up NOT_INTERESTED → LOST, closedAt, no open requests", codeOf(lost) === "OK" && lostLead.status === "LOST" && lostLead.closedAt !== null && openLost === 0, JSON.stringify({ lostLead, openLost }));
@@ -407,15 +407,15 @@ tests.requests = async () => {
     check("stats: follow-ups use source CLIENTS, first-call count unchanged", queueCalls === 1, `CALL_QUEUE calls=${queueCalls}`);
 };
 
-// Rozsah obchodníka: cudzí obchod → NOT_FOUND; obchodník bez pipeline.manage nemôže manažérske príkazy.
+// Rozsah obchodníka: cudzí obchod → NOT_FOUND; obchodník bez deals.manage nemôže manažérske príkazy.
 tests.dealScope = async () => {
     const pipeline = await import("../../lib/commands/pipeline");
-    const clients = await import("../../lib/commands/clients");
+    const work = await import("../../lib/commands/dealWork");
     const repA = await makeUser("SALES_REP");
     const repB = await makeUser("SALES_REP");
     const id = await makeDeal(repA);
-    const f = await clients.logFollowUpAs(repB, { leadId: id, outcome: "NO_ANSWER", expectedRevision: await leadRev(id), idempotencyKey: key() });
-    const q = await clients.saveClientQuoteAs(repB, id, { price: 1, priceNote: null });
+    const f = await work.logFollowUpAs(repB, { leadId: id, outcome: "NO_ANSWER", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const q = await work.saveDealQuoteAs(repB, id, { price: 1, priceNote: null });
     const m = await pipeline.saveQuoteAs(repA, id, { price: 1, priceNote: null });
     const w = await pipeline.changeStatusAs(repA, id, "WON");
     check("deal scope: foreign rep → NOT_FOUND; rep cannot use manager commands", codeOf(f) === "ERR:NOT_FOUND" && codeOf(q) === "ERR:NOT_FOUND" && codeOf(m) === "ERR:FORBIDDEN" && codeOf(w) === "ERR:FORBIDDEN", `${codeOf(f)} ${codeOf(q)} ${codeOf(m)} ${codeOf(w)}`);
@@ -434,7 +434,7 @@ tests.dealScope = async () => {
 // Obchodník loguje follow-up, manažér súčasne presúva obchody → po commite presunu žiadna aktivita od obchodníka.
 tests.transferRace = async () => {
     const pipeline = await import("../../lib/commands/pipeline");
-    const clients = await import("../../lib/commands/clients");
+    const work = await import("../../lib/commands/dealWork");
     const manager = await makeUser("MANAGER");
     const repA = await makeUser("SALES_REP");
     const repB = await makeUser("SALES_REP");
@@ -444,7 +444,7 @@ tests.transferRace = async () => {
         const id = await makeDeal(repA);
         const rev = await leadRev(id);
         const [fu, tr] = await Promise.all([
-            clients.logFollowUpAs(repA, { leadId: id, outcome: "NO_ANSWER", expectedRevision: rev, idempotencyKey: key() }),
+            work.logFollowUpAs(repA, { leadId: id, outcome: "NO_ANSWER", expectedRevision: rev, idempotencyKey: key() }),
             pipeline.transferDealsAs(manager, { fromOwnerId: repA.id, toOwnerId: repB.id, statuses: ["ACTIVE", "SNOOZED"] }),
         ]);
         const lead = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { ownerId: true } });
@@ -468,7 +468,7 @@ tests.transferRace = async () => {
 // Pravidlo revízie: každý príkaz zvýši revíziu presne o 1.
 tests.revision = async () => {
     const pipeline = await import("../../lib/commands/pipeline");
-    const clients = await import("../../lib/commands/clients");
+    const work = await import("../../lib/commands/dealWork");
     const tracking = await import("../../lib/commands/tracking");
     const manager = await makeUser("MANAGER");
     const rep = await makeUser("SALES_REP");
@@ -483,8 +483,8 @@ tests.revision = async () => {
         ["addBusinessNote", () => pipeline.addBusinessNoteAs(manager, id, "poznámka")],
         ["createDesign", () => tracking.createDesignAs(manager, { leadId: id, label: "B" })],
         ["setDesignSent", async () => tracking.setDesignSentAs(manager, (await prisma.design.findFirstOrThrow({ where: { leadId: id } })).id, true)],
-        ["createDealRequest", () => clients.createDealRequestAs(rep, id, "OTHER", "x")],
-        ["logFollowUp", async () => clients.logFollowUpAs(rep, { leadId: id, outcome: "WANTS_DESIGN", expectedRevision: await leadRev(id), idempotencyKey: key() })],
+        ["createDealRequest", () => work.createDealRequestAs(rep, id, "OTHER", "x")],
+        ["logFollowUp", async () => work.logFollowUpAs(rep, { leadId: id, outcome: "WANTS_DESIGN", expectedRevision: await leadRev(id), idempotencyKey: key() })],
         ["changeOwner", () => pipeline.changeOwnerAs(manager, id, manager.id)],
         ["changeStatus SNOOZED", () => pipeline.changeStatusAs(manager, id, "SNOOZED")],
         ["markLost", () => pipeline.markLostAs(manager, id, "test")],
@@ -756,7 +756,7 @@ tests.deleteTeamVsHandoffs = async () => {
 
 // R-01: crafted payload s extra poľami (stav, vlastník, značka, zmazanie) sa odmietne na oboch vstupoch; nič sa nezmení.
 tests.r01CraftedInput = async () => {
-    const clients = await import("../../lib/commands/clients");
+    const work = await import("../../lib/commands/dealWork");
     const pipeline = await import("../../lib/commands/pipeline");
     const manager = await makeUser("MANAGER");
     const rep = await makeUser("SALES_REP");
@@ -772,26 +772,29 @@ tests.r01CraftedInput = async () => {
     };
     const before = await snapshot();
     const evil = { phone: "0999 999 999", status: "WON", ownerId: other.id, pipelineEnteredAt: null, deletedAt: new Date(), closedAt: new Date() };
-    const viaClient = await clients.updateClientContactAs(rep, id, evil as never);
+    const viaClient = await work.updateDealContactAs(rep, id, evil as never);
     const viaPipeline = await pipeline.updateLeadAs(manager, id, evil as never);
-    const relation = await clients.updateClientContactAs(rep, id, { note: "x", owner: { connect: { id: other.id } } } as never);
-    const nextEvil = await clients.setClientNextActionAs(rep, id, { kind: "CALL", status: "WON" } as never, (await prisma.lead.findUniqueOrThrow({ where: { id } })).revision);
+    const relation = await work.updateDealContactAs(rep, id, { note: "x", owner: { connect: { id: other.id } } } as never);
+    const nextEvil = await work.setDealNextActionAs(rep, id, { kind: "CALL", status: "WON" } as never, (await prisma.lead.findUniqueOrThrow({ where: { id } })).revision);
     const after = await snapshot();
     check(
         "R-01: extra fields rejected on client + pipeline contact edit and next-action; deal unchanged",
         codeOf(viaClient) !== "OK" && codeOf(viaPipeline) !== "OK" && codeOf(relation) !== "OK" && codeOf(nextEvil) !== "OK" && before === after,
         `${codeOf(viaClient)} ${codeOf(viaPipeline)} ${codeOf(relation)} ${codeOf(nextEvil)} unchanged=${before === after}`,
     );
-    const valid = await clients.updateClientContactAs(rep, id, { phone: " 0911 000 111 ", email: "ok@test.invalid" });
+    const valid = await work.updateDealContactAs(rep, id, { phone: " 0911 000 111 ", email: "ok@test.invalid" });
     const lead = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { phone: true, email: true, status: true, ownerId: true } });
     check("R-01: valid contact edit still works", codeOf(valid) === "OK" && lead.phone === "0911 000 111" && lead.status === "ACTIVE" && lead.ownerId === rep.id, JSON.stringify(lead));
 };
 
-// R-02: poradie pipeline sa počíta pred LIMIT – urgentný obchod a najstaršia požiadavka sú na 1. strane aj pri > 50 obchodoch.
+// R-02: poradie sa počíta pred LIMIT – urgentný obchod a najstaršia požiadavka sú na 1. strane aj pri > 50 obchodoch.
 tests.r02PipelineOrder = async () => {
-    const { getPipelineList } = await import("../../lib/queries/pipeline");
+    const { getDealList } = await import("../../lib/queries/deals");
+    const { dealScope } = await import("../../lib/domain/dealScope");
     const owner = await makeUser("MANAGER");
     const requester = await makeUser("SALES_REP");
+    const scope = dealScope(owner);
+    const mine = { userId: owner.id } as const;
     const base = { status: "ACTIVE" as const, pipelineEnteredAt: new Date(), ownerId: owner.id };
     const mk = async (label: string, data: Record<string, unknown>) => {
         leadSeq++;
@@ -807,7 +810,7 @@ tests.r02PipelineOrder = async () => {
         inProgress.push(await mk("inprogress", { nextActionKind: "SEND_DESIGN", nextActionMode: "IN_PROGRESS", nextActionAt: new Date(Date.UTC(2001, 0, 1 + i)) }));
     }
     const overdue = await mk("overdue", { nextActionKind: "CALL", nextActionMode: "SCHEDULED", nextActionAt: new Date("2020-01-01T00:00:00Z") });
-    const page = await getPipelineList({ status: "ACTIVE", owner: owner.id, viewerId: owner.id, take: 50 });
+    const page = await getDealList({ scope, owner: mine, status: "ACTIVE", take: 50 });
     check("R-02: overdue deal first on page 1 among 56 deals", page.rows[0]?.id === overdue && page.hasMore, `first=${page.rows[0]?.id === overdue ? "overdue" : "other"} rows=${page.rows.length} hasMore=${page.hasMore}`);
 
     for (const id of inProgress) {
@@ -815,12 +818,12 @@ tests.r02PipelineOrder = async () => {
     }
     const oldest = await mk("oldestrequest", { nextActionKind: null, nextActionAt: null });
     await prisma.dealRequest.create({ data: { leadId: oldest, kind: "PRICE", createdById: requester.id, createdAt: new Date("2000-01-01T00:00:00Z") } });
-    const req = await getPipelineList({ view: "requests", owner: owner.id, viewerId: owner.id, take: 50 });
+    const req = await getDealList({ scope, owner: mine, view: "requests", take: 50 });
     check("R-02: oldest request first in Požiadavky view with > 50 request deals", req.rows[0]?.id === oldest && req.hasMore, `first=${req.rows[0]?.id === oldest ? "oldest" : "other"} rows=${req.rows.length}`);
-    const next = await getPipelineList({ view: "requests", owner: owner.id, viewerId: owner.id, take: 100 });
+    const next = await getDealList({ scope, owner: mine, view: "requests", take: 100 });
     const ids = next.rows.map((r) => r.id);
     const { nextActionSort } = await import("../../lib/overdue");
-    const everything = await getPipelineList({ viewerId: owner.id, take: 5000 });
+    const everything = await getDealList({ scope, owner: "all", take: 5000 });
     const ranks = everything.rows.map((r) => nextActionSort(r.nextActionMode, r.nextActionKind, r.nextActionAt, r.nextActionHasTime));
     const inversions = ranks.filter((r, i) => i > 0 && (r.rank < ranks[i - 1].rank || (r.rank === ranks[i - 1].rank && r.rank !== 3 && r.rank !== 4 && r.tie < ranks[i - 1].tie))).length;
     check("R-02: SQL order matches nextActionSort over all deals", inversions === 0, `deals=${everything.rows.length} inversions=${inversions}`);
@@ -829,28 +832,37 @@ tests.r02PipelineOrder = async () => {
 
 // R-03: detail pre bývalého vlastníka po presune nevráti nič (rozsah je v samotnom dotaze).
 tests.r03DetailScope = async () => {
-    const { getClientDetail } = await import("../../lib/queries/clients");
+    const { getDealDetail } = await import("../../lib/queries/deals");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const { dealCapabilities } = await import("../../lib/domain/dealCapabilities");
     const pipeline = await import("../../lib/commands/pipeline");
     const manager = await makeUser("MANAGER");
     const repA = await makeUser("SALES_REP");
     const repB = await makeUser("SALES_REP");
     const id = await makeDeal(repA);
-    const before = await getClientDetail(id, repA);
+    const detail = (u: AccessUser) => getDealDetail(id, dealScope(u), dealCapabilities(u));
+    const before = await detail(repA);
     const moved = await pipeline.changeOwnerAs(manager, id, repB.id);
-    const formerOwner = await getClientDetail(id, repA);
-    const newOwner = await getClientDetail(id, repB);
-    const asManager = await getClientDetail(id, manager);
+    const formerOwner = await detail(repA);
+    const newOwner = await detail(repB);
+    const asManager = await detail(manager);
     check(
-        "R-03: detail query scoped – former owner null after transfer, new owner and manager see it",
+        "R-03: detail query scoped - former owner null after transfer, new owner and manager see it",
         before !== null && codeOf(moved) === "OK" && formerOwner === null && newOwner !== null && asManager !== null,
         `before=${Boolean(before)} former=${Boolean(formerOwner)} new=${Boolean(newOwner)} manager=${Boolean(asManager)}`,
     );
     check("R-05: rep detail has no design version field", before !== null && before.designs.every((d) => !("version" in d)), "");
+    check(
+        "W1: rep detail hides audit activities",
+        before !== null && before.activities.every((a) => a.category === "BUSINESS"),
+        "",
+    );
 };
 
-// R-04: hľadanie obchodníka je stránkované – 101 zhôd je dosiahnuteľných.
+// R-04: hľadanie je stránkované – 101 zhôd je dosiahnuteľných.
 tests.r04SearchPaging = async () => {
-    const { getClientsBoard } = await import("../../lib/queries/clients");
+    const { getDealList } = await import("../../lib/queries/deals");
+    const { dealScope } = await import("../../lib/domain/dealScope");
     const rep = await makeUser("SALES_REP");
     const token = `srch${RUN}`;
     await prisma.lead.createMany({
@@ -863,15 +875,133 @@ tests.r04SearchPaging = async () => {
         })),
     });
     createdLeads.push(...(await prisma.lead.findMany({ where: { companyName: { contains: token } }, select: { id: true } })).map((l) => l.id));
-    const first = await getClientsBoard(rep, { q: token });
-    const all = await getClientsBoard(rep, { q: token, take: 150 });
-    const firstIds = first.mode === "search" ? first.results.map((r) => r.id) : [];
-    const allIds = all.mode === "search" ? all.results.map((r) => r.id) : [];
+    const scope = dealScope(rep);
+    const mine = { userId: rep.id } as const;
+    const first = await getDealList({ scope, owner: mine, query: token, view: "all" });
+    const all = await getDealList({ scope, owner: mine, query: token, view: "all", take: 150 });
+    const firstIds = first.rows.map((r) => r.id);
+    const allIds = all.rows.map((r) => r.id);
     check(
-        "R-04: 101 matches – first page 50 + hasMore, larger page reaches all 101 in the same order",
-        first.mode === "search" && first.hasMore && firstIds.length === 50 && all.mode === "search" && !all.hasMore &&
-            new Set(allIds).size === 101 && allIds.slice(0, 50).join() === firstIds.join(),
+        "R-04: 101 matches - first page 50 + hasMore, larger page reaches all 101 in the same order",
+        first.hasMore && firstIds.length === 50 && !all.hasMore && new Set(allIds).size === 101 && allIds.slice(0, 50).join() === firstIds.join(),
         `first=${firstIds.length} all=${allIds.length}`,
+    );
+};
+
+// ── Zlúčenie obrazoviek (round 2, wave 1) ────────────────────────────────────
+
+// W1-A: obchodník nevidí cudzí obchod bez ohľadu na ?owner= – rozsah je v dotaze, nie v URL.
+tests.w1RepScope = async () => {
+    const { getDealList, getDealDetail } = await import("../../lib/queries/deals");
+    const { dealScope, resolveOwnerFilter } = await import("../../lib/domain/dealScope");
+    const { dealCapabilities } = await import("../../lib/domain/dealCapabilities");
+    const repA = await makeUser("SALES_REP");
+    const repB = await makeUser("SALES_REP");
+    const mineId = await makeDeal(repA);
+    const foreignId = await makeDeal(repB);
+    const scope = dealScope(repA);
+    let leaked = 0;
+    let missingOwn = 0;
+    for (const raw of [undefined, "me", "all", "unassigned", repB.id, "../../etc", ""]) {
+        const owner = resolveOwnerFilter(raw, repA, scope);
+        const { rows } = await getDealList({ scope, owner, view: "all", take: 500 });
+        if (rows.some((r) => r.id === foreignId)) leaked++;
+        if (!rows.some((r) => r.id === mineId)) missingOwn++;
+    }
+    const foreignDetail = await getDealDetail(foreignId, scope, dealCapabilities(repA));
+    check(
+        "W1-A: rep list never returns another owner's deal for any ?owner= value",
+        leaked === 0 && missingOwn === 0 && foreignDetail === null,
+        `leaked=${leaked} missingOwn=${missingOwn} foreignDetail=${Boolean(foreignDetail)}`,
+    );
+};
+
+// W1-B: manažérovo „owner=<obchodník>" vráti presne to, čo vidí obchodník sám, v rovnakom poradí.
+tests.w1ManagerSeesRepBoard = async () => {
+    const { getDealList } = await import("../../lib/queries/deals");
+    const { dealScope, resolveOwnerFilter } = await import("../../lib/domain/dealScope");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    for (let i = 0; i < 5; i++) await makeDeal(rep, i % 2 === 0 ? "WANTS_QUOTE" : "WANTS_DESIGN");
+    const repScope = dealScope(rep);
+    const repView = await getDealList({ scope: repScope, owner: resolveOwnerFilter("me", rep, repScope), view: "all", take: 500 });
+    const mgrScope = dealScope(manager);
+    const mgrView = await getDealList({ scope: mgrScope, owner: resolveOwnerFilter(rep.id, manager, mgrScope), view: "all", take: 500 });
+    check(
+        "W1-B: manager filtering by a rep sees exactly the rep's own board, same order",
+        repView.rows.length > 0 && repView.rows.map((r) => r.id).join() === mgrView.rows.map((r) => r.id).join(),
+        `rep=${repView.rows.length} manager=${mgrView.rows.length}`,
+    );
+};
+
+// W1-C: pilulka „Na dnes" (SQL) sa zhoduje s clientSection() nad všetkými otvorenými obchodmi v databáze.
+tests.w1TodayParity = async () => {
+    const { getDealList, getDealCounts } = await import("../../lib/queries/deals");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const { clientSection } = await import("../../lib/domain/clientSections");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const day = (offset: number) => new Date(Date.now() + offset * 86_400_000);
+    const mk = async (label: string, data: Record<string, unknown>) => {
+        leadSeq++;
+        const l = await prisma.lead.create({
+            data: {
+                companyName: `CC-TEST ${RUN} ${label} ${leadSeq}`,
+                phone: `+000 ${RUN} t${leadSeq}`,
+                status: "ACTIVE",
+                pipelineEnteredAt: new Date(),
+                ownerId: rep.id,
+                ...data,
+            },
+            select: { id: true },
+        });
+        createdLeads.push(l.id);
+        return l.id;
+    };
+    // Fixture pre každú vetvu pravidla: bez kroku, bez termínu, po termíne, dnes, budúce (deň aj čas),
+    // rozpracované, čaká na klienta (s termínom aj bez), spiace (zobudené / bez dátumu / budúce), s požiadavkou.
+    await mk("nostep", { nextActionKind: null, nextActionAt: null });
+    await mk("nodate", { nextActionKind: "CALL", nextActionAt: null });
+    await mk("overdue", { nextActionKind: "CALL", nextActionAt: day(-3) });
+    await mk("todayday", { nextActionKind: "CALL", nextActionAt: new Date() });
+    await mk("future", { nextActionKind: "CALL", nextActionAt: day(5) });
+    await mk("futuretime", { nextActionKind: "CALL", nextActionAt: day(5), nextActionHasTime: true });
+    await mk("inprogress", { nextActionKind: "SEND_DESIGN", nextActionMode: "IN_PROGRESS", nextActionAt: day(-10) });
+    await mk("waitingdue", { nextActionKind: "WAITING_FOR_CLIENT", nextActionAt: day(-1) });
+    await mk("waitingnodate", { nextActionKind: "WAITING_FOR_CLIENT", nextActionAt: null });
+    await mk("snoozedwoken", { status: "SNOOZED", nextActionKind: "CALL", nextActionAt: day(-1) });
+    await mk("snoozednodate", { status: "SNOOZED", nextActionKind: "CALL", nextActionAt: null });
+    await mk("snoozedfuture", { status: "SNOOZED", nextActionKind: "CALL", nextActionAt: day(30) });
+    const withRequest = await mk("withrequest", { nextActionKind: "CALL", nextActionAt: day(-2) });
+    await prisma.dealRequest.create({ data: { leadId: withRequest, kind: "PRICE", createdById: rep.id } });
+
+    const scope = dealScope(manager);
+    const sqlToday = await getDealList({ scope, owner: "all", view: "today", take: 5000 });
+    const counts = await getDealCounts({ scope, owner: "all" });
+    const now = new Date();
+    const open = await prisma.lead.findMany({
+        where: { deletedAt: null, pipelineEnteredAt: { not: null }, status: { in: ["ACTIVE", "SNOOZED"] } },
+        select: {
+            id: true,
+            status: true,
+            nextActionKind: true,
+            nextActionAt: true,
+            nextActionHasTime: true,
+            nextActionMode: true,
+            closedAt: true,
+            requests: { where: { status: "OPEN" }, select: { id: true } },
+        },
+    });
+    const expected = new Set(
+        open.filter((l) => clientSection({ ...l, openRequestCount: l.requests.length }, now).section === "TODAY").map((l) => l.id),
+    );
+    const got = new Set(sqlToday.rows.map((r) => r.id));
+    const missing = [...expected].filter((id) => !got.has(id));
+    const extra = [...got].filter((id) => !expected.has(id));
+    check(
+        "W1-C: Na dnes SQL matches clientSection() over every open deal",
+        missing.length === 0 && extra.length === 0 && counts.today === expected.size,
+        `open=${open.length} expected=${expected.size} got=${got.size} missing=${missing.length} extra=${extra.length} count=${counts.today}`,
     );
 };
 
@@ -895,6 +1025,198 @@ tests.r06RequestCount = async () => {
     const expected = await prisma.dealRequest.count({ where: { status: "OPEN", lead: { deletedAt: null } } });
     const today = await getManagerToday(manager);
     check("R-06: request count exact beyond 50, preview bounded", expected > 50 && today.requestCount === expected && today.requests.length <= 10, `count=${today.requestCount} expected=${expected} preview=${today.requests.length}`);
+};
+
+// ── Model interakcií (round 2, wave 2) ───────────────────────────────────────
+
+// W2-A: „nezdvihli" ostáva nezdvihli aj keď si používateľ zvolí iný ďalší krok než predvolený.
+tests.w2NoAnswerKeepsOutcome = async () => {
+    const work = await import("../../lib/commands/dealWork");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+
+    // 1. predvolené správanie sa nemení: bez výberu = zavolať nasledujúci pracovný deň
+    const first = await work.logFollowUpAs(rep, {
+        leadId: id,
+        outcome: "NO_ANSWER",
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+    });
+    const afterDefault = await prisma.lead.findUniqueOrThrow({
+        where: { id },
+        select: { nextActionKind: true, nextActionAt: true, nextActionMode: true },
+    });
+
+    // 2. s vlastným krokom: výsledok ostáva NO_ANSWER, ale krok je ten zvolený
+    const second = await work.logFollowUpAs(rep, {
+        leadId: id,
+        outcome: "NO_ANSWER",
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        nextKind: "WAITING_FOR_CLIENT",
+        schedule: { kind: "daysFromToday", days: 5 },
+        note: "nechám to na nich",
+    });
+    const afterOverride = await prisma.lead.findUniqueOrThrow({
+        where: { id },
+        select: { nextActionKind: true, nextActionAt: true },
+    });
+    const calls = await prisma.activity.findMany({
+        where: { leadId: id, type: "CALL" },
+        orderBy: { createdAt: "desc" },
+        select: { outcome: true },
+    });
+    check(
+        "W2-A: no-answer keeps its outcome with a custom next step",
+        codeOf(first) === "OK" &&
+            afterDefault.nextActionKind === "CALL" &&
+            afterDefault.nextActionAt !== null &&
+            codeOf(second) === "OK" &&
+            afterOverride.nextActionKind === "WAITING_FOR_CLIENT" &&
+            afterOverride.nextActionAt !== null &&
+            // makeDeal() zakladá obchod pozitívnym prvým hovorom, takže tretí záznam je fixture
+            calls.length === 3 &&
+            calls.slice(0, 2).every((c) => c.outcome === "NO_ANSWER"),
+        `default=${afterDefault.nextActionKind} override=${afterOverride.nextActionKind} calls=${calls.map((c) => c.outcome).join(",")}`,
+    );
+};
+
+// W2-B: odpoveď klienta sa uloží ako kľúč v meta a ako čitateľný popisok v poznámke; neznámy kľúč sa odmietne.
+tests.w2ReplyStored = async () => {
+    const work = await import("../../lib/commands/dealWork");
+    const { CLIENT_REPLIES } = await import("../../lib/domain/clientReplies");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const reply = CLIENT_REPLIES.find((r) => r.key === "NOT_LOOKED_YET")!;
+
+    const ok = await work.logFollowUpAs(rep, {
+        leadId: id,
+        outcome: "POSITIVE",
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        nextKind: "CALL",
+        schedule: { kind: "daysFromToday", days: 2 },
+        note: "vraj v piatok",
+        reply: reply.key,
+    });
+    const activity = await prisma.activity.findFirst({
+        where: { leadId: id, type: "CALL" },
+        orderBy: { createdAt: "desc" },
+        select: { note: true, meta: true, outcome: true },
+    });
+    const bogus = await work.logFollowUpAs(rep, {
+        leadId: id,
+        outcome: "POSITIVE",
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        nextKind: "CALL",
+        schedule: { kind: "daysFromToday", days: 2 },
+        reply: "TOTALLY_MADE_UP",
+    });
+    const meta = (activity?.meta ?? {}) as { reply?: string };
+    check(
+        "W2-B: reply stored in meta + label in the note, unknown reply rejected",
+        codeOf(ok) === "OK" &&
+            meta.reply === reply.key &&
+            activity?.note === `${reply.label} – vraj v piatok` &&
+            codeOf(bogus) !== "OK",
+        `meta=${meta.reply} note=${activity?.note} bogus=${codeOf(bogus)}`,
+    );
+};
+
+// W2-C: „chcú objednať" čaká na manažéra, nie na klienta – krok ORDER + otvorená požiadavka.
+tests.w2OrderStep = async () => {
+    const work = await import("../../lib/commands/dealWork");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const r = await work.logFollowUpAs(rep, {
+        leadId: id,
+        outcome: "WANTS_TO_ORDER",
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        note: "stránka + admin systém",
+    });
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { nextActionKind: true, status: true } });
+    const requests = await prisma.dealRequest.findMany({ where: { leadId: id, status: "OPEN" }, select: { kind: true, note: true } });
+    check(
+        "W2-C: wants-to-order sets the ORDER step and opens an ORDER request",
+        codeOf(r) === "OK" &&
+            lead.nextActionKind === "ORDER" &&
+            lead.status === "ACTIVE" &&
+            requests.length === 1 &&
+            requests[0].kind === "ORDER",
+        `kind=${lead.nextActionKind} requests=${requests.map((x) => x.kind).join(",")}`,
+    );
+};
+
+// W2-D: počítadlo „N. pokus" (SQL v zozname aj v detaile) ráta po sebe idúce nezdvihnutia a po dovolaní sa vynuluje.
+tests.w2NoAnswerStreak = async () => {
+    const work = await import("../../lib/commands/dealWork");
+    const { getDealList, getDealDetail } = await import("../../lib/queries/deals");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const { dealCapabilities } = await import("../../lib/domain/dealCapabilities");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const scope = dealScope(rep);
+    const mine = { userId: rep.id } as const;
+    const streakOf = async () => {
+        const { rows } = await getDealList({ scope, owner: mine, view: "all", take: 500 });
+        return rows.find((r) => r.id === id)?.noAnswerStreak ?? -1;
+    };
+
+    for (let i = 0; i < 3; i++) {
+        await work.logFollowUpAs(rep, { leadId: id, outcome: "NO_ANSWER", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    }
+    const afterThree = await streakOf();
+    const detail = await getDealDetail(id, scope, dealCapabilities(rep));
+    await work.logFollowUpAs(rep, {
+        leadId: id,
+        outcome: "POSITIVE",
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        nextKind: "WAITING_FOR_CLIENT",
+    });
+    const afterAnswered = await streakOf();
+    check(
+        "W2-D: no-answer streak counts consecutive misses and resets after a real contact",
+        afterThree === 3 && detail?.noAnswerStreak === 3 && afterAnswered === 0,
+        `list=${afterThree} detail=${detail?.noAnswerStreak} afterAnswered=${afterAnswered}`,
+    );
+};
+
+// W2-E: ďalší krok sa riadi zdieľaným zoznamom – „Poslať návrh" je rozpracované a bez dátumu začína dnes,
+// „Zavolať" bez dátumu neprejde.
+tests.w2NextStepRules = async () => {
+    const work = await import("../../lib/commands/dealWork");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const design = await work.logFollowUpAs(rep, {
+        leadId: id,
+        outcome: "POSITIVE",
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        nextKind: "SEND_DESIGN",
+    });
+    const afterDesign = await prisma.lead.findUniqueOrThrow({
+        where: { id },
+        select: { nextActionKind: true, nextActionMode: true, nextActionAt: true },
+    });
+    const callWithoutDate = await work.logFollowUpAs(rep, {
+        leadId: id,
+        outcome: "POSITIVE",
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        nextKind: "CALL",
+    });
+    check(
+        "W2-E: shared step rules – design is in progress from today, call without a date is refused",
+        codeOf(design) === "OK" &&
+            afterDesign.nextActionKind === "SEND_DESIGN" &&
+            afterDesign.nextActionMode === "IN_PROGRESS" &&
+            afterDesign.nextActionAt !== null &&
+            codeOf(callWithoutDate) !== "OK",
+        `kind=${afterDesign.nextActionKind} mode=${afterDesign.nextActionMode} call=${codeOf(callWithoutDate)}`,
+    );
 };
 
 async function main() {

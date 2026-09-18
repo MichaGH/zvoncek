@@ -49,7 +49,7 @@ export async function getCallHistory(viewer: AccessUser, userId: string | null) 
         take: 200,
     });
 
-    const isManager = can(viewer, "pipeline.manage");
+    const isManager = can(viewer, "deals.manage");
     const canRevertOwn = can(viewer, "callHistory.revert");
 
     return activities.map((activity) => {
@@ -69,12 +69,9 @@ export async function getCallHistory(viewer: AccessUser, userId: string | null) 
                 (l.assignedCallerId === viewer.id &&
                     !isDeal &&
                     ["NEW", "CALLING", "SNOOZED"].includes(l.status)));
-        const leadHref = !isDeal
-            ? null
-            : can(viewer, "pipeline.view")
-              ? `/dashboard/pipeline/${l.id}`
-              : can(viewer, "clients.view") && l.ownerId === viewer.id
-                ? `/dashboard/clients/${l.id}`
+        const leadHref =
+            isDeal && (can(viewer, "deals.viewAll") || (can(viewer, "deals.view") && l.ownerId === viewer.id))
+                ? `/dashboard/pipeline/${l.id}`
                 : null;
         return {
             id: activity.id,

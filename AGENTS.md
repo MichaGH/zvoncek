@@ -43,6 +43,10 @@ Routes and UI use business names (contacts, calls, pipeline, clients, statistics
 
 `SCOUT`, `SCOUT_LEADER`, `TELESALES`, `SALES_REP`, `MANAGER`, `ADMIN`.
 
+Deal permissions (round 2): `deals.view` = may open the deals screen, `deals.work` = may act on deals in scope,
+`deals.viewAll` / `deals.viewTeam` = scope, `deals.manage` = status/owner/WON/reopen/designs/requests/bulk transfer.
+(`clients.*` and `pipeline.*` no longer exist.)
+
 Permission checks go through `can(user, permission)` from `lib/permissions.ts`, where `user` is the **current DB user**
 from `requireUser()` (`lib/access/user.ts`), never `session.user`. The hand-written `ROLES` array in `lib/dictionaries.ts`
 must contain every `Role` (asserted at startup).
@@ -52,7 +56,7 @@ must contain every `Role` (asserted at startup).
 - **SCOUT_LEADER**: same for the team they lead + team statistics.
 - **TELESALES**: first calls in `/dashboard/calls` (claims batches of 10 from the pool, own retries/callbacks/snoozes),
   own call history, may add contacts. Positive calls are routed to the leader of their team (or stay unassigned).
-- **SALES_REP**: like TELESALES plus follow-ups on **own** deals in `/dashboard/clients`; may set price, mark quote/email sent,
+- **SALES_REP**: like TELESALES plus follow-ups on **own** deals in `/dashboard/pipeline` (scope `own`); may set price, mark quote/email sent,
   create requests to the manager. No pipeline, no WON, no reopen, no design management.
 - **MANAGER**: everything on all deals (`/dashboard/pipeline`), assignment tool, resolves requests; global read access.
 - **ADMIN**: all permissions plus admin pages.
@@ -62,8 +66,10 @@ must contain every `Role` (asserted at startup).
 - `/dashboard` - dashboard composed by permission (caller / deal owner / manager blocks)
 - `/dashboard/contacts`, `/dashboard/contacts/new` (`contacts.create`, also callers)
 - `/dashboard/calls` - personal call queue; `/dashboard/calls/history`; `/dashboard/calls/assignments` (`calls.assign`)
-- `/dashboard/pipeline`, `/dashboard/pipeline/[id]` - manager deal workspace (deals only)
-- `/dashboard/clients`, `/dashboard/clients/[id]` - "Moji klienti" for deal owners (`clients.view`)
+- `/dashboard/pipeline`, `/dashboard/pipeline/[id]` - **the one deal workspace for every role** (`deals.view`); menu label is
+  "Pipeline" for managers and "Moji klienti" for reps. Which rows you get is decided by `dealScope()` on the server, never
+  by the path or by `?owner=`.
+- `/dashboard/clients`, `/dashboard/clients/[id]` - **redirects** to the merged screen (kept only for old links)
 - `/dashboard/stats` - unfinished statistics
 - `/dashboard/admin`, `/dashboard/admin/users`, `/dashboard/admin/teams`
 
@@ -75,14 +81,21 @@ Pages still check `requireUser()` + `can()` themselves.
 - `lib/actions/**` - `"use server"` files. **Thin**: `requireUser()`, call a command, `revalidatePath`. Never export helpers
   from a `"use server"` file (every export is a public endpoint).
 - `lib/commands/**` - transaction bodies taking an `AccessUser` (`logCallAs`, `claimBatchAs`, `revertCallResultAs`,
-  `transferCallWorkAs`, `deactivateUserAs`, pipeline/clients/tracking/teams commands). Scripts and tests call these.
+  `transferCallWorkAs`, `deactivateUserAs`, pipeline/dealWork/tracking/teams commands). Scripts and tests call these.
+  Deal mutations are split by guard: `commands/dealWork.ts` = owner **or** manager (`requireDealWork`),
+  `commands/pipeline.ts` = manager only (`requireDealManage`, any deal state). The activity `source` follows the actor
+  (`deals.manage` → `PIPELINE`, otherwise `CLIENTS`), not the route.
 - `lib/access/**` - `requireUser`, locking helpers (`withLockTx`, `lockUsers`, `lockUserModes`, `lockTeams`), lead guards
   (`requireCallLead`, `requireDealWork` with `closedPolicy`, `requireDealManage`, `requireDealView`, `lockLeadWithUsers`),
   error codes (`AccessError`, `toActionError`).
 - Client-supplied objects are validated with **strict** zod schemas where they are used (`dealMutations.ts`, commands); never
   spread an input object into a Prisma `update` – build the write from named fields only.
 - `lib/domain/**` - pure rules and shared mutation bodies: `leadFlow.ts` (outcome transitions), `dealMutations.ts`
-  (deal changes shared by pipeline and clients), `dealRequests.ts`, `dealRouting.ts`, `clientSections.ts`,
+  (deal changes shared by both guards), `dealScope.ts` (**the only place deal scope is decided**), `dealCapabilities.ts`
+  (rendering hint, never a permission), `dealFilters.ts` (filter/URL model + view pills), `dealRequests.ts`,
+  `dealRouting.ts`, `clientSections.ts`, `nextStepOptions.ts` (**the one next-step list** – editor and sheet share it,
+  and `dealStateForFollowUp` takes its date/mode rules from it), `clientReplies.ts` ("what the client said" menu;
+  stored as `Activity.meta.reply` + label in the note, deliberately not an enum),
   `businessTime.ts` + `schedule.ts` (Europe/Bratislava calendar), `revision.ts`, `idempotency.ts`, `callAssignment.ts`.
 - `lib/queries/**` - server read models, always scoped server-side.
 
@@ -102,9 +115,12 @@ Pages still check `requireUser()` + `can()` themselves.
 ## Workflow Summary
 
 `SCOUT adds contacts → caller claims a batch and calls → positive call hands off a deal to the routed owner →
-owner follows up (rep in /dashboard/clients, manager in /dashboard/pipeline) → requests to the manager → WON / LOST`
+owner follows up in /dashboard/pipeline (rep sees own deals, manager everyone's) → requests to the manager → WON / LOST`
 
 - Calls use `callbackKind`, `callbackAt`, `callbackHasTime`, `callbackNote`; call-stage outcomes never write `nextAction*`.
+- Deal follow-ups are one **interaction**: contact result → what the client said → next step, written by `logFollowUp`
+  in a single transaction. `NO_ANSWER` keeps its outcome even when the user picks a different next step, so a row always
+  shows both "Ďalší krok" and "Naposledy … N. pokus" (the streak counts consecutive non-reverted `NO_ANSWER` calls).
 - Deals use `nextActionKind`, `nextActionAt`, `nextActionHasTime`, `nextActionMode`, `nextActionNote`, and `closedAt`.
 - `*HasTime = false` → day-level labels; `true` → exact-time urgency. Shared display: `lib/overdue.ts`,
   `components/shared/UrgencyLabel.tsx`.
@@ -132,13 +148,16 @@ Manager creates a `Design` → `Tracker` token → public script reads `?p=TOKEN
 - `npx tsx prisma/backfill/check-business-time.ts` (also with `TZ=UTC`)
 - `npx tsx prisma/backfill/check-client-sections.ts`
 - `npx tsx prisma/backfill/check-concurrency.ts --expect-endpoint <dev endpoint>` (creates and removes its own fixtures;
-  includes the regression tests for the findings in `context/new-feature/revision.md`)
+  includes the regression tests for `context/new-feature/revision.md` and the wave-1 scope/parity tests `w1*`)
 - `npx tsx prisma/backfill/check-backfill-delta.ts --expect-endpoint <dev endpoint> --expect-db <db> --owner-username <admin>`
 - Backfill: dry-run by default; `--apply` needs a direct host and `--confirm <endpoint>`.
 
 ## UI Conventions
 
-- Use shadcn/ui components from `components/ui/*`; drawers use vaul
+- Use shadcn/ui components from `components/ui/*`
+- Sheets/modals go through `components/shared/ResponsiveSheet.tsx`: vaul drawer below `md`, Radix dialog from `md` up.
+  Do not open a bare `Drawer` for new UI. `data-vaul-no-drag` / `repositionInputs` are vaul-only and are ignored in the
+  dialog branch; the first paint is always the drawer branch, so hydration stays stable.
 - Icon-only buttons use `variant="ghost"` and `size="icon"` or equivalent tight ghost styling
 - Use `Pencil`, `Trash2`, and `Lock` from `lucide-react` for standard edit/delete/locked actions
 - Preserve the shared dashboard layout components in `components/dashboard/DashboardPage.tsx`

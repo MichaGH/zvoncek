@@ -44,7 +44,7 @@ eq("future planned", c({}), { section: "PLANNED" });
 
 // Úplnosť: každá kombinácia dostane práve jednu sekciu zo zoznamu (alebo ARCHIVED).
 const statuses: LeadStatus[] = ["ACTIVE", "SNOOZED", "WON", "LOST", "UNREACHABLE"];
-const kinds: (NextActionKind | null)[] = [null, "CALL", "SEND_QUOTE", "SEND_DESIGN", "SEND_EMAIL", "WAITING_FOR_CLIENT", "CUSTOM"];
+const kinds: (NextActionKind | null)[] = [null, "CALL", "SEND_QUOTE", "SEND_DESIGN", "SEND_EMAIL", "WAITING_FOR_CLIENT", "ORDER", "CUSTOM"];
 const ats = [null, businessDayStart("2026-09-01"), businessDayStart("2026-09-17"), businessDayStart("2026-10-01"), new Date("2026-09-17T20:00:00Z")];
 const modes: NextActionMode[] = ["SCHEDULED", "IN_PROGRESS"];
 const closeds = [null, new Date("2026-09-01T00:00:00Z"), new Date("2025-01-01T00:00:00Z")];

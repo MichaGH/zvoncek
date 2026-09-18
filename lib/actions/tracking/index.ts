@@ -14,8 +14,6 @@ async function run(fn: (user: NonNullable<Awaited<ReturnType<typeof requireUser>
     if ("error" in result) return result;
     revalidatePath(`/dashboard/pipeline/${result.leadId}`);
     revalidatePath("/dashboard/pipeline");
-    revalidatePath(`/dashboard/clients/${result.leadId}`);
-    revalidatePath("/dashboard/clients");
     revalidatePath("/dashboard");
     return { success: true };
 }

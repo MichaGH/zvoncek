@@ -12,7 +12,6 @@ function revalidateCalls() {
     revalidatePath("/dashboard/calls");
     revalidatePath("/dashboard/calls/history");
     revalidatePath("/dashboard/pipeline");
-    revalidatePath("/dashboard/clients");
     revalidatePath("/dashboard");
 }
 

@@ -5,7 +5,7 @@ import { businessDayStart, businessTodayStart, isOverdue } from "@/lib/domain/bu
 import { ROLE_PERMISSIONS } from "@/lib/permissions";
 import { weekStartKey } from "@/lib/queries/today";
 
-// Manažérske bloky na /dashboard (plán §8.3). Len pre pipeline.view – stránka to overí.
+// Manažérske bloky na /dashboard (plán §8.3). Len pre deals.viewAll – stránka to overí.
 
 function rolesWith(permission: "deals.receive" | "calls.work"): Role[] {
     return (Object.keys(ROLE_PERMISSIONS) as Role[]).filter((r) => ROLE_PERMISSIONS[r].includes(permission));
@@ -74,7 +74,7 @@ export async function getManagerToday(viewer: Pick<AccessUser, "id">) {
         }),
         prisma.activity.groupBy({
             by: ["userId"],
-            where: { userId: { in: repIds }, type: "CALL", source: "CLIENTS", createdAt: { gte: todayStart } },
+            where: { userId: { in: repIds }, type: "CALL", source: { in: ["CLIENTS", "PIPELINE"] }, createdAt: { gte: todayStart } },
             _count: true,
         }),
         prisma.lead.groupBy({

@@ -7,7 +7,7 @@ Markers:
 - no marker = implemented in code
 - **[ROLLOUT]** = implemented in code, but the production database still needs the approved rollout (schema push + backfill,
   `context/new-feature/planning.md` §14) before it is true in production
-- `context/new-feature/planning.md` (rev. 4) is the design source for caller assignment, SALES_REP, `/dashboard/clients` and
+- `context/new-feature/planning.md` (rev. 4) is the design source for caller assignment, SALES_REP, the deals screen and
   manager requests; `context/progress-tracker.md` lists what shipped and every deviation from the plan.
 
 Last reviewed: 2026-09-17 (after implementing plan rev. 4 on the test database).
@@ -50,7 +50,7 @@ later to check they received it → repeat until yes or no. The goal is always t
 | `ADMIN` | Michal | The actual business manager and technician: builds designs, sets prices, resolves requests, manages users and teams. Owner of historical deals **[ROLLOUT]** |
 
 The code checks **permissions**, never roles (`lib/permissions.ts`, `can(user, permission)`).
-Treat "manager" in business text as "a user with `pipeline.manage`" (Michal, Nikolas).
+Treat "manager" in business text as "a user with `deals.manage`" (Michal, Nikolas).
 
 Authorization reads the **current DB user** (role + deactivation) via `requireUser()` on every dashboard page and server
 action, not only the login token. A deactivated user's session stops working immediately (pages redirect to
@@ -218,78 +218,101 @@ Requests (`DealRequest`, kinds PRICE / DESIGN / EMAIL / ORDER / REOPEN / OTHER):
 
 ---
 
-## 7. Manager: `/dashboard/pipeline` (Michal; Nikolas as observer)
+## 7. Deals workspace: `/dashboard/pipeline` (one screen, every role)
 
-The full workspace over **all** deals. It lists only deals (no raw contacts, no deleted leads).
+Since round 2 (`context/new-feature/round2-deal-workspace.md`, wave 1) there is **one** deal screen. `/dashboard/clients`
+and `/dashboard/clients/[id]` only redirect to it. The menu label differs ("Pipeline" for managers, "Moji klienti" for
+reps), the screen does not.
 
-List:
-- status tabs Aktívne, Spiace, Vyhraté, Stratené, Nedostupné, Všetky
-- views Požiadavky (count, across statuses, oldest request first), Volať, Poslať CP, Poslať email, Návrh v procese,
-  Odoslaná CP, Odoslaný návrh
-- "Rieši" owner filter (všetci / ja / nepriradené / a person), search, sorted by urgency of the next action
-- banner for open deals without an owner, request badges and owner name per row
-- **Presunúť obchody**: bulk owner transfer (from owner or "nepriradené", optional "z hovorov" caller, statuses, to owner);
-  batches of 200, rows being edited at that moment are skipped and reported
+**Who sees which rows** is decided by `dealScope(viewer)` (`lib/domain/dealScope.ts`) on the server:
 
-Detail `/dashboard/pipeline/[id]` (non-deals → 404):
+| Scope | Who | Rows |
+|---|---|---|
+| `all` | `deals.viewAll` (MANAGER, ADMIN) | every deal |
+| `team` | `deals.viewTeam` (prepared for a future sales-team leader; no role holds it yet) | own + team members' deals |
+| `own` | everyone else with `deals.view` (SALES_REP) | `ownerId = viewer.id` |
 
-- `Požiadavky`: open requests with the action that completes each one (price field, jump to design, mark email sent,
-  mark WON, reopen, "Vybavené" for OTHER) and "Zamietnuť" with a required reason
-- `Ďalší krok`: shared editor (`components/deals/NextActionEditor.tsx`), day vs exact time, or in progress; stale tab → refresh
-- `Posledný krok` + quick events, `Cena`, `Dizajn & Tracking`, `Email "O nás"`, `Výsledok` (mark lost / **Znovu otvoriť**),
-  `História`, `Údaje` with audit diff
-- Header selects: status (deal statuses only; closing applies `closedAt` and request rules; reopening a closed deal resets
-  `closedAt`/`lostReason` and plans a call today), owner (active users who can own deals), project type
+`?owner=` is a filter **within** that scope and is validated server-side (`resolveOwnerFilter`): a viewer whose scope is
+`own` is forced back to themselves whatever the URL says. Scope is never read from the path or from the query.
+
+**Filters** (identical for both roles; the owner/handoff selects render only when the scope can contain other people):
+
+1. owner - ja (default) / všetci / nepriradené / a person, plus "Od:" (who handed the deal over, `handedOffById`)
+2. status tabs - Aktívne (default), Spiace, Vyhraté, Stratené, Nedostupné, Všetky
+3. view pills - Požiadavky (count; with a request-kind filter), **Na dnes** (default), Všetko, Volať, Poslať CP,
+   Poslať email, Návrh v procese, Čaká na klienta, Odoslaná CP, Odoslaný návrh
+
+"Na dnes" replaces the old card sections: open deals with no open request that need attention today - due or overdue,
+woken snoozes, missing next step, missing date, a due "check with client" date. The SQL predicate mirrors
+`clientSection()` and a parity test asserts they agree over every open deal. "Požiadavky" and "Na dnes" span statuses;
+the other pills work inside the status tab. Search covers company, web, phone and email.
+
+Ordering and paging happen in SQL over the whole filtered set (urgency rank, then `nextActionAt`, then `id`;
+the requests view by oldest open request), 50 rows per page with "Načítať ďalších 50".
+
+**Layout:** desktop table (`# | Firma | Typ | [Stav] | Ďalší krok | Naposledy | Cena | [Rieši] | akcie`), phone cards.
+Every row shows both the next step and the last contact. Clicking a row opens the action sheet (record what happened and
+what is next); the `i` icon opens the detail; the phone icon dials.
+
+**Manager-only** (hidden without `deals.manage`, and refused server-side regardless): status, owner and project type
+selects, WON/close, "Znovu otvoriť", design & tracker management, resolving requests, "Presunúť obchody" (bulk owner
+transfer in batches of 200, skipping rows being edited), the unassigned-deals banner.
+
+Detail `/dashboard/pipeline/[id]` (non-deals and out-of-scope deals → 404) - same page for everyone, wide left column +
+"Údaje" on the right:
+
+- `Požiadavky`: for the manager, each open request with the action that completes it (price field, jump to design, mark
+  email sent, mark WON, reopen, "Vybavené" only for OTHER) and "Zamietnuť" with a required reason; for the rep, the list
+  of their requests with the manager's answer, "Zrušiť" on their own, and a new-request form. `ORDER`, `DESIGN` and
+  `OTHER` require a note (enforced in the command) - the ORDER note is where "what did they actually order" lives.
+- `Ďalší krok`: shared editor (`components/deals/NextActionEditor.tsx`), day vs exact time, or in progress;
+  stale tab → refresh
+- `Naposledy` + quick events, `Cena`, design (full management for the manager, read-only confidence summary for the rep),
+  `Email "O nás"`, `Výsledok` (manager), `História` (rep sees business steps, manager sees the audit trail too), `Údaje`
+
+Activity `source` follows the actor, not the route: `deals.manage` writes `PIPELINE`, everyone else `CLIENTS`.
 
 Manager dashboard blocks on `/dashboard`:
 
 - "Čaká na mňa": all open requests, oldest first (red when the oldest is older than 2 days)
 - "Obchodníci": per other deal owner: open deals, overdue next actions, follow-ups today, new deals this week, overdue callbacks,
-  last activity; row → pipeline filtered to that owner
+  last activity; row → the deals screen filtered to that owner
 - "Nepriradené": open deals without an owner
 - "Volajúci": callers holding an unfinished batch older than 1 day, or deactivated users with call work → assignment tool
 
 ---
 
-## 8. Sales rep: `/dashboard/clients` "Moji klienti"
+## 8. Working a deal (rep and manager)
 
-For SALES_REP (managers use Pipeline; the nav hides "Klienti" for users with `pipeline.view`). Shows only deals the viewer owns
-(`ownerId = user.id`, enforced on the server; other deals and raw contacts → 404). A simple, mobile-first agenda.
+Row click opens the action sheet - a drawer on the phone, a dialog on the desktop (`ResponsiveSheet`). One
+interaction is recorded in three steps (`logFollowUp`, one transaction, carries revision + idempotency key):
 
-Sections (`lib/domain/clientSections.ts`, each deal in exactly one, first matching rule wins):
+1. **Čo sa stalo** - dovolal/a som sa · nezdvihli · odpísali / ozvali sa · bez kontaktu (len naplánovať).
+   Plus the paths that end the deal or park it: ozvať sa o pár mesiacov (2/4/6 or a date), nemajú záujem / zlé číslo.
+2. **Čo povedali** (`lib/domain/clientReplies.ts`) - ešte sa nepozreli · pozreli, chcú zmeny · neprišlo im to ·
+   ozvú sa sami · majú poradu · rieši to niekto iný · cena je vysoká · chcú cenovú ponuku · chcú návrh · chcú objednať.
+   The last three are outcomes in themselves (quote / design request / order request); the others pre-fill a next step
+   and a date. The key lands in `Activity.meta.reply`, the label is copied into the note.
+3. **Ďalší krok** - from the shared list (`lib/domain/nextStepOptions.ts`): zavolať (date required), čakáme na klienta
+   (date = check day), poslať CP / email (empty date = today), poslať návrh (in progress), vlastný krok.
 
-1. **Na dnes**: next action due today or overdue; also snoozes that came due, deals without a next step or date, and due
-   "check with client" dates (with a badge)
-2. **Čaká na nás**: an open request to the manager
-3. **Rozpracované**: work in progress (design being built)
-4. **Naplánované**: future next actions
-5. **Čaká na klienta**: waiting for the client
-6. **Spiace**: snoozed to a future date
-7. **Uzavreté**: won / lost / unreachable in the last 90 days (collapsed)
+The key rule: **the contact result survives the next step.** "Nezdvihli" is recorded as `NO_ANSWER` even when the caller
+picks something other than the suggested "zavolať ďalší pracovný deň", so the row keeps showing
+`Naposledy: Nezdvihli · dnes · 3. pokus` next to `Ďalší krok`. The streak counts consecutive non-reverted `NO_ANSWER`
+calls and resets on any real contact.
 
-Older closed deals are in **Archív** (`?archive=1`, paginated, searchable); search (`?q=`) covers all own deals (open,
-recent and archived) and is paginated as well.
+The sheet also has: mark quote / email sent, ask the manager (kind + note; ORDER/DESIGN/OTHER require the note), open
+detail. A closed deal opens read-only - the rep gets "Požiadať o znovuotvorenie", the manager reopens it in the detail.
+The deal detail has the same flow behind "Zaznamenať kontakt" in the `Naposledy` card, for both roles.
 
-Row click opens a drawer. Follow-up outcomes (`logFollowUp`, `source CLIENTS`, carries revision + idempotency key):
+"Chcú objednať" parks the deal on the `ORDER` next step ("Objednávka - potvrdiť") and opens an ORDER request, so the
+board says we are waiting for the manager, not for the client.
 
-- dovolal/a som sa – posun (choose: čakáme na klienta / poslať CP / poslať email / zavolať + date)
-- nezdvihli (call again next working day, Mon–Fri Bratislava)
-- dohodnutý čas
-- chcú cenovú ponuku
-- chcú návrh (creates a DESIGN request)
-- chcú objednať (creates an ORDER request)
-- ozvať sa neskôr (2/4/6 months or date)
-- nemajú záujem / zlé číslo (closes the deal)
+Rep rules: sets prices and marks quotes/emails sent on own **open** deals; asks the manager when unsure; never sees other
+people's deals; closed deals are read-only except the REOPEN request. The manager may act on any deal in any state.
 
-The drawer also has: mark quote / email sent, ask the manager (request kind + note), open detail. Closed deals open a
-read-only drawer with a single action "Požiadať o znovuotvorenie".
-
-Detail `/dashboard/clients/[id]`: next step, requests (open + resolved with the manager's note, new request, cancel own),
-contact data, price (editable), quote sent, about-us email sent, design status read-only (opened N×, last viewed), business
-history. No status select, no owner select, no WON, no design management. Closed deals are read-only.
-
-Rep rules: sets prices and marks quotes/emails sent on own open deals; asks the manager when unsure; never sees other people's
-deals; closed deals are read-only except the REOPEN request.
+First calls (`/dashboard/calls`) keep their own menu - there, picking up is implicit - but they use the same responsive
+sheet.
 
 ---
 
@@ -299,8 +322,8 @@ Composed by permission:
 
 - no calls / deals / pipeline permission (SCOUT, SCOUT_LEADER): a welcome page
 - callers (`calls.view`): own batch, pool count, own callbacks due/overdue, own retries; urgent own callbacks
-- deal owners (`clients.view` without `pipeline.view`): own open deals, next actions due today / overdue, links to client detail
-- managers (`pipeline.view`): the blocks from section 7, all deals due/overdue, calendar
+- deal owners (`deals.view` without `deals.viewAll`): own open deals, next actions due today / overdue, links to the deal detail
+- managers (`deals.viewAll`): the blocks from section 7, all deals due/overdue, calendar
 - "Pridať kontakty" only with `contacts.create`
 
 ---

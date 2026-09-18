@@ -25,11 +25,12 @@ export type Permission =
     | "contacts.deleteOwnUncalled"
     | "contacts.deleteAny"
     | "contacts.manageTeam"
-    | "clients.view"
-    | "clients.work"
+    | "deals.view"
+    | "deals.work"
     | "deals.receive"
-    | "pipeline.view"
-    | "pipeline.manage"
+    | "deals.viewAll"
+    | "deals.viewTeam"
+    | "deals.manage"
     | "requests.resolve"
     | "stats.view"
     | "stats.viewAll"
@@ -55,11 +56,12 @@ const ALL_PERMISSIONS: Permission[] = [
     "contacts.deleteOwnUncalled",
     "contacts.deleteAny",
     "contacts.manageTeam",
-    "clients.view",
-    "clients.work",
+    "deals.view",
+    "deals.work",
     "deals.receive",
-    "pipeline.view",
-    "pipeline.manage",
+    "deals.viewAll",
+    "deals.viewTeam",
+    "deals.manage",
     "requests.resolve",
     "stats.view",
     "stats.viewAll",
@@ -96,7 +98,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
         "callHistory.revert",
         "contacts.create",
     ],
-    // Obchodník – prvé hovory ako TELESALES + follow-upy na VLASTNÝCH obchodoch (/dashboard/clients).
+    // Obchodník – prvé hovory ako TELESALES + follow-upy na VLASTNÝCH obchodoch (/dashboard/pipeline, rozsah „own“).
     SALES_REP: [
         "today.view",
         "calls.view",
@@ -105,8 +107,8 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
         "callHistory.access",
         "callHistory.revert",
         "contacts.create",
-        "clients.view",
-        "clients.work",
+        "deals.view",
+        "deals.work",
         "deals.receive",
     ],
     // Manažér – vidí a rieši všetko okrem admin-only vecí.
@@ -124,9 +126,11 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
         "contacts.create",
         "contacts.deleteOwnUncalled",
         "contacts.deleteAny",
+        "deals.view",
+        "deals.work",
         "deals.receive",
-        "pipeline.view",
-        "pipeline.manage",
+        "deals.viewAll",
+        "deals.manage",
         "requests.resolve",
         "stats.view",
         "stats.viewAll",
@@ -168,8 +172,10 @@ export function requiredPermissionForPath(path: string): Permission | null {
     if (path.startsWith("/dashboard/calls/history")) return "callHistory.access";
     if (path.startsWith("/dashboard/calls/assignments")) return "calls.assign";
     if (path.startsWith("/dashboard/calls")) return "calls.view";
-    if (path.startsWith("/dashboard/pipeline")) return "pipeline.view";
-    if (path.startsWith("/dashboard/clients")) return "clients.view";
+    // Jedna obrazovka obchodov pre všetky roly, ktoré na nich pracujú; ROZSAH (vlastné / tím / všetko)
+    // rieši dealScope() na serveri, nie cesta. /dashboard/clients je len presmerovanie (round 2).
+    if (path.startsWith("/dashboard/pipeline")) return "deals.view";
+    if (path.startsWith("/dashboard/clients")) return "deals.view";
     if (path.startsWith("/dashboard/contacts/new")) return "contacts.create";
     if (path.startsWith("/dashboard/contacts")) return "contacts.access";
     if (path.startsWith("/dashboard/stats")) return "stats.view";
