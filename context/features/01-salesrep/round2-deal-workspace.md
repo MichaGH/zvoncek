@@ -1,8 +1,8 @@
 # Round 2: one pipeline, one interaction model, real notes and real pricing
 
-Status: **Waves 1 and 2 IMPLEMENTED on the test branch (2026-09-18); waves 3–4 not started.** Decisions below are settled unless
-§6 says otherwise. Wave 1 changed application code only – no schema or data change (see `context/new-feature/db-changes.md`). It collects Michal's feedback after using the shipped round-1 feature
-(`context/new-feature/planning.md` rev. 4, implemented 2026-09-17, reviewed in `context/new-feature/revision.md`)
+Status: **Waves 1, 2 and 3a IMPLEMENTED on the test branch (2026-09-18); waves 3–5 not started.** Decisions below are settled unless
+§6 says otherwise. Wave 1 changed application code only – no schema or data change (see `context/domain/db-changes.md`). It collects Michal's feedback after using the shipped round-1 feature
+(`context/features/01-salesrep/planning.md` rev. 4, implemented 2026-09-17, reviewed in `context/features/01-salesrep/revision.md`)
 and turns each complaint into a decision with options, cost and risk.
 
 Audience: Michal (decision owner) first, coding agents second. Read `AGENTS.md` and `context/app-workflow.md` first.
@@ -359,6 +359,10 @@ The structured brief (fields for scope/deadline/hosting) is **dropped from this 
 
 ### D-09 — Pricing: "knows the price" is not one boolean any more
 
+> **Superseded in large part by §2c (wave 3a, 2026-09-18):** what the client knows is recorded by `OFFER_SENT` rows;
+> `pricelistSentAt`/`priceQuotedAt`/`priceQuotedVia`, the structured `priceItems` and F-01 are dropped. The price stays a
+> hand-written total + text lines. What is left for wave 5 must be re-decided before it starts.
+
 **Decided — additive fields, nothing removed, no ambiguous backfill:**
 
 ```prisma
@@ -598,7 +602,7 @@ manager owns the artifacts (price, design) and any technical conversation.
 | Kind | Meaning | Typical trigger |
 |---|---|---|
 | `PRICE` | naceň to | rep unsure of the price (b2) |
-| `DESIGN` | sprav návrh | "chcú návrh" (a1) – created automatically from the call outcome |
+| `DESIGN` | sprav návrh | "chcú návrh" (a1) – raised by the deal owner (no automatic tickets, see below) |
 | `CALL_CLIENT` | zavolaj im, sú tam technické detaily | "chcú návrh, ale majú otázky" (a2) |
 | `HANDOVER` | prevezmi si klienta | after the návrh: "áno, ideme do toho"; or manually, any time |
 | `OTHER` | čokoľvek iné | rare |
@@ -609,8 +613,15 @@ built – that is a *handover*, not an order specification. Marking **WON stays 
 No backfill is needed: production has no `DealRequest` rows at all yet (round 1 is unshipped), and test rows are
 fixtures.
 
-Consequence for the note rule: **the note is required only for `OTHER`**, and every creation path – outcome or manual –
-goes through one function so the rule cannot differ again. The box is **pre-filled with the last call note**, because
+**No automatic tickets (Michal, 2026-09-18, changed from the first version of this design).** A call outcome never
+creates a ticket – telesales never raise tickets, and an owner must not find tickets they did not raise. "Chcú návrh"
+gives the deal the step "Poslať návrh"; when the owner cannot make designs, the step note reads "Požiadať manažéra o
+návrh" and the action sheet shows a prominent "Požiadať manažéra o návrh" button while no návrh ticket is open
+(likewise "Poslať cenu" → "ak ju nevieš, požiadaj manažéra"). On the manager's own deal it is simply his to-do.
+Details: §2c §9a.
+
+Consequence for the note rule: **the note is required only for `OTHER`**, and every creation path goes through one
+function so the rule cannot differ again. The box is **pre-filled with the last call note**, because
 the context usually already exists from the call (Michal: *"the note is possibly already after telesales call"*).
 
 ### D-18 — Tickets are a conversation, and they are editable
@@ -641,6 +652,7 @@ The manager resolves with two choices, so the three endings Michal listed are co
 | c) manager sends, manager continues | manažér / manažér | owner moves to the manager, ticket closes as "prevzal som si klienta" |
 
 (b) is unlikely today but costs nothing, and the same two switches will carry manager → developer delegation later.
+**Presented as three buttons and closed only manually — see §2c §6 (Michal, 2026-09-18).**
 
 **No manager → rep tickets in this wave.** When the manager hands work back, the resolution sets the rep's next step and
 it shows up in their "Na dnes"; that is enough (Michal: *"they will just see it in Na dnes"*). The *direction* is in the
@@ -680,14 +692,14 @@ owner filter.
 
 | Flow | What happens after wave 3 |
 |---|---|
-| INITIATE → návrh | `DESIGN` ticket created automatically, text pre-filled from the call note and editable; deal next step = "Čaká na manažéra · návrh"; it stays in the rep's list, parked, and appears in the manager's inbox |
+| INITIATE → návrh | deal next step "Poslať návrh" (note "Požiadať manažéra o návrh"); the rep raises the `DESIGN` ticket with one click, text pre-filled from the call note; the deal then waits on "Čaká na manažéra · návrh" and appears in the manager's inbox |
 | …manager needs details (a2) | manager resolves or adds `CALL_CLIENT`; after calling, usually resolves with "kto pokračuje = manažér" → takeover |
 | INITIATE → CP → cenník | no ticket – the rep sends it and marks it sent |
 | INITIATE → CP → treba naceniť | `PRICE` ticket; deal parked on "Čaká na manažéra · cena"; manager fills the price and resolves → rep's next step = "Poslať cenovú ponuku" |
 | after návrh: "áno, ideme do toho" | `HANDOVER` ticket (not "objednávka"); manager takes over, the rep's list loses it, História keeps it |
 | rep cancels a ticket | next step cleared → deal shows in "Na dnes" as "bez ďalšieho kroku" |
 
-### Schema for wave 3 (all additive; rows go in `db-changes.md`)
+### Schema proposal for wave 3 (all additive; add rows to `db-changes.md` only after applying and verifying on test)
 
 | id | Change | Note |
 |---|---|---|
@@ -704,6 +716,442 @@ owner filter.
 - New checks: a rep's inbox never shows another rep's tickets; a manager's inbox ignores the owner filter; resolving with
   each switch combination produces the right owner and next step; a takeover closes tickets and removes the rep's access
   while the ownership record survives; cancelling a ticket clears the next step.
+- Fix while changing the note rule (D-17): it is duplicated today — `REQUIRE_NOTE` in `lib/commands/dealWork.ts` and
+  `REQUEST_NOTE_REQUIRED` in `components/pipeline/InteractionSheet.tsx`. Export it once from `lib/domain/` and use it in
+  both places.
+- One definition of "open tickets for me": today three places build their own filter (the `Požiadavky` count in
+  `getDealCounts`, the list's `requests` view, `getManagerToday`), while `openRequestsWhere` in
+  `lib/queries/pipeline/requests.ts` exists but is unused. The inbox must route all of them through that one function.
+- S-09 `updatedAt`: existing rows have no value — add it nullable (or with a DB default) and backfill; never push it as a
+  required `@updatedAt` column onto existing rows (`context/code-standards.md` §6).
+
+## 2c. Wave 3a design: what the client received — about us, cenník, price, návrh, SMS (decided 2026-09-18, reviewed four times)
+
+Wave 3a comes **before** wave 3 (tickets). It replaces the two-way "CP vs email o nás" model with one record of what
+the client actually received, and fixes the action-sheet history bug. Subsection numbers below (§2 … §10) refer to
+this section only.
+
+### 2. How it really works (manager's words, condensed)
+
+- **The first email always contains "about us."** Usually the **cenník** is attached. Sometimes, instead of or in
+  addition to it, a **calculated price** is included, sometimes for the client's *current* website.
+- The company is testing whether a calculated price or the cenník works better, so **what was sent must be measurable**.
+- **Later emails** often answer "how much would *this* cost?" with a calculated price only.
+- **Návrh (a free design) can come before the price.** It's a "foot in the door" tactic: first call → they want a
+  návrh → we send it, with or without the price or cenník → later they ask for the price.
+- **Why it matters:**
+  - A client who has seen neither the cenník nor a price → any price can be quoted.
+  - A client who has seen the cenník → the quote should respect it.
+  - A client who already got a price → a new quote is anchored to that price.
+- **Routine correspondence** (changing an email address, replies) is **not** recorded as a send.
+- Prices change and are written by hand, for example:
+  ```
+  Web 550 € · admin level 1 250 € · jazyk 100 € · SEO 350 € · správa 35 €/mes.
+  ```
+  A cenník catalogue/selector in the app is **not wanted**.
+- The SR normally sends emails. For a calculated price the SR usually asks the manager (a PRICE ticket, wave 3);
+  sometimes they talk outside the CRM.
+
+### 3. What exists today, and why it can't simply be reinterpreted
+
+| Thing (all exist in **production**) | What it really records today |
+|---|---|
+| `Lead.quoteSentAt` + activity `QUOTE_SENT` | "CP marked as sent". It can be marked **with no price saved**; there is no snapshot of the amount; undo clears the date but leaves the activity and `priceDisclosed`. |
+| `Lead.aboutUsSentAt` + activity `EMAIL_SENT` | "Email o nás marked as sent". `EMAIL_SENT` was also used for any email; CP sends never set `aboutUsSentAt`. |
+| `Lead.designSentAt` + `Design.sentAt` | návrh marked as sent (per design, revertible) |
+| `Lead.price`, `Lead.priceNote`, `Lead.priceDisclosed` | the **current** price and its text breakdown (editable at any time), and "the client knows a price" (any channel) |
+| `NextActionKind.SEND_QUOTE` / `SEND_EMAIL`, `CallOutcome.WANTS_QUOTE` / `WANTS_EMAIL` | the two "to send" steps and first-call outcomes |
+
+**Conclusion (review point 1):** old sends are **legacy facts with unknown contents**, not verified contents. The
+~300 production rows stay exactly as they are. The new model records sends in a **new, separate way** and never
+reinterprets old rows.
+
+### 4. The model
+
+#### 4.1 One new kind of history row: `OFFER_SENT`
+
+- New `ActivityType.OFFER_SENT` (additive enum value) = "we gave the client offer material".
+- `Activity.meta` (existing jsonb) holds what was in it and what the save changed:
+  ```json
+  { "channel": "EMAIL",                 // EMAIL | PHONE (phone = price only, §5.7)
+    "contents": ["ABOUT_US", "PRICELIST", "PRICE", "DESIGN"],
+    "price": { "amount": "1285.00", "note": "Web 550 € · admin 250 € · …" },
+    "designs": [{ "id": "…", "label": "smrek1", "url": "smrek1.thegrandpoints.com", "version": 1 }],
+    "sentOn": "2026-09-18",             // when the client got it (business date)
+    "historical": false,                // true = entered later from memory (§5.3)
+    "correction": null }                // filled when crossed out (§5.4)
+  ```
+- Money is stored as a **decimal string**, never a JSON float.
+- The `price` snapshot is copied from `Lead.price`/`priceNote` at save time. Later edits of the lead's price never
+  change what the client received.
+- A návrh is identified by its **design** (smrek1, smrek2 are separate designs). Label, clean URL and the design's
+  current version number are snapshotted for completeness; versions are not otherwise used.
+- **Old `QUOTE_SENT` / `EMAIL_SENT` / `DESIGN_SENT` are never written again.** Any row of those types is legacy by
+  definition, so the row type itself says whether the contents are known.
+- `Activity.createdAt` = when it was **recorded**; `meta.sentOn` = when the client **got** it. History shows both when
+  they differ ("poslané 3. 7. · zaznamenané 18. 9."). Order = `sentOn`; on the same day a normal entry is later than
+  a historical one (a backdated entry is by definition older), otherwise the one recorded later. **The latest price is
+  the anchor**: the last one the client saw. Accepted limit: two normal price entries on the same day are ordered by
+  recording time; they are rare and are recorded right after sending anyway.
+
+#### 4.2 Summary columns on `Lead` (for lists, pills, statistics)
+
+| Column | Meaning | How it is kept |
+|---|---|---|
+| **new** `offerAboutUsAt DateTime?` | first time "about us" was sent | recomputed from valid `OFFER_SENT` rows (earliest `sentOn`) |
+| **new** `offerPricelistAt DateTime?` | first time the cenník was sent | recomputed (earliest) |
+| **new** `offerPriceAt DateTime?` | last time a calculated price was given (email or phone) | recomputed (latest, §4.1 order) |
+| **new** `hadLegacySends Boolean @default(false)` | this deal had sends **before** the new system | set **once** by the rollout data step (§7), never changed afterwards |
+| **new** `legacySendsReviewedAt DateTime?` | the manager confirmed what an old deal received (§4.3) | set explicitly, only meaningful when `hadLegacySends` |
+| **new** `Design.legacySentAt DateTime?` | the design's sent date **before** the new system | copied once from `Design.sentAt` by the rollout data step, never changed |
+| existing `Design.sentAt`, `Lead.designSentAt` | návrh sent (read by tracking, pills, chips) | always recomputed: the **earlier** of the first valid `OFFER_SENT` containing that design and `legacySentAt` (a new send never moves an old date forward — corrected during implementation); `Lead.designSentAt` = latest of the lead's designs |
+| legacy `quoteSentAt`, `aboutUsSentAt`, `priceDisclosed` | the **frozen baseline**: never written again | read-only; they only ever produce "?" (§4.3) |
+
+"Valid" = `Activity.revertedAt IS NULL` (existing columns `revertedAt` / `revertedById`, used today for reverted
+calls).
+
+**Why corrections are simple and order-independent:** the new model never overwrites a legacy value. What the
+client knows is always computed from **valid rows** (new and historical), with the frozen legacy values only turning a
+"no" into a "?" until the deal is reviewed (§4.3). Crossing out a row then just means recomputing; there is nothing
+to "restore", and the order of corrections doesn't matter.
+
+#### 4.3 Legacy uncertainty is kept per content type
+
+`NULL` means "not recorded", never "not seen".
+
+- **Which deals are legacy is decided once, at rollout:** a one-time data step sets `hadLegacySends = true` on every
+  lead with old send evidence (`quoteSentAt`, `aboutUsSentAt`, `priceDisclosed`, any `Design.sentAt`, or old
+  `QUOTE_SENT`/`EMAIL_SENT`/`DESIGN_SENT` rows). Every lead created afterwards is `false` by default, so new code and
+  new deals never have to think about it.
+- ⚠ "Staré záznamy – over, čo klient dostal" shows while `hadLegacySends AND legacySendsReviewedAt IS NULL`. A new send
+  does not remove it.
+- On such a deal every content type with no valid row is shown as **"?"** (unknown), not as "no", and **old flags
+  never mean "yes"**: an old "CP odoslaná" may have had no price, so an old `priceDisclosed` shows "cena ?", not a
+  price. Example: `Klient dostal: o nás ? · cenník ? · cenu 1 100 € 20. 9.` (the price here is from a valid row).
+- Confirming: "Doplniť staré záznamy" (§5.3) → enter what was really sent → **"Hotovo – toto je všetko, čo klient
+  dostal predtým"** sets `legacySendsReviewedAt`. From then on the old flags are ignored: only valid rows count,
+  and an empty value means "no".
+- Pill **"Neoverené"** (manager) lists the unreviewed legacy deals.
+- Dialog defaults on an unreviewed legacy deal: "O nás" and "Cenník" are **not** pre-ticked; "Cena" follows the task.
+
+#### 4.4 What the pricing experiment compares
+
+The question: **does the first email work better with the cenník, with a calculated price, or with both?**
+
+- Each deal is placed in a group by the contents of its **first verified offer email** (first valid, non-historical
+  `OFFER_SENT` with channel EMAIL):
+  - cenník only
+  - price only
+  - cenník + price
+  - neither (about us only, or návrh first)
+- If the client got something **before** that email (a price by phone, a návrh), the deal keeps its email group
+  and carries a flag "predtým: cena telefonicky / návrh", so it can be shown separately or excluded.
+- The group never changes afterwards. A cenník-first client who later gets a price stays in "cenník only", otherwise the
+  comparison would be meaningless.
+- Measured per group: how many reached WON / LOST, and how long it took.
+- Later prices, phone prices and návrhs are separate follow-on measures ("% of cenník-first clients that later asked for
+  a price").
+- Excluded, **permanently**: every deal with `hadLegacySends = true`, reviewed or not, since its first real offer
+  happened before the system recorded it. Historical entries never count as "first". Both are reported only as counts.
+- No extra clicking is needed: the data from §4.1 already supports it. The statistics page itself is later work, but
+  this rule is fixed now so the right facts are recorded from day one.
+
+### 5. The user's view: where everything is and how it works
+
+#### 5.1 First call (`/dashboard/calls`), unchanged in shape
+
+Telesales, and an SR making a first call, use the same screen and the same outcomes; there is **one** call workflow.
+Only the labels change:
+
+| Outcome (enum stays) | New label | The deal gets the next step |
+|---|---|---|
+| `WANTS_EMAIL` | "Chcú info emailom" | "Poslať úvodný email" (today) |
+| `WANTS_QUOTE` | "Chcú konkrétnu cenu" | "Poslať cenu" (today) |
+| `WANTS_DESIGN` | "Chcú návrh" | "Poslať návrh"; no automatic ticket from wave 3 on (§9a.1) |
+
+No PRICE ticket is ever created automatically. An SR who needs the manager's price opens the deal in the pipeline
+and raises a PRICE ticket (wave 3). The automatic DESIGN ticket still exists in 3a and is removed in wave 3 (§9a.1). Optional: the success toast after the call gets an "Otvoriť obchod" link when the caller owns
+the new deal.
+
+#### 5.2 Recording a send: one dialog, **"Čo sme poslali"**
+
+**Where it opens:**
+- the deal's action sheet (row click) → "📨 Poslali sme ponuku…"
+- the detail page → **Cena & ponuky** card → "Zaznamenať odoslanie"
+- the detail page → the návrh in the design card / návrh summary → "Odoslané" (opens the same dialog with that návrh
+  ticked)
+
+These replace every current send button: "CP odoslaná", "Email o nás – označiť ako poslané", the sheet's "Cenová
+ponuka odoslaná" / "Email o nás odoslaný", the request card's "Označiť email ako odoslaný", and the design card's
+"odoslané" toggle. **There is one server operation for all of them** (`recordOfferSent`), guarded by
+`requireDealWork`: the owner or the manager, checked on the server under the row lock.
+
+**What it shows:**
+```
+Čo sme poslali                                   Poslané: [ dnes ▾ ]
+[✓] O nás                 (predvyplnené, ak ešte nešlo)
+[✓] Cenník                (predvyplnené, ak ešte nešiel)
+[ ] Cena   1 285 €  · Web 550 · admin 250 · …   [upraviť]
+[ ] Návrh  smrek1.thegrandpoints.com   [Skopírovať odkaz do emailu]
+Ďalší krok: …                                   (see below)
+                                   [ Uložiť ]
+```
+
+**Prefills** are suggestions; any box can be unticked:
+- "O nás" and "Cenník" are ticked only if they were **not sent yet** (and never on a legacy deal, §4.3).
+- "Cena" is ticked when the current next step is "Poslať cenu". It needs a saved price; "[upraviť]" edits the price
+  and breakdown right there, before the snapshot.
+- "Návrh" lists the deal's designs; an unsent one is ticked when the next step is "Poslať návrh".
+
+**Next step: never replaced silently.**
+- If the current next step is the send task this email completes ("Poslať úvodný email", "Poslať cenu", "Poslať
+  návrh"), the dialog pre-selects the replacement **"Zavolať, či prišlo · o 7 dní"** and says so.
+- Otherwise it pre-selects **"Ponechať: Zavolať 20. 9."** (the existing step). Changing it is an explicit choice.
+- On the manager's view of a deal waiting on him ("Čaká na manažéra", wave 3), the step is left alone unless changed.
+
+**The manager on someone else's deal (návrh or anything else).** The manager may record a send on a deal he does not
+own, but the dialog first asks:
+> "⚠ Tento obchod vlastní Jana. Poslal si to klientovi naozaj ty? Ak chceš Jane len dať vedieť, že návrh je hotový,
+> vybav jej tiket."
+
+**Saving does, in one transaction:**
+1. one `OFFER_SENT` row (contents, snapshots, `sentOn`)
+2. recompute of the summary columns (§4.2)
+3. recompute of `Design.sentAt` / `designSentAt` for a ticked návrh (§4.2)
+4. the next step, as chosen above
+5. closing matching open tickets as today, until wave 3 (§6)
+6. one revision bump
+
+Double submit is blocked with `idempotencyKey` + `expectedRevision`, the pattern the call outcomes already use (unique
+`Activity.idempotencyKey`).
+
+#### 5.3 Historical entry ("Doplniť staré záznamy")
+
+A separate mode, opened only from the ⚠ legacy prompt or the "Neoverené" pill. It never touches current work:
+- It shows the legacy facts ("Staré: CP označená 3. 7. bez sumy, email o nás 1. 7.").
+- The "Poslané" date is required and in the past; the price amount can be typed as it was then (it's not taken from
+  today's `Lead.price`).
+- It writes `OFFER_SENT` with `historical: true`.
+- **No next step, no ticket closing, no "Naposledy" change.** It does update the summary columns (and
+  `Design.sentAt`) by `sentOn`.
+- It ends with "Hotovo – toto je všetko" → `legacySendsReviewedAt` (§4.3).
+
+#### 5.4 Correcting a mistake
+
+Principle: **a correction fixes what the client knows. It never touches the work that happened after.**
+
+- In the history, each `OFFER_SENT`, `SMS_SENT` and `CLIENT_REPLIED` row has **"Opraviť"** (its author or the
+  manager). A short reason is required.
+- The row is crossed out: `revertedAt`, `revertedById`, and the reason plus who and when in `meta.correction`. The
+  row stays visible, struck through.
+- The summary columns are recomputed (§4.2). Nothing else changes automatically:
+  - **The next step is not restored.** The dialog shows the current one with "Zmeniť", so the user fixes it by hand if
+    the mistake was a minute ago. After a month, the later work stays as it was.
+  - **Tickets are not touched.** Until wave 3, a mistaken send may have auto-closed a ticket, but that only happens on
+    the test branch, because nothing ships before wave 3. From wave 3 on, a send never closes a ticket, so there is
+    nothing to undo.
+- To fix *what* was sent: cross out, then record again (with the original date if needed).
+- "Naposledy" and the "N. pokus" counter ignore crossed-out rows. **Today's "Naposledy" query does not filter them**
+  (`lib/queries/pipeline/index.ts`, `LIST_SELECT.activities`); fixed in 3a.
+- The old "CP odoslaná" undo toggle and the design card's un-send toggle disappear.
+
+#### 5.5 What the user sees afterwards
+
+**Cena & ponuky card (detail):**
+```
+Aktuálna cena:  1 285 €   Web 550 · admin 250 · jazyk 100 · SEO 350 · správa 35 €/mes.   [upraviť]
+Klient dostal:  o nás 12. 9. · cenník 12. 9. · cenu 1 100 € 20. 9. · návrh 15. 9.
+                ⚠ aktuálna cena sa líši od poslanej (1 100 €)
+[ Zaznamenať odoslanie ]
+```
+The warning appears when the current price differs from the last one sent, which is exactly the pricing rule from §2.
+
+**Pipeline row:** small chips "cenník", "cena", "návrh" (plus ⚠ for legacy) next to the next step.
+
+**Filter pills** (what the client *has*): "Dostali cenník", "Dostali cenu", "Dostali návrh", plus "Neoverené"
+(manager only).
+
+**History:** "Poslali sme: o nás + cenník", "Poslali sme: cena 1 100 € (Web 550 · …)"; legacy rows "CP (starý záznam,
+obsah neoverený)".
+
+#### 5.6 The price itself stays hand-written
+
+- `Lead.price` (total) + `Lead.priceNote` (free-text lines, as in §2) remain the editable **current** price.
+- The snapshot in `OFFER_SENT` freezes them at send time.
+- The planned structured `priceItems` and the cenník catalogue (old wave 5, F-01) are **dropped**: with hand-written,
+  changing prices, a catalogue would need a price-list snapshot per lead.
+
+#### 5.7 Channels: email is the main line, phone and SMS are light side doors
+
+Principle: **record what changes what the client knows, plus every real touch that keeps the relationship alive.** Do
+not record routine correspondence. Every touch goes through the **one action sheet**, whose first step becomes:
+
+```
+Čo sa stalo?
+  ✅ Dovolal/a som sa…          → čo povedali (+ [ ] Povedal/a som cenu 1 285 €) → ďalší krok
+  📵 Nezdvihli…                 → ďalší krok
+  ✉️ Odpísali / ozvali sa…      → čo povedali → ďalší krok
+  📨 Poslali sme ponuku…        → dialóg „Čo sme poslali" (§5.2)
+  💬 Poslali sme SMS…           → krátka poznámka (nepovinná) → ďalší krok
+  🗓️ Bez kontaktu – len naplánovať…
+```
+
+| Channel | How it's recorded | Effect on "what the client knows" |
+|---|---|---|
+| **Email** (main) | `OFFER_SENT`, `meta.channel = "EMAIL"`, contents as §4.1 | yes: about us / cenník / price snapshot / návrh |
+| **Phone price** | the call itself stays a normal follow-up `CALL`. If "Povedal/a som cenu" is ticked, the **same transaction** also writes `OFFER_SENT` with `meta.channel = "PHONE"`, contents `["PRICE"]`, the price snapshot and `meta.callActivityId`. **One touch:** "Naposledy" and the history show the call ("Dovolal sa · povedal cenu 1 285 €"), not a second contact | yes: "cenu 1 285 € (telefonicky 18. 9.)". The next step defaults to **"Poslať cenu (potvrdiť emailom)"** today, because a phone price is normally confirmed by email |
+| **SMS** | the existing `ActivityType.SMS_SENT` (already in production, unused today), business category, optional free-text note ("web + kontakt", "poslali sme email, ozvite sa") | **none**: no content checkboxes, no snapshot. It counts as a touch ("Naposledy: SMS · dnes"), and the next step is set as usual |
+
+- The "Povedal/a som cenu" checkbox is shown only when the deal has a price. Ticking it with no price opens the price
+  field inline.
+- The old "klient pozná cenu" toggle is removed from the UI. `priceDisclosed` is frozen (§4.2): "client knows a
+  price" = legacy `priceDisclosed` or any valid price row.
+- Phone and SMS rows reuse the same correction button ("Opraviť", §5.4).
+- Calls themselves need no change: every first call and follow-up is already recorded with an outcome, and the next
+  step keeps the relationship alive.
+
+#### 5.8 Návrh sent by the SR (tracking link)
+
+Flow:
+1. The manager creates the návrh in the design card, as today. There can be several (smrek1, smrek2), and each is its
+   own design.
+2. The manager resolves the DESIGN ticket with "Vrátiť obchodníkovi" (he does **not** mark it sent), and the SR's
+   next step becomes "Poslať návrh" today.
+3. The SR copies the link, sends the email, and records it in "Čo sme poslali" with the návrh ticked.
+4. If the manager owns the deal, or has taken it over, he records the send himself through the same dialog.
+5. After the client has seen the návrh, further changes are the manager's work, discussed by email and phone outside
+   the CRM. Design versions are not tracked here.
+
+The tracking problem: the email must show a clean address (`example.thegrandpoints.com`) while the link underneath is
+the tracking URL (`…/?p=<token>`). The SR must never open the tracking URL, or the view statistics become false.
+
+- **What exists today:** the manager's design card (`DesignTrackingCard`) shows the clean address (clickable, with a
+  button that copies the *clean* URL) and the tracking URL as selectable plain text (deliberately not a link, no copy
+  button). So the manager currently builds the hyperlink by hand in the email. The SR's read-only návrh summary shows
+  no links at all.
+- **New:** the dialog **and** the návrh summary in the deal detail (SR and manager) show **"Skopírovať odkaz do
+  emailu"**. It puts a **rich-text link** on the clipboard:
+  visible text = the clean address, target = the tracking URL. Pasting into Gmail/Outlook produces exactly the right
+  link.
+- The tracking URL is **never rendered as a clickable link** in the CRM for the SR. The plain-text clipboard fallback
+  is the tracking URL itself, for plain-text mail clients.
+- The SR sees the result as today: the open/confidence summary ("otvorené 2×, naposledy včera").
+- Rule change to note: today reps never receive tracking URLs or tokens (`database-map.md`, Design tracking). With this
+  change the SR receives the tracking URL **only through the copy button**, still no IPs, no version numbers.
+- Known limit: if someone does click the link, the tracker cannot tell it's one of us (it runs on the client's domain,
+  outside the CRM's cookies). Accepted: the team is told not to click it. **Later item, not in 3a:** the manager can
+  remove or mark as "ours" a single tracking-history entry (e.g. after testing a link).
+
+### 6. Tickets during and after 3a
+
+- **Release:** nothing goes to production until all waves of this round are done, so no real tickets are created
+  by telesales in between. On the test branch the old fixture tickets are simply resolved or deleted when wave 3 lands.
+- **3a keeps today's automatic ticket closing** (except in historical entries, which never close tickets), so there is
+  never a half-changed state. Recording a send that
+  includes a price closes an open PRICE ticket; saving a price still closes PRICE, as today; the EMAIL ticket kind has
+  no remaining button and is closed by any `OFFER_SENT` with about-us or the cenník.
+- **Wave 3 removes all automatic closing in one change** and adds the PRICE flow:
+  1. The SR raises "Nacenenie" (optionally with what to price).
+  2. The manager opens the ticket and types the price **and breakdown into the ticket's resolve dialog**.
+  3. That dialog saves `Lead.price`/`priceNote` (the one place the price lives) **and** posts an automatic message
+     in the ticket thread: "Cena: 1 285 € – Web 550 · …".
+  4. The dialog then offers three buttons:
+     - "Vrátiť obchodníkovi" (usual): the SR's next step becomes "Poslať cenu" today
+     - "Poslal som to sám": opens "Čo sme poslali" with the price ticked; saving it records the send **and**
+       closes the ticket in one transaction, so a ticket is never "done" without a recorded send
+     - "Preberám klienta"
+  5. The SR sends the email and records it with the price prefilled.
+
+  If the manager fills the price directly on the deal (outside the CRM conversation), the open ticket stays open with
+  the hint "Cena doplnená 18. 9. – uzavrieť tiket?".
+
+### 7. Schema delta (all additive; production has none of it yet)
+
+| Change | Kind |
+|---|---|
+| `ActivityType += OFFER_SENT, CLIENT_REPLIED` | new enum values (apply before code that writes them) |
+| `Lead.offerAboutUsAt`, `Lead.offerPricelistAt`, `Lead.offerPriceAt`, `Lead.legacySendsReviewedAt` (`DateTime?`) | nullable columns, no backfill |
+| `Lead.hadLegacySends Boolean @default(false)` | column with a default (fast on PostgreSQL 11+) |
+| `Design.legacySentAt DateTime?` | nullable column |
+| **one-time data step**: `hadLegacySends = true` on leads with old send evidence; `Design.legacySentAt = Design.sentAt` for designs sent under the old system | a backfill script with dry-run / `--apply` / `--verify` like the round-1 backfill; only ever sets values, so it is repeatable. On production it runs after the schema, **again right after the new code is live** (old code may have written a send in between), and `--verify` must then report nothing new |
+| optional index on `Lead(offerPriceAt)` for the pill | new index |
+
+Nothing is renamed, retyped, dropped or rewritten. Legacy columns and enum values stay and are simply no longer
+written.
+
+### 8. Code entry points that must all move to the one new command
+
+`CenovaPonukaCard` (CP toggle; the price-disclosed toggle is replaced by the phone checkbox), `DealDetail` (email o
+nás button, návrh summary), `InteractionSheet` "sent" step, `RequestsCard` (email button), `DesignTrackingCard` (the
+sent toggle opens the dialog; its "návrh bez ceny" hint reads `offerPriceAt`), `lib/commands/tracking.ts`
+`setDesignSentAs`, the list chips and pills (`quote_sent` → `offerPriceAt`), the "Naposledy" query (ignore crossed-out
+rows), and `lib/domain/dealMutations.ts` `setQuoteSent` / `logSent`. All of these are removed or rerouted, not kept
+alongside the new operation.
+
+**Old write paths to delete, not just their buttons.** Every one of these is a callable server endpoint or
+command today and would keep writing the old fields under the old rules:
+
+| Layer | To delete |
+|---|---|
+| actions `lib/actions/pipeline/index.ts` | `setQuoteSent`, `setDealQuoteSent`, `logSent`, `logDealEmailSent`, `setPriceDisclosed`, `setDealPriceDisclosed`, `logBusinessActivity` (unused `SMS_SENT`, replaced by the new SMS path) |
+| action `lib/actions/tracking/index.ts` | `setDesignSent` |
+| commands | `setQuoteSentAs`, `logSentAs`, `setPriceDisclosedAs` (`pipeline.ts`); `setDealQuoteSentAs`, `logDealEmailSentAs`, `setDealPriceDisclosedAs` (`dealWork.ts`); `setDesignSentAs` (`tracking.ts`) |
+| domain `lib/domain/dealMutations.ts` | `setQuoteSent`, `logSent`, `setPriceDisclosed` |
+
+Gate check at the end of 3a: a grep for writes of `quoteSentAt`, `aboutUsSentAt`, `priceDisclosed`, `QUOTE_SENT`,
+`EMAIL_SENT`, `DESIGN_SENT` outside the backfill scripts must return nothing. `context/domain/operations.md` is
+updated in the same change.
+
+### 9. Decisions
+
+1. **The SR may record a návrh as sent** (§5.8). Creating and editing designs stays manager-only.
+2. **About-us gets its own date** (`offerAboutUsAt`): everything the client received is dated.
+3. **A phone price is recorded with its amount** as `OFFER_SENT` channel `PHONE` (§5.7).
+4. **SMS is recorded lightly** (`SMS_SENT` + optional note, no contents).
+
+5. **SMS only on deals, not in `/dashboard/calls`.** Telesales sometimes exchange a few SMS, but the contact is handed on
+   quickly and their job stays simple. To be revisited after asking the telesales.
+6. The návrh copy button is in both places (the dialog and the detail's návrh summary).
+7. Our own accidental clicks on tracking links: handled by discipline now; manager removal of a tracking entry later.
+
+### 9a. Related decisions (confirmed)
+
+D-17 in §2b was changed accordingly (no automatic DESIGN ticket from wave 3 on).
+
+1. **No automatic tickets at all (wave 3; until then today's behaviour stays).** Today a first call "Chcú návrh" silently creates a DESIGN ticket raised by the
+   *telesales* person (`lib/commands/calls.ts`), and the follow-up outcomes do the same (`WANTS_DESIGN`,
+   `WANTS_TO_ORDER`). Telesales must never raise tickets, and an SR must not find tickets they did not raise. Instead:
+   - the deal gets the next step "Poslať návrh" (as today), and when the owner cannot make designs its note reads
+     "Požiadať manažéra o návrh", so the daily list tells a new SR what to do. The same goes for "Poslať cenu" ("ak ju
+     nevieš, požiadaj manažéra"). Once the ticket exists, the deal waits on the manager (wave 3).
+   - on a deal whose owner cannot make designs, the action sheet shows a prominent **"Požiadať manažéra o návrh"**
+     while no návrh ticket is open
+   - on the manager's own deal, it's just his to-do
+2. **Setups are team configuration, not code.** A telesales' positive calls go to their team leader. "Timea + manager"
+   = Timea in the manager's team; "Timea + SR" = Timea in a team led by that SR; an SR's own calls are theirs.
+3. **Contact types stored truthfully (bug fix, part of 3a).** Today every choice in the action sheet except "Nezdvihli" is
+   saved as a `CALL` with outcome `POSITIVE`, including "Odpísali" (an email) and "Bez kontaktu" (no contact at all).
+   That inflates call counts and resets the "N. pokus" counter. Only the history record changes; the counter
+   stays (a visual hint only, it never closes a deal). Fix:
+   - "Bez kontaktu" writes only the next-step change
+   - "Odpísali" writes a new `ActivityType.CLIENT_REPLIED` (additive) with the reply
+   - old rows stay as they are
+4. **Ticket inbox tabs (wave 3):** Pre mňa / Od mňa / Vybavené for everyone. "Pre mňa" is empty for an SR today and exists for
+   future addressed tickets.
+
+### 10. Later, explicitly not in 3a (not scheduled)
+
+- **Team sanity warnings (admin), separate small step after 3a, not part of the email change.** Warn with a confirm dialog when:
+  - adding a user to a team, if that team would then have more than one SR, or the new member is an SR who is not the
+    leader
+  - changing a role to/from SALES_REP (or any role that can own deals) while the user is in a team where that breaks
+    routing
+  - a team contains telesales but its leader cannot own deals (their positive calls would land unassigned)
+
+  Show a ⚠ on the Tímy overview for any team in such a state. One role per account; a combined role (e.g. SR + scout
+  leader) is solved by two accounts, if it ever happens.
+- Email templates: open the deal, get a generated email (about us + chosen attachments + návrh link), copy it.
+- Removing or marking one's own tracking-history entries (manager).
 
 ## 3. Target shape
 
@@ -758,6 +1206,7 @@ touch:
 |---|---|---|---|
 | **1** | **The merge, one step:** permission rename (§1.1), `dealScope()` + `dealCapabilities()`, one list with the full filter row + `Na dnes` + paging, one detail, D-03 click model, D-12 owner/handed-off-by/request-kind filters, `requestsForViewer()` (D-15 step 1), B-05 (ORDER note required server-side), B-10 (docs), redirects, deletion of `components/clients/**` + `lib/queries/clients/**` (which is also how B-01, B-02, B-03, B-08 disappear) | **none — pure application code** | **Full check pass:** `tsc`, lint, business time (both TZs), client sections, concurrency suite incl. the new scope/crafted-call tests, `Na dnes` ↔ `clientSection()` parity, backfill delta, HTTP role checks for every role on every route, and a human click-through of both roles. Nothing else starts until this is green. |
 | 2 | D-04 `ResponsiveSheet` + D-11 sheet + D-05 interaction flow + D-06 quick replies + D-10 `ORDER` option (S-01) + B-04, B-06, B-07 | S-01 (additive enum value) | full check pass + click-through |
+| **3a** | **What the client received (§2c):** one "Čo sme poslali" record (`OFFER_SENT`), phone price, SMS, truthful contact types (`CLIENT_REPLIED`), legacy ⚠ + review, corrections, old send paths deleted | `OFFER_SENT`, `CLIENT_REPLIED`, 4 `Lead` columns, `Design.legacySentAt` + one-time legacy data step (all additive) | full check pass + click-through |
 | **3** | **Tickets, handover, história (§2b, D-16…D-22)** – inbox with Pre mňa / Od mňa / Vybavené, `WAITING_FOR_MANAGER`, `HANDOVER` instead of `ORDER`, ticket thread + editing, two-switch resolution, ownership history, counters on every pill | S-08…S-12 (all additive) | full check pass incl. the new `Na dnes` ↔ `clientSection()` parity after its rule change |
 | 4 | D-07 notes (S-02) + the ORDER note mirror (D-08 step 3) + B-09 | S-02 (new table + 2 enums) | full check pass |
 | 5 | D-09 pricing (S-03) | S-03 (4 columns + 1 enum) | full check pass |
@@ -768,7 +1217,7 @@ Notes and pricing moved **behind** the ticket model on purpose: "what did they o
 inside tickets and handovers, so building the notes wall first would mean rebuilding half of it.
 
 Every database change, including the ones round 1 still owes production, is tracked in
-**`context/new-feature/db-changes.md`**. Wave 1 deliberately has **zero** database changes: if an agent thinks the merge
+**`context/domain/db-changes.md`**. Wave 1 deliberately has **zero** database changes: if an agent thinks the merge
 needs a migration, something has been misunderstood — stop and ask.
 
 New checks wave 1 must add (to `prisma/backfill/check-concurrency.ts` or a dedicated scope script):

@@ -8,7 +8,7 @@ In this file progress of feature implementation is tracked. Should contain
 
 # Feature: caller assignment, SALES_REP, /dashboard/clients, manager oversight
 
-Source of truth: `context/new-feature/planning.md` (rev. 4). Phases = plan §13.
+Source of truth: `context/features/01-salesrep/planning.md` (rev. 4). Phases = plan §13.
 
 Database used for development: Neon **test** endpoint `…nhww8x` (verified 2026-09-17: not the production endpoint `…m0xyun`,
 which is commented out in `.env`). Production is never touched in this work.
@@ -33,7 +33,7 @@ quote, `PipelineViewTabs.tsx` component created during render).
 | 10 | Rehearsal on fresh production branch | NOT IN SCOPE (separate approved session) |
 | 11 | Production rollout | NOT IN SCOPE (separate approved session) |
 | 12 | Docs (app-workflow, AGENTS.md, this tracker) | DONE |
-| 13 | Independent review `context/new-feature/revision.md` (R-01…R-06) fixed + regression tests | DONE |
+| 13 | Independent review `context/features/01-salesrep/revision.md` (R-01…R-06) fixed + regression tests | DONE |
 
 ## Open items / waiting for the approved production session
 
@@ -75,9 +75,8 @@ quote, `PipelineViewTabs.tsx` component created during render).
 - 2026-09-17 phase 3 DONE: `prisma/backfill/2026-09-assignments.ts` (dry-run default, identity flags, direct host + --confirm for
   apply, exclusive classes with multi-match assertion, set-based updates with guards + count checks, anchor pass, post-apply
   re-classification + invariants, all in one transaction).
-  - **Deviation from §11.3 row 5 (documented in the script):** CALLWORK_OK accepts *any* CALL_QUEUE call (also reverted).
-    Otherwise a lead whose only call was reverted (CALLING RETRY, assigned) would be CONFLICT, contradicting §15
-    ("a later backfill run classifies it as call work").
+  - `CALLWORK_OK` accepts *any* CALL_QUEUE call (also reverted), matching §11.3 row 5. A lead whose only call was
+    reverted (CALLING RETRY, assigned) remains call work as required by §15.
   - Test DB run (owner `t_michal`): dry-run 0 CONFLICT → apply DEAL_TO_MIGRATE 54, CALLWORK_TO_MIGRATE 63, NEW_WITH_HISTORY 1,
     anchors 129 → second run clean (DEAL_OK 54, CALLWORK_OK 64, POOL 63, TERMINAL_OK 72, ANCHOR_PENDING 0, invariants 0).
 - 2026-09-17 phase 4 DONE:
@@ -131,7 +130,7 @@ quote, `PipelineViewTabs.tsx` component created during render).
   - `next build` OK; HTTP role checks with locally signed sessions against `next dev`: 31/31 (script kept outside the repo)
 - 2026-09-17 phase 12 DONE: `context/app-workflow.md` rewritten ([PLANNED] removed, [ROLLOUT] where production still needs the
   migration), `AGENTS.md` updated (roles, routes, architecture, concurrency rules, DB rules, checks).
-- 2026-09-17 revision pass (`context/new-feature/revision.md`, independent review by ChatGPT Codex) – all six findings FIXED:
+- 2026-09-17 revision pass (`context/features/01-salesrep/revision.md`, independent review by ChatGPT Codex) – all six findings FIXED:
   - **R-01 (P1)** `updateDealContact` spread every runtime key into `lead.update`, so a crafted payload could set `status`,
     `ownerId`, `pipelineEnteredAt`, `deletedAt`… Now strict zod schemas (`dealContactSchema`, quote input,
     `nextActionInputSchema`) inside `lib/domain/dealMutations.ts` reject unknown keys and the update is built from named fields
@@ -156,7 +155,7 @@ quote, `PipelineViewTabs.tsx` component created during render).
 
 # Round 2 (discussion): one deal workspace, interactions, notes, pricing
 
-Source: `context/new-feature/round2-deal-workspace.md` — **DISCUSSION, NOT APPROVED, nothing implemented.**
+Source: `context/features/01-salesrep/round2-deal-workspace.md` — **DISCUSSION, NOT APPROVED, nothing implemented.**
 Written 2026-09-17 from Michal's feedback after using the shipped round-1 feature.
 
 Scope of the discussion (ids are defined in that file):
@@ -210,7 +209,7 @@ role shares this screen, and the parked ceník-in-app idea.
 ## Round 2 – wave 1: merged deals screen (DONE on the test branch, 2026-09-18)
 
 **Database: no change at all.** Wave 1 is pure application code; every schema change of round 2 is still `PLANNED` in
-`context/new-feature/db-changes.md` (which also lists what round 1 still owes production).
+`context/domain/db-changes.md` (which also lists what round 1 still owes production).
 
 What shipped:
 
@@ -244,7 +243,7 @@ Checks (test branch `…nhww8x`, 2026-09-18):
 Known gap: during the role-check update I first deleted the manager block by accident (the run reported 27/27 instead of
 31); it was restored and the suite re-run at 35/35.
 
-Not done in wave 1 (next waves, see `context/new-feature/round2-deal-workspace.md` §5): D-04 ResponsiveSheet + D-05
+Not done in wave 1 (next waves, see `context/features/01-salesrep/round2-deal-workspace.md` §5): D-04 ResponsiveSheet + D-05
 interaction model + D-06 quick replies + S-01 `NextActionKind.ORDER` (wave 2), D-07 notes (wave 3), D-09 pricing (wave 4).
 A human click-through of both roles is still pending – the automated checks cover HTTP responses, not drawers and forms.
 
@@ -252,7 +251,7 @@ A human click-through of both roles is still pending – the automated checks co
 
 **Database: one additive enum value** – `NextActionKind += ORDER` (S-01), pushed to the test branch with `prisma db push`
 (no data-loss warning). Everything else uses existing columns; the quick replies live in `Activity.meta.reply` on purpose
-(D-06 option A). Ledger updated: `context/new-feature/db-changes.md` §2.2.
+(D-06 option A). Ledger updated: `context/domain/db-changes.md` §2.2.
 
 What shipped:
 
@@ -289,7 +288,7 @@ Using waves 1–2 exposed a modelling mistake: `DealRequest` was doing three job
 handover). Symptom Michal hit: as SALES_REP, four first calls produced **"Požiadavky (4)"** on his own screen, the deal
 stayed in that bucket whatever he did next, and as manager the pill was empty until he switched the owner filter.
 
-Agreed design is in `context/new-feature/round2-deal-workspace.md` §2b (D-16…D-22). In short:
+Agreed design is in `context/features/01-salesrep/round2-deal-workspace.md` §2b (D-16…D-22). In short:
 
 - **Požiadavky becomes an inbox of tickets** (Pre mňa / Od mňa / Vybavené) that ignores the owner filter; the deal list
   stops filtering by open request and shows a badge instead.
@@ -309,5 +308,95 @@ Agreed design is in `context/new-feature/round2-deal-workspace.md` §2b (D-16…
   capability flag.
 - Counters on every pill.
 
-Schema (all additive, none applied): S-08…S-12 in `context/new-feature/db-changes.md` §2.3. Notes (was wave 3) and
+Schema (all additive, none applied): S-08…S-12 in `context/features/01-salesrep/round2-deal-workspace.md` §2b. Notes (was wave 3) and
 pricing move to waves 4 and 5, deliberately behind the ticket model.
+
+## Round 2 – post-merge cleanup (2026-09-18)
+
+Leftover naming from the merge removed; everything on this screen is now "pipeline".
+
+- `components/deals/*` → `components/pipeline/*` (DealList, DealDetail, DealFilters, InteractionSheet, NextActionEditor)
+- `lib/queries/deals/*` → `lib/queries/pipeline/*`
+- `lib/actions/deals/index.ts` merged into `lib/actions/pipeline/index.ts` — one `"use server"` file, two guard levels
+  (`lib/commands/pipeline.ts` = manager, `lib/commands/dealWork.ts` = owner or manager); the command split stays.
+- `app/dashboard/clients/**` deleted (the redirect stubs) and its route-guard line removed — the route is gone (404).
+- Navbar and page title say **Pipeline** for every role, including SALES_REP; the dashboard's two duplicate buttons
+  merged into one.
+
+No behaviour change beyond the labels and the removed redirects. Checks: `tsc` clean (after a rebuild regenerated
+`.next` route types), `eslint` only the known `MobileNav.tsx` error, `next build` OK, client sections pass,
+concurrency **67/67**, HTTP role checks **35/35** (four assertions updated to the new expectations: `/dashboard/clients`
+is now 404, the rep's nav and title say Pipeline).
+
+## Round 2 – wave 3a: what the client received (DONE on the test branch, 2026-09-18)
+
+Design: `context/features/01-salesrep/round2-deal-workspace.md` §2c (folded in from the reviewed proposal, which was then
+deleted). Also agreed there: no automatic tickets from wave 3 on (D-17 updated), team sanity warnings as a later item.
+
+Baseline before any change: `npx tsc --noEmit` clean.
+
+Log:
+
+- Schema: test endpoint verified (`…nhww8x`, db `neondb`). `prisma validate` OK. Reviewed `migrate diff` SQL — exactly
+  `ActivityType += OFFER_SENT, CLIENT_REPLIED`, `Design.legacySentAt`, `Lead.hadLegacySends` (NOT NULL DEFAULT false),
+  `Lead.legacySendsReviewedAt`, `Lead.offerAboutUsAt`, `Lead.offerPriceAt`, `Lead.offerPricelistAt`; nothing else, all
+  additive.
+- Schema applied on test: `npx prisma db push` — "now in sync", **no data-loss warning**; `npx prisma generate` OK; a
+  second `db push` reports "already in sync".
+- New script `prisma/backfill/2026-09-offer-legacy.ts` (the one-time legacy step: `Lead.hadLegacySends`,
+  `Design.legacySentAt`; only sets values, repeatable; dry-run / `--apply` on direct host with `--confirm` / `--verify`).
+  On test: dry-run → 28 leads + 5 designs to mark; `--apply` (direct host) COMMITTED 28 + 5; `--verify` OK (0 left).
+- Code (server): `lib/domain/offers.ts` (pure: contents, meta schema, ordering, `summarizeOffers`, `clientKnowledge`),
+  `lib/domain/offerMutations.ts` (`recomputeOffers`, `recordOffer`, `correctRecord`), `lib/commands/offers.ts`
+  (`recordOfferSentAs`, `correctRecordAs`, `confirmLegacyReviewedAs`), `activityReplay` in `lib/domain/idempotency.ts`,
+  `lib/domain/designLinks.ts`. `logFollowUpAs` now takes `contact` (CALL / REPLIED / SMS / NONE) and `phonePrice`; the
+  input schema is strict. Deleted old write paths: actions `setQuoteSent`, `setDealQuoteSent`, `logSent`,
+  `logDealEmailSent`, `setPriceDisclosed`, `setDealPriceDisclosed`, `logBusinessActivity`, `setDesignSent`; commands
+  `setQuoteSentAs`, `logSentAs`, `setPriceDisclosedAs`, `setDealQuoteSentAs`, `logDealEmailSentAs`,
+  `setDealPriceDisclosedAs`, `setDesignSentAs`; domain `setQuoteSent`, `logSent`, `setPriceDisclosed`; notes are `NOTE` only.
+- Code (UI): new `OfferSentDialog` ("Čo sme poslali", incl. historical mode), `components/shared/copyEmailLink.ts`;
+  `CenovaPonukaCard` → "Cena & ponuky" (what the client got, "?", price-mismatch warning, legacy ⚠ + review);
+  action sheet: "📨 Poslali sme ponuku" / "💬 Poslali sme SMS", "Povedal/a som cenu", truthful contact type; detail:
+  "Naposledy" from `lastTouch`, "Email o nás" card removed, crossed-out history rows + "Opraviť", SR návrh copy button;
+  design card: "Odoslané…" opens the shared dialog + "Odkaz do emailu"; list chips cenník/cena/návrh/⚠; pills "Poslať
+  cenu", "Dostali cenník/cenu/návrh", "Neoverené" (manager); labels for WANTS_QUOTE/WANTS_EMAIL/SEND_QUOTE/SEND_EMAIL.
+- Found while writing tests and fixed before the run: a back-filled (historical) entry would have shown as "Naposledy";
+  a návrh's sent date is now the **earlier** of the first new send and the legacy date (the design text said "new send,
+  else legacy", which would move an old date forward — §2c 4.2 updated to match).
+- `npx tsc --noEmit` clean.
+- `check-concurrency.ts --expect-endpoint …nhww8x --iterations 100`: **80/80**. The 67 existing checks all pass (four
+  were rewritten because their commands were deleted: the CP-sent, design-sent and revision checks now use
+  `recordOfferSentAs`, and the revision check also covers `correctRecordAs`); 13 new W3a checks: A record +
+  idempotency (parallel same key = one row; two different submits on one revision = one wins, one STALE), B price
+  snapshot, C corrections order-independent + design first-sent/legacy date, D legacy "?" / historical mode / review,
+  E truthful contact types + streak reset by a written reply, F phone price, G correction permissions + "Naposledy",
+  H ordering rule.
+- Checks after the code change (test branch `…nhww8x`): `npx eslint .` only the known `MobileNav.tsx` error (two new
+  findings of mine — a straight quote in Slovak text and unused imports left in `lib/commands/tracking.ts` — fixed);
+  `npx tsc --noEmit` clean; `npx next build` OK; `check-business-time.ts` 33/33 local and 33/33 `TZ=UTC`;
+  `check-client-sections.ts` 19/19; `check-backfill-delta.ts` 6/6; round-1 backfill `--verify` clean;
+  `2026-09-offer-legacy.ts --verify` OK (0 left); HTTP role checks **42/42** against `next dev` (35 previous + 7 new:
+  rep detail shows "Cena & ponuky" and no old send buttons, `?zaznam=ponuka` renders, "Neoverené" pill only for the
+  manager and lists a legacy deal, the legacy review panel renders, the calls screen has the new labels).
+- Gate grep: no writes of `quoteSentAt` / `aboutUsSentAt` / `priceDisclosed` / `QUOTE_SENT` / `EMAIL_SENT` /
+  `DESIGN_SENT` left outside `prisma/backfill` (only reads in the detail's legacy block); `Design.sentAt`,
+  `Lead.designSentAt` and `Lead.offer*` are written only by `recomputeOffers`.
+- Docs updated to what now exists: `context/domain/database-map.md`, `context/domain/operations.md`,
+  `context/domain/db-changes.md` (§3 wave 3a delta + data step + production order), `context/app-workflow.md` (§5, new
+  §5a, §6, §7, §9), `context/project-overview.md` (§6, §7), `context/architecture.md`, `context/ui-context.md`;
+  feature design §2c status + the design-date row, D-19 note.
+
+Deviations from §2c, for review:
+- From the **list**, "📨 Poslali sme ponuku" opens the deal detail with the dialog already open (`?zaznam=ponuka`);
+  the dialog needs the deal's designs and price, which the list does not load. From the detail it opens in place.
+- `Design.sentAt` = the earlier of the first new send and the legacy date (see the fix above).
+- The manager's "not your deal" question is a browser confirm dialog.
+
+Not done / still open:
+- **Human click-through** (not verifiable by the agent): the "Čo sme poslali" dialog on phone and desktop (defaults,
+  price edit, date picker, návrh copy → paste into Gmail shows the clean address), "Povedal/a som cenu", SMS,
+  "Opraviť", the legacy panel + "Doplniť starý záznam" + "Hotovo", the new pills and list icons.
+- Production still owes round 1, wave 2 and wave 3a (`context/domain/db-changes.md`); nothing was touched there.
+- Wave 3 (tickets) is next: remove the automatic DESIGN ticket and all automatic ticket closing in one change (§2c §6,
+  §9a); team sanity warnings are listed as a later item in §2c §10.
+

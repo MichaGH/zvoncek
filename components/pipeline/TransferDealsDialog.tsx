@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { transferDeals } from "@/lib/actions/pipeline";
-import type { DealUserOption } from "@/lib/queries/deals";
+import type { DealUserOption } from "@/lib/queries/pipeline";
 
 type Person = { id: string; firstName: string; lastName: string };
 type DealStatusKey = "ACTIVE" | "SNOOZED" | "WON" | "LOST" | "UNREACHABLE";

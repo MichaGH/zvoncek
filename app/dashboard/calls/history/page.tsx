@@ -175,7 +175,7 @@ export default async function CallsHistoryPage({
 
 type HistoryRow = Awaited<ReturnType<typeof getCallHistory>>[number];
 
-// Názov firmy – odkaz na detail obchodu (pipeline / moji klienti) podľa práv, inak text. Zdieľané
+// Názov firmy – odkaz na detail obchodu (/dashboard/pipeline/[id]) podľa práv, inak text. Zdieľané
 // medzi mobilnou kartou a desktop tabuľkou.
 function LeadName({ row }: { row: HistoryRow }) {
     const label = `#${row.lead.number} ${row.lead.companyName ?? row.lead.website ?? "Bez mena"}`;

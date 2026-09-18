@@ -8,10 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { ActionError } from "@/lib/access/errors";
-import { changeStatus, logSent, reopenDeal, resolveDealRequest, saveQuote } from "@/lib/actions/pipeline";
+import { changeStatus, reopenDeal, resolveDealRequest, saveQuote } from "@/lib/actions/pipeline";
 import { REQUEST_KIND_LABEL } from "@/lib/dictionaries";
 import { fmtAgo } from "@/lib/utils";
-import type { DealRequestView } from "@/lib/queries/deals";
+import type { DealRequestView } from "@/lib/queries/pipeline";
 
 // „Požiadavky" na detaile obchodu (manažér). Každá požiadavka ukazuje akciu, ktorá ju reálne vybaví (§7.6/§8.2).
 // Ručné „Vybavené" má len OTHER; zamietnutie vyžaduje dôvod, ktorý uvidí obchodník.
@@ -91,9 +91,7 @@ function RequestRow({ leadId, request }: { leadId: string; request: DealRequestV
                     </Button>
                 )}
                 {request.kind === "EMAIL" && (
-                    <Button size="sm" disabled={pending} onClick={() => run(() => logSent(leadId, "EMAIL_SENT"), "Email označený ako odoslaný")}>
-                        Označiť email ako odoslaný
-                    </Button>
+                    <span className="text-xs text-muted-foreground">Vybaví sa zaznamenaním odoslania („Cena &amp; ponuky“).</span>
                 )}
                 {request.kind === "ORDER" && (
                     <Button

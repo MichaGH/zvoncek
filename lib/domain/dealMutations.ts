@@ -1,7 +1,6 @@
 import type { Lead } from "@/app/generated/prisma/client";
 import type {
     ActivitySource,
-    ActivityType,
     LeadStatus,
     NextActionKind,
     NextActionMode,
@@ -37,7 +36,7 @@ import { STATUS_LABEL } from "@/lib/dictionaries";
 export type DealActor = { id: string; firstName: string };
 
 // Jediný zápis Lead stĺpcov; revízia sa zvýši len pri prvom zápise v transakcii.
-async function updateLead(tx: Tx, leadId: string, data: Parameters<Tx["lead"]["update"]>[0]["data"]) {
+export async function updateLead(tx: Tx, leadId: string, data: Parameters<Tx["lead"]["update"]>[0]["data"]) {
     const updated = await tx.lead.update({
         where: { id: leadId },
         data: { ...data, ...(isLeadBumped(tx, leadId) ? {} : bump) },
@@ -46,27 +45,13 @@ async function updateLead(tx: Tx, leadId: string, data: Parameters<Tx["lead"]["u
     return updated;
 }
 
-function hadNextAction(lead: Pick<Lead, "nextActionKind" | "nextActionAt" | "nextActionNote">) {
+export function hadNextAction(lead: Pick<Lead, "nextActionKind" | "nextActionAt" | "nextActionNote">) {
     return Boolean(lead.nextActionKind || lead.nextActionAt || lead.nextActionNote);
 }
 
 // Follow-up hovor o 7 obchodných kalendárnych dní od odoslania, len deň.
 export function followUpInSevenDays(sentAt: Date): Date {
     return businessDayStart(addBusinessCalendarDays(businessDate(sentAt), 7));
-}
-
-async function planFollowUp(tx: Tx, actor: DealActor, lead: Lead, note: string, sentAt: Date, source: ActivitySource) {
-    const next = nextActionData("CALL", followUpInSevenDays(sentAt), note, false);
-    await tx.activity.create({
-        data: createPlanningActivity({
-            leadId: lead.id,
-            userId: actor.id,
-            type: hadNextAction(lead) ? "NEXT_ACTION_CHANGED" : "NEXT_ACTION_SET",
-            source,
-            note: describeNextAction(next),
-        }),
-    });
-    return next;
 }
 
 // ── Údaje ────────────────────────────────────────────────────────────────────
@@ -182,51 +167,6 @@ export async function saveQuote(
     }
 }
 
-// Označenie CP ako odoslanej: priceDisclosed + follow-up hovor o 7 dní. Revertovateľné (sent=false).
-export async function setQuoteSent(tx: Tx, actor: DealActor, lead: Lead, sent: boolean, source: ActivitySource) {
-    if (!sent) {
-        await updateLead(tx, lead.id, { quoteSentAt: null });
-        await tx.activity.create({
-            data: createAuditActivity({
-                leadId: lead.id,
-                userId: actor.id,
-                type: "CONTACT_UPDATED",
-                source,
-                note: "Odoslanie cenovej ponuky zrušené",
-            }),
-        });
-        return;
-    }
-    const at = new Date();
-    const p = lead.price != null ? Number(lead.price) : null;
-    await tx.activity.create({
-        data: createBusinessActivity({
-            leadId: lead.id,
-            userId: actor.id,
-            type: "QUOTE_SENT",
-            source,
-            note: p != null ? `Cenová ponuka odoslaná: ${p} €` : "Cenová ponuka odoslaná",
-            createdAt: at,
-        }),
-    });
-    const next = await planFollowUp(tx, actor, lead, "Zavolať, či cenová ponuka prišla", at, source);
-    await updateLead(tx, lead.id, { quoteSentAt: at, priceDisclosed: true, ...next });
-    await resolveOpenRequests(tx, lead.id, ["PRICE"], "DONE", actor.id, "Cenová ponuka odoslaná", source);
-}
-
-export async function setPriceDisclosed(tx: Tx, actor: DealActor, lead: Lead, disclosed: boolean, source: ActivitySource) {
-    await updateLead(tx, lead.id, { priceDisclosed: disclosed });
-    await tx.activity.create({
-        data: createAuditActivity({
-            leadId: lead.id,
-            userId: actor.id,
-            type: "CONTACT_UPDATED",
-            source,
-            note: disclosed ? "Klient oboznámený s cenou" : "Oboznámenie s cenou zrušené",
-        }),
-    });
-}
-
 // ── Ďalší krok ───────────────────────────────────────────────────────────────
 
 export type NextActionInput = {
@@ -269,46 +209,19 @@ export async function setNextAction(tx: Tx, actor: DealActor, lead: Lead, input:
     });
 }
 
-// ── Odoslané / poznámky ──────────────────────────────────────────────────────
-
-const SENT_DEFAULTS: Record<"QUOTE_SENT" | "EMAIL_SENT", { dateField: "quoteSentAt" | "aboutUsSentAt"; note: string }> = {
-    QUOTE_SENT: { dateField: "quoteSentAt", note: "Zavolať, či cenová ponuka prišla" },
-    EMAIL_SENT: { dateField: "aboutUsSentAt", note: "Zavolať, či email prišiel / či si ho pozreli" },
-};
-
-export async function logSent(
-    tx: Tx,
-    actor: DealActor,
-    lead: Lead,
-    what: "QUOTE_SENT" | "EMAIL_SENT",
-    source: ActivitySource,
-) {
-    const at = new Date();
-    const defaults = SENT_DEFAULTS[what];
-    await tx.activity.create({
-        data: createBusinessActivity({ leadId: lead.id, userId: actor.id, type: what, source, createdAt: at }),
-    });
-    const next = await planFollowUp(tx, actor, lead, defaults.note, at, source);
-    await updateLead(tx, lead.id, { [defaults.dateField]: at, ...next });
-    if (what === "EMAIL_SENT") {
-        await resolveOpenRequests(tx, lead.id, ["EMAIL"], "DONE", actor.id, "Email odoslaný", source);
-    } else {
-        await resolveOpenRequests(tx, lead.id, ["PRICE"], "DONE", actor.id, "Cenová ponuka odoslaná", source);
-    }
-}
+// ── Poznámky ─────────────────────────────────────────────────────────────────
 
 export async function addBusinessNote(
     tx: Tx,
     actor: DealActor,
     lead: Lead,
-    input: { note: string; type?: Extract<ActivityType, "NOTE" | "SMS_SENT"> },
+    input: { note: string },
     source: ActivitySource,
 ) {
     const note = input.note.trim();
-    const type = input.type ?? "NOTE";
-    if (type === "NOTE" && !note) throw new AccessError("FORBIDDEN", "Poznámka nemôže byť prázdna.");
+    if (!note) throw new AccessError("FORBIDDEN", "Poznámka nemôže byť prázdna.");
     await tx.activity.create({
-        data: createBusinessActivity({ leadId: lead.id, userId: actor.id, type, source, note: note || null }),
+        data: createBusinessActivity({ leadId: lead.id, userId: actor.id, type: "NOTE", source, note }),
     });
     await updateLead(tx, lead.id, {});
 }

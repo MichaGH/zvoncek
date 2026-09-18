@@ -1,4 +1,4 @@
-import type { ActivitySource, CallOutcome } from "@/app/generated/prisma/enums";
+import type { ActivitySource, ActivityType, CallOutcome } from "@/app/generated/prisma/enums";
 import type { ActionError } from "@/lib/access/errors";
 import prisma from "@/lib/db";
 import { isHandoffOutcome } from "@/lib/domain/leadFlow";
@@ -37,4 +37,19 @@ export async function idempotentReplay(
     if (!isHandoffOutcome(expected.outcome)) return { success: true };
     const owner = existing.lead.owner;
     return { success: true, recipient: owner ? { id: owner.id, name: `${owner.firstName} ${owner.lastName}`.trim() } : null };
+}
+
+// Všeobecná obdoba pre záznamy obchodu (odoslanie, SMS, odpoveď klienta, plán bez kontaktu – round 2 §2c):
+// kľúč patrí tej istej osobe, obchodu a niektorému z očakávaných typov → úspech bez ďalšieho zápisu; inak konflikt.
+export async function activityReplay(
+    key: string,
+    expected: { userId: string; leadId: string; types: readonly ActivityType[] },
+): Promise<{ success: true } | ActionError | null> {
+    const existing = await prisma.activity.findUnique({
+        where: { idempotencyKey: key },
+        select: { userId: true, leadId: true, type: true },
+    });
+    if (!existing) return null;
+    const matches = existing.userId === expected.userId && existing.leadId === expected.leadId && expected.types.includes(existing.type);
+    return matches ? { success: true } : { error: "Obchod sa medzitým zmenil – obnovujem.", code: "IDEMPOTENCY_CONFLICT" };
 }

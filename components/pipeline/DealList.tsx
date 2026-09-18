@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Eye, FileText, Info, Mail, Paintbrush, Phone } from "lucide-react";
+import { AlertTriangle, BookOpen, Euro, Info, Paintbrush, Phone } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import UrgencyLabel from "@/components/shared/UrgencyLabel";
-import InteractionSheet from "@/components/deals/InteractionSheet";
+import InteractionSheet from "@/components/pipeline/InteractionSheet";
 import {
     ACTIVITY_LABEL,
     NEXT_ACTION_LABEL,
@@ -20,7 +20,7 @@ import {
 } from "@/lib/dictionaries";
 import { businessDayMonth, businessDaysBetween, businessHm, businessInputParts } from "@/lib/domain/businessTime";
 import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
-import type { DealRow } from "@/lib/queries/deals";
+import type { DealRow } from "@/lib/queries/pipeline";
 import { cn } from "@/lib/utils";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,32 +58,41 @@ function RequestBadges({ row }: { row: DealRow }) {
     );
 }
 
+// Čo klient už dostal (round 2 §2c) – z nových záznamov; ⚠ = starý obchod, ktorého odoslania ešte nikto neoveril.
 function SentIcons({ row }: { row: DealRow }) {
-    if (!row.hasDesignSent && !row.quoteSentAt && !row.aboutUsSentAt) return null;
+    if (!row.hasDesignSent && !row.gotPrice && !row.gotPricelist && !row.legacyUnreviewed) return null;
     return (
         <div className="flex shrink-0 items-center gap-1">
+            {row.gotPricelist && (
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <BookOpen className="h-3 w-3 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>Dostali cenník</TooltipContent>
+                </Tooltip>
+            )}
+            {row.gotPrice && (
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <Euro className="h-3 w-3 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>Dostali cenu</TooltipContent>
+                </Tooltip>
+            )}
             {row.hasDesignSent && (
                 <Tooltip>
                     <TooltipTrigger asChild>
                         <Paintbrush className="h-3 w-3 text-muted-foreground" />
                     </TooltipTrigger>
-                    <TooltipContent>Návrh odoslaný</TooltipContent>
+                    <TooltipContent>Dostali návrh</TooltipContent>
                 </Tooltip>
             )}
-            {row.quoteSentAt && (
+            {row.legacyUnreviewed && (
                 <Tooltip>
                     <TooltipTrigger asChild>
-                        <FileText className="h-3 w-3 text-muted-foreground" />
+                        <AlertTriangle className="h-3 w-3 text-amber-600" />
                     </TooltipTrigger>
-                    <TooltipContent>Cenová ponuka odoslaná</TooltipContent>
-                </Tooltip>
-            )}
-            {row.aboutUsSentAt && (
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                        <Mail className="h-3 w-3 text-muted-foreground" />
-                    </TooltipTrigger>
-                    <TooltipContent>Email o nás odoslaný</TooltipContent>
+                    <TooltipContent>Staré záznamy – neoverené, čo klient dostal</TooltipContent>
                 </Tooltip>
             )}
         </div>
@@ -91,19 +100,7 @@ function SentIcons({ row }: { row: DealRow }) {
 }
 
 function PriceWithEye({ row }: { row: DealRow }) {
-    return (
-        <div className="flex items-center gap-1">
-            {row.priceDisclosed && (
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                        <Eye className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    </TooltipTrigger>
-                    <TooltipContent>Klient pozná cenu</TooltipContent>
-                </Tooltip>
-            )}
-            <span className="tabular-nums">{row.price ? `${row.price} €` : "—"}</span>
-        </div>
-    );
+    return <span className="tabular-nums">{row.price ? `${row.price} €` : "—"}</span>;
 }
 
 // dense = desktop (orezáva text v bunke); inak (mobile) text zalamuje.

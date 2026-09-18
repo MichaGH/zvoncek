@@ -1,378 +1,284 @@
-# Zvonček: how the CRM is used
+# App Workflow
 
-Business map of the app for coding agents. `AGENTS.md` is the short operational guide; this file explains who
-does what, in which order, and which data represents it.
+What the app does, in the order people use it. Written for an AI agent picking up work: read this for *behaviour*,
+`context/domain/*` for the data and operations that exist today, `context/project-overview.md` for roles, routes and
+permissions, `context/architecture.md` for layers, `context/code-standards.md` for the rules you must follow.
 
-Markers:
-- no marker = implemented in code
-- **[ROLLOUT]** = implemented in code, but the production database still needs the approved rollout (schema push + backfill,
-  `context/new-feature/planning.md` §14) before it is true in production
-- `context/new-feature/planning.md` (rev. 4) is the design source for caller assignment, SALES_REP, the deals screen and
-  manager requests; `context/progress-tracker.md` lists what shipped and every deviation from the plan.
+**Markers**
 
-Last reviewed: 2026-09-17 (after implementing plan rev. 4 on the test database).
+- no marker = shipped and verified on the test branch
+- `[WAVE 3]` = designed and agreed, **not built**; full design in `context/features/01-salesrep/round2-deal-workspace.md` §2b
+- `[ROLLOUT]` = exists in code, still missing in production (production is on the pre-round-1 schema; see
+  `context/domain/db-changes.md`)
+- `[FUTURE ROUTING]` = desired operating arrangement; its complete team/recipient policy is not yet decided
 
 ---
 
-## 1. The company and the funnel
+## 1. The funnel
 
-The Grand Points is a small web design company. Zvonček finds companies with weak or missing websites, calls
-them, and turns interested ones into web projects (website, e-shop, catalog, web app).
+Zvonček is the internal CRM of The Grand Points (web design, small team, one manager = Michal).
 
-End-to-end responsibility:
-
-```text
-SCOUT adds contact (lands in the shared pool)
-  → caller takes a batch and makes the FIRST CALL (TELESALES or SALES_REP)
-      no answer / call me later / snooze  → stays in the caller's own call work
-      not interested / bad number         → closed (LOST / UNREACHABLE)
-      interested (quote / email / design) → HANDOFF → becomes a DEAL with an owner
-  → deal OWNER does FOLLOW-UPS (send quote/email, call a week later, repeat)
-      design proposal wanted → DESIGN request → manager/technician (Michal) builds and sends it
-      client says no         → LOST
-      client goes ahead      → ORDER request → manager sets WON
+```
+SCOUT adds a contact → TELESALES or SALES_REP claims and makes the initial call
+  ├─ no interest / bad number → closes in the call phase
+  └─ interested → becomes a deal in /dashboard/pipeline
+       ├─ TELESALES-only caller → manager's pipeline today (or unassigned if routing is unavailable)
+       └─ SALES_REP caller → that rep's own pipeline
+            → rep continues client communication and can handle a straightforward price / quote / email
+            → rep asks the manager for work they cannot do (e.g. price, design)
+            → manager completes the request; rep continues, or manager takes the deal over [WAVE 3]
+            → after the client's final yes, the deal is handed fully to the manager [WAVE 3]
+       → manager completes the sale and may mark WON; a deal may also end LOST
 ```
 
-Real sales rhythm: first call → send what the client asked for (price, about-us email, design) → call about a week
-later to check they received it → repeat until yes or no. The goal is always to get the client to want a design proposal.
+The manager may become involved earlier: for example, the rep can request a design or `[WAVE 3]` a technical client
+call. The manager can do that work and return the next step to the rep, or `[WAVE 3]` take over the deal. A ticket is
+not automatically a transfer of deal ownership.
 
----
+`[FUTURE ROUTING]` A TELESALES-only caller may later work under a SALES_REP: telesales does the initial call, the rep
+owns follow-ups, and the manager receives requests or the final handover. Other combinations may be needed. Today's
+generic routing can already give a TELESALES caller's deal to an eligible SALES_REP team leader, but that alone does
+not define the future operating policy: who leads which team, when the rep retains ownership, and when the manager
+takes over are **not decided**. Do not assume the team leader must always be the final owner. Preserve the separate
+caller, deal owner and creator fields so this can be designed without changing their meanings.
 
-## 2. People and roles
+Two phases, one `Lead` row, three separate responsibility fields — see `context/project-overview.md` §1.
 
-| Role | Who (2026-09) | Job |
-|---|---|---|
-| `SCOUT` | Jano, Lukáš, Miloslav | Search online databases and add contacts |
-| `SCOUT_LEADER` | Šimon | Leads a team of scouts; also adds contacts; checks the team's output (for pay) |
-| `TELESALES` | Timea | First calls only. Positive results are routed to someone else (team leader) |
-| `SALES_REP` ("Obchodník") | not hired yet | First calls **and** follow-ups on their own deals until closed |
-| `MANAGER` | Nikolas | Observer with global access; also adds many contacts. Nothing is built specifically for him |
-| `ADMIN` | Michal | The actual business manager and technician: builds designs, sets prices, resolves requests, manages users and teams. Owner of historical deals **[ROLLOUT]** |
+## 2. Adding contacts
 
-The code checks **permissions**, never roles (`lib/permissions.ts`, `can(user, permission)`).
-Treat "manager" in business text as "a user with `deals.manage`" (Michal, Nikolas).
+`SCOUT` adds contacts in `/dashboard/contacts/new` and sees only their own (`createdById`). They may edit or delete only
+untouched ones (NEW, unclaimed, no call history). `SCOUT_LEADER` sees the same for their team plus team statistics.
+Callers may also add contacts (`contacts.create`).
 
-Authorization reads the **current DB user** (role + deactivation) via `requireUser()` on every dashboard page and server
-action, not only the login token. A deactivated user's session stops working immediately (pages redirect to
-`/login?deactivated=1`, actions return `UNAUTHENTICATED`).
+The note written here is the first thing a caller reads: the scout's observation about the company
+("stránka im občas nejde", "čítal som o nich").
 
----
+## 3. First calls — `/dashboard/calls`
 
-## 3. Lead lifecycle and data meaning
+Used on a phone, standing up, one thumb.
 
-One Prisma model, `Lead`, carries a contact from creation to close. Never rename it.
+**The queue is personal.** The caller presses "Vziať ďalších 10" and claims a batch from the shared pool
+(`claimBatchAs`, `SKIP LOCKED`, batch of 10). Claimed contacts carry `assignedCallerId` while they remain the caller's
+call-stage work. A manager transfer, a terminal result, a positive handoff, or account deactivation clears or changes
+that assignment. There is no time-based expiry, and nobody else sees assigned contacts in the pool. There is no "someone has this open" lock;
+`Lead.lockedById` / `lockedAt` are dead legacy columns.
 
-| Status | Call stage | Deal stage |
-|---|---|---|
-| `NEW` | added, never called (pool or a caller's batch) | — |
-| `CALLING` | no answer (`callbackKind RETRY`) or agreed callback (`SCHEDULED`) | — |
-| `SNOOZED` | "call us in a few months" after a first call | deal paused until a date |
-| `ACTIVE` | — | deal being worked |
-| `WON` | — | client goes ahead |
-| `LOST` | not interested on the first call | lost deal |
-| `UNREACHABLE` | bad number on the first call | deal became unreachable |
+The board shows: the batch (NEW), retries (`callbackKind = RETRY`), scheduled callbacks (`SCHEDULED`, due first) and
+snoozed contacts that woke up.
 
-`SNOOZED`, `LOST` and `UNREACHABLE` exist in both stages, so status alone does not tell the stage.
-`Lead.pipelineEnteredAt` decides it: `null` = call stage, set = deal. It is set at handoff (= `createdAt` of the positive call)
-and cleared only by reverting that call. Invariant: `status NEW` ⇒ no CALL activity.
+**One call = one outcome.** Picking up is implicit — if they answered, you click what they want.
 
-Responsibility fields:
-
-| Field | Meaning |
+| Outcome | Result |
 |---|---|
-| `createdById` | who added the contact (scout statistics and pay). Never used for call or deal responsibility |
-| `assignedCallerId`, `assignedCallerAt` | who is responsible for the call-stage work on this contact (`null` = pool / not in call stage) |
-| `ownerId` | who is responsible for the deal. Set at handoff by routing; `null` = "Nepriradené" (manager assigns) |
-| `handedOffById` | who made the positive call |
-| `closedAt` | deals only: when the deal became WON/LOST/UNREACHABLE; `null` while open |
-| `revision` | optimistic version; +1 exactly once per business transaction touching the lead |
-| `Activity.userId` | who actually did an action (history, statistics). Never rewritten |
-| `lockedById`, `lockedAt` | unused legacy placeholders. Do not build on them |
-
-Scheduling fields are deliberately separate:
-
-- Call stage: `callbackKind`, `callbackAt`, `callbackHasTime`, `callbackNote`
-- Deal stage: `nextActionKind`, `nextActionAt`, `nextActionHasTime`, `nextActionMode`, `nextActionNote`
-
-Call-stage outcomes never write `nextAction*`.
+| Nezdvihli | stays with the caller, `CALLING` + `RETRY` |
+| Zavolať neskôr | `CALLING` + `SCHEDULED` + date (time optional) |
+| Ozvať sa o X mesiacov | `SNOOZED` + date (day only) |
+| Nemajú záujem | `LOST`, closed |
+| Zlé číslo | `UNREACHABLE`, closed |
+| Chcú konkrétnu cenu / Chcú návrh / Chcú info emailom (o nás, cenník) | becomes a deal (`pipelineEnteredAt`), `ACTIVE`, owner selected by current routing, next step pre-filled ("Poslať cenu" / "Poslať návrh" / "Poslať úvodný email") |
+
+**Routing today:** if the caller may own deals (SALES_REP, MANAGER, ADMIN), the caller becomes the owner. Otherwise an
+eligible leader of the caller's team becomes the owner; without one, the deal stays unassigned and the manager sees it
+in "Nepriradené". Thus today's TELESALES-only employee passes positive calls to Michal through the "Obchod" team,
+while a SALES_REP who makes the first call keeps the deal. `[ROLLOUT]` That team and leader must exist in production
+for the TELESALES → manager path; otherwise those deals land unassigned. The later TELESALES → SALES_REP arrangement
+above is `[FUTURE ROUTING]`, not a claim about current code.
+
+Non-handoff call outcomes never write `nextAction*`. A positive first call enters the deal phase and pre-fills the deal's
+next step; deals never use `callback*`.
+
+**History** (`/dashboard/calls/history`): own calls, or everyone's for a manager. A result can be **reverted** only if
+nothing touched the lead since (`Activity.leadRevision == Lead.revision`); reverting also undoes the handoff.
+
+**Assignments** (`/dashboard/calls/assignments`, `calls.assign`): who holds how much unfinished work, transfers of call
+work, releasing a batch back to the pool, and deactivation (which must end with 0 NEW contacts left on the user).
+
+## 4. The deals screen — `/dashboard/pipeline`
+
+One screen for every role that works deals, under one name: **Pipeline**, in the navbar and in the page title, for the
+manager and the rep alike. `/dashboard/clients` and its components were deleted after the merge — the route no longer
+exists (404), and nothing links to it.
+
+**Scope** is decided server-side by `dealScope(viewer)`: `all` (`deals.viewAll`), `team` (`deals.viewTeam` — prepared,
+no role holds it) or `own`. `?owner=` filters *within* that scope and is validated: a rep passing another user's id is
+forced back to themselves. Scope never comes from the path or the URL.
+
+**Filters** (identical for both roles; owner controls render only when the scope can contain other people):
+
+1. owner — ja (default) / všetci / nepriradené / a person · plus "Od:" (who handed the deal over)
+2. status — Aktívne (default) · Spiace · Vyhraté · Stratené · Nedostupné · Všetky
+3. view pills — Požiadavky · **Na dnes** (default) · Všetko · Volať · Poslať cenu · Poslať email · Návrh v procese ·
+   Čaká na klienta · Dostali cenník · Dostali cenu · Dostali návrh · (manager) Neoverené; inside Požiadavky, a
+   sub-filter by request kind
+4. search (firma, web, telefón, email)
+
+"Na dnes" is the day's work: due or overdue, woken snoozes, missing next step, missing date, a due check date. Its SQL
+mirrors `clientSection()` and a parity test asserts they agree over every open deal. Ordering and paging are done in SQL
+over the whole filtered set, 50 rows per page.
+
+`[WAVE 3]` every pill gets a count — today only "Na dnes" and "Požiadavky" have one, which makes "Všetko" look empty.
+
+**Layout**: desktop table (`# | Firma | Typ | [Stav] | Ďalší krok | Naposledy | Cena | [Rieši] | akcie`), phone cards.
+Every row shows the next step **and** the last contact, e.g. `Naposledy: Nezdvihli · dnes · 3. pokus`, plus small icons
+for what the client already has (cenník, cena, návrh) and ⚠ for an old deal whose sends are not verified yet. Row click
+opens the action sheet, the `i` icon opens the detail, the phone icon dials.
+
+**Manager-only** (hidden without `deals.manage`, refused server-side regardless): status, owner, project type, WON,
+reopen, design & tracker management, resolving tickets, bulk transfer, the unassigned banner.
+
+## 5. Working a deal — the interaction
+
+The action sheet is a drawer on a phone and a dialog on desktop. One interaction is three steps, written in a single
+transaction with a revision check and an idempotency key:
+
+1. **Čo sa stalo** — dovolal/a som sa · nezdvihli · odpísali / ozvali sa · bez kontaktu (len naplánovať) ·
+   📨 poslali sme ponuku (opens "Čo sme poslali", §5a) · 💬 poslali sme SMS (optional note, then the next step).
+   Separate paths park or end the deal: ozvať sa o pár mesiacov (2/4/6 or a date), nemajú záujem, zlé číslo.
+   The history records what really happened: a call, a written reply (`CLIENT_REPLIED`), an SMS, or — for "bez
+   kontaktu" — only the changed next step. After "dovolal/a som sa" the user can tick **"Povedal/a som cenu"**; the
+   price is then recorded as told by phone and the next step defaults to "Poslať cenu" (confirm by email).
+2. **Čo povedali** — ešte sa nepozreli · pozreli, chcú zmeny · neprišlo im to · ozvú sa sami · majú poradu ·
+   rieši to niekto iný · cena je vysoká · chcú info (o nás, cenník) · chcú konkrétnu cenu · chcú návrh · chcú objednať. The last three are outcomes
+   in themselves; the rest pre-fill a next step and a date. The key goes to `Activity.meta.reply`, the label into the note.
+3. **Ďalší krok** — zavolať (date required) · čakáme na klienta (date = check day) · poslať CP / email (empty date =
+   today) · poslať návrh (in progress) · vlastný krok. The detail's "Ďalší krok" editor additionally offers
+   **objednávka – potvrdiť** (`ORDER`); the interaction does not, because "chcú objednať" already sets it together with
+   an `ORDER` request. Both lists come from `lib/domain/nextStepOptions.ts`.
+
+**The rule that makes it work: the contact result survives the next step.** "Nezdvihli" is stored as `NO_ANSWER` even
+when the user picks something other than the suggested "zavolať ďalší pracovný deň", so a row never loses the fact that
+somebody called. The attempt counter counts consecutive non-reverted `NO_ANSWER` calls and resets on real contact
+(a call that got through or a written reply). It is only a label; nothing closes a deal automatically.
+
+The sheet also offers: ask the manager, open detail. A closed deal is read-only for the rep,
+who can ask for a reopen. A manager can still work on a closed deal and can reopen it in the detail. The same flow
+sits on the detail behind "Zaznamenať kontakt".
+
+## 5a. What the client received — "Čo sme poslali"
+
+Every email to the client is an "about us" email; what varies is the attachment: the cenník, a calculated price, or
+both, and later a návrh. The app records each send once, in one dialog, opened from the action sheet ("📨 Poslali sme
+ponuku", from the list it opens the deal detail with the dialog), from the detail's **Cena & ponuky** card
+("Zaznamenať odoslanie"), or from a návrh ("Odoslané…").
+
+- Checkboxes **O nás · Cenník · Cena · Návrh**. Pre-ticked only what was not sent yet ("o nás", "cenník"), "Cena" when
+  the next step is "Poslať cenu", a návrh when the step is "Poslať návrh". Any box can be unticked.
+- The price sent is **frozen** with its hand-written breakdown; changing the deal's price later does not change what
+  the client received, and the card warns "Aktuálna cena sa líši od poslanej".
+- The next step is never replaced silently: when the email completes the current "poslať…" step, the dialog offers
+  "Zavolať, či prišlo · o 7 dní"; otherwise it offers to keep the current step.
+- The manager recording a send on someone else's deal is asked first whether they really sent it.
+- **Návrh link:** "Odkaz do emailu" copies a ready link — visible text `smrek1.thegrandpoints.com`, target the
+  tracking URL. Nobody opens or builds the tracking link by hand.
+- **Mistakes:** "Opraviť" on a history entry (author or manager, with a reason) crosses it out; what the client knows is
+  recalculated. The next step and tickets are not touched — the user fixes the next step by hand if needed.
+- **Old deals** (sends from before this change): contents are unknown, so the card shows "?" instead of "no" and a ⚠
+  panel. The manager fills in what was really sent with its original date ("Doplniť starý záznam" — no next step, no
+  ticket change, not shown as "Naposledy") and then confirms "Hotovo – toto je všetko". The "Neoverené" pill lists
+  such deals.
+
+`/dashboard/calls` has no SMS or send recording: telesales keep one simple flow.
 
-`*HasTime = false` means the client gave only a day → day-level labels. `true` means an exact time → exact-time urgency.
-`nextActionMode IN_PROGRESS` means work in progress (e.g. a design being built) → "trvá X dní", not a deadline.
+## 6. Asking the manager — tickets
 
-**Business calendar:** every "day" rule (today, tomorrow, +7 days, next working day, overdue by day, "Na dnes") is computed
-in **Europe/Bratislava** (`lib/domain/businessTime.ts`), independent of server or browser time zone. Day-only dates are stored
-as 00:00 Bratislava and compared by business date; exact times are instants. Browsers send dates as `YYYY-MM-DD` / `HH:mm`
-(`Schedule`, `lib/domain/schedule.ts`). Shared display logic: `lib/overdue.ts`, `components/shared/UrgencyLabel.tsx`.
-Statistics (`/dashboard/stats`) still bucket days in server-local time (not part of this change).
+### 6.1 Today
 
-Activity log (`Activity`): `category` BUSINESS (client story), PLANNING (next action changes), AUDIT (data edits, status/owner
-changes, assignment moves, reverts); `source` CALL_QUEUE (first calls), CLIENTS (rep actions), PIPELINE (manager), CONTACTS,
-ADMIN. Helpers in `lib/activityLog.ts`.
-
----
-
-## 4. SCOUT and SCOUT_LEADER
+A rep raises a `DealRequest` (`PRICE`, `DESIGN`, `EMAIL`, `ORDER`, `REOPEN`, `OTHER`); at most one open per (deal, kind)
+and a second create appends its note to the open one. `WANTS_DESIGN` and `WANTS_TO_ORDER` create one automatically from
+the call outcome. The manager resolves each with the business action that actually does the work (fill the price,
+record the send, mark WON, reopen); manual `DONE` exists only for `OTHER`, and declining requires a reason the rep sees.
 
-Pages: `/dashboard/contacts`, `/dashboard/contacts/new`, `/dashboard/stats` (leader).
-
-- A contact needs a company name or website, plus a phone. Websites are normalized. A duplicate phone is rejected; users with
-  contact-list access see the existing contact's number and name, callers (without it) only a generic message.
-- A new contact always lands in the shared pool, unassigned (also when a caller adds it).
-- SCOUT sees only contacts they created (`createdById`, enforced server-side).
-- SCOUT_LEADER sees contacts and statistics of their team (the team they lead + members), via `getTeamScopeForLeader`.
-- Edit/delete is allowed only while the contact is untouched: `NEW`, not claimed by any caller, and without call history.
-  Checked inside the write transaction under the lead lock (a claim can happen at the same moment).
-- Delete is a soft delete (`deletedAt`).
+**Known faults — fixed by `[WAVE 3]`, do not patch ad hoc:**
 
-Teams (`Team`, `/dashboard/admin/teams`): one leader, members; a user is a member of max one team and leads max one.
-Teams are role-neutral. Teams also **route deals**: see 5.2.
+- the `Požiadavky` pill means "my deals carrying an open request", so a rep sees their own outbox as a to-do list
+  ("Požiadavky (4)" after four first calls) and the manager sees nothing until switching the owner filter;
+- an open request drags the whole deal into that bucket (`clientSection` → "Čaká na nás") and keeps it there whatever
+  else happens on the deal;
+- the note is required on the manual path and not on the automatic one.
 
----
+### 6.2 `[WAVE 3]` The ticket model
 
-## 5. First calls: `/dashboard/calls`
+**A ticket is a ticket; the next step says where the ball is.**
 
-Used by TELESALES, SALES_REP, and managers when they call. Opening the page never changes anything.
+- `Požiadavky` becomes an **inbox of tickets**, not a filter over deals: kind · deal · who asked · age · text · the
+  resolving action, with tabs **Pre mňa / Od mňa / Vybavené**, ignoring the owner filter.
+- The deal list stops filtering by open ticket and shows a badge instead.
+- The deal parks itself through its next step: `WAITING_FOR_MANAGER` with the reason from the ticket
+  ("Čaká na manažéra · návrh"). `clientSection()` loses its open-request rule and the "Na dnes" SQL loses its
+  `NOT EXISTS (open request)` clause **in the same commit**.
 
-### 5.1 Personal queue
+**Kinds** follow how the work splits — the rep owns the relationship, the manager owns artifacts and technical talks:
 
-- **Nové firmy (dávka)**: the caller clicks **"Zobrať ďalších N"** to claim up to 10 (`CLAIM_BATCH_SIZE`) never-called NEW
-  contacts from the shared pool. The button appears only when their batch is empty; they must call the whole batch first
-  (10 → 10 → 10). The header shows only the aggregate pool count ("Voľných v spoločnej fronte").
-- **Dohodnuté hovory**: the caller's agreed callbacks.
-- **Skúsiť znova**: the caller's no-answer retries (paginated by 50).
-- **Spiace**: the caller's call-stage snoozes.
-- Retries, callbacks and snoozes stay with the caller who has them, because clients call back the person who rang them.
-- Claims never expire and nothing moves automatically. When someone is on holiday or leaves, the manager moves their work
-  in `/dashboard/calls/assignments` (5.4).
+| Kind | Meaning |
+|---|---|
+| `PRICE` | naceň to (the rep is unsure of the price) |
+| `DESIGN` | sprav návrh — raised by the deal owner; **no ticket is ever created automatically** (the owner who cannot make designs sees "Požiadať manažéra o návrh") |
+| `CALL_CLIENT` | zavolaj im, sú tam technické detaily |
+| `HANDOVER` | prevezmi si klienta — after the návrh ("ideme do toho"), or manually at any time |
+| `OTHER` | anything else |
 
-The page refreshes itself every 60 seconds.
+`ORDER` disappears as a kind: "áno, ideme do toho" is not an order specification, it is a handover. **WON stays a
+manager-only action on the deal.** The note is required only for `OTHER`, pre-filled from the last call note, and both
+creation paths go through one function.
 
-### 5.2 Call drawer outcomes (transitions in `lib/domain/leadFlow.ts`, action `logCall`)
+**Tickets are a conversation**: the author may edit the text while it is open (logged), both sides append comments, and
+age is set at creation and does not reset on edit. Cancelling clears the next step, so the deal resurfaces in "Na dnes"
+as "bez ďalšieho kroku".
 
-| Button | Outcome | Result |
-|---|---|---|
-| Majú záujem → Chcú návrh / cenovú ponuku / máme napísať (+ optional email) | `WANTS_DESIGN` / `WANTS_QUOTE` / `WANTS_EMAIL` | **Handoff**: ACTIVE deal, next action SEND_DESIGN (in progress) / SEND_QUOTE / SEND_EMAIL for today; assignment cleared |
-| Nezdvihli | `NO_ANSWER` | CALLING, RETRY (stays with caller) |
-| Dohodnúť presný čas (1 h / tomorrow / week / custom date ± time) | `CALL_AGAIN` | CALLING, SCHEDULED, `callbackAt` + `callbackHasTime` |
-| Ozvať sa o pár mesiacov (2/4/6 months, custom) | `SNOOZE` | SNOOZED, date only |
-| Nemajú záujem | `NOT_INTERESTED` | LOST, assignment cleared |
-| Zlé / nefunkčné číslo | `BAD_NUMBER` | UNREACHABLE, assignment cleared |
-| Note field | — | saved on the contact (if changed) and as the call note, in the same transaction |
+**Resolving is two switches** — *kto posiela klientovi* (manažér / obchodník) × *kto pokračuje* (obchodník / manažér),
+shown as three buttons: "Vrátiť obchodníkovi" · "Vybavil som to sám" (opens "Čo sme poslali" and closes the ticket in
+the same save) · "Preberám klienta". For a PRICE ticket the price is typed in the ticket, saved on the deal and posted
+into the ticket thread. From wave 3 on no business action closes a ticket silently — only these endings do:
 
-Handoff details:
+| Ending | Result |
+|---|---|
+| rep sends, rep continues | rep's next step := "Poslať návrh" |
+| manager sends, rep continues | rep's next step := "Zavolať – overiť, či videli návrh" |
+| manager sends, manager continues | owner moves to the manager; the ticket closes as "prevzal som si klienta" |
 
-- The owner is chosen automatically (`lib/domain/dealRouting.ts`): if the caller can own deals (SALES_REP, MANAGER, ADMIN),
-  the caller; otherwise the active leader of the caller's team if the leader can own deals; otherwise "Nepriradené".
-- Setup: team "Obchod" led by Michal with Timea as a member → Timea's interested clients go to Michal **[ROLLOUT: team not
-  created in production yet]**. When a SALES_REP takes over, the admin makes the rep the team leader.
-- The drawer shows "Pravdepodobne odovzdá: …" (a preview); the success toast shows who actually received the deal.
-- `WANTS_DESIGN` also creates a DESIGN request for the manager.
-- Every submit carries the lead's `revision` and an idempotency key: a stale second tab gets "Kontakt sa medzitým zmenil"
-  and refreshes; a network retry of the same submit is recorded once and reported as success.
-
-### 5.3 Call history: `/dashboard/calls/history`
+The manager can also take a deal over directly, at any time, with one click and an optional note. **After a takeover the
+rep loses access**; a `DealOwnership` record keeps the fact and powers the rep's **História** list
+(`prevzaté 18. 9. · Michal` — names and dates only), statistics, and future rep → rep transfers. The transfer asks once
+whether to close the deal's open tickets (default yes).
 
-- Callers see their own calls; users with `callHistory.viewAll` filter by caller (only people who ever called) or see all.
-- Reverted calls show a "vrátené" badge and no actions.
-- **Vrátiť** undoes only the latest non-reverted first-call result, and only if nothing changed on the lead since that call
-  (`Activity.leadRevision == Lead.revision`). The contact returns to the original caller as a retry, never to NEW; open requests
-  are cancelled; then the correct outcome is logged normally. Historical deals (before the rollout) cannot be reverted.
-- **Upraviť** (phone/email) requires current responsibility: the contact is assigned to the viewer in call stage, or the viewer
-  is a manager. A former caller of a transferred or handed-off contact sees the row read-only.
-- The company name links to the deal detail the viewer may open (pipeline for managers, client detail for the owning rep).
+No manager → rep tickets in this wave: work handed back arrives as the rep's next step in "Na dnes".
 
-### 5.4 Manager assignment tool: `/dashboard/calls/assignments` (`calls.assign`)
+## 7. Deal detail — `/dashboard/pipeline/[id]`
 
-- Per caller: batch (NEW), retries, callbacks (overdue), snoozes. Deactivated users holding work are listed first.
-- **Uvoľniť dávku**: the caller's uncalled NEW back to the pool.
-- **Presunúť**: move NEW / retries / callbacks / snoozes to another active caller, all or the N oldest. NEW respects the
-  target's free batch capacity. Moves run in batches of 200, never skip rows, and write an audit row per moved lead.
+Wide left column + "Údaje" on the right; one column on a phone with "Údaje" first. Same page for everyone, gated by
+capabilities:
 
----
+- **Požiadavky** — manager: each open request with the action that completes it, and "Zamietnuť" with a reason;
+  rep: their requests with the manager's answer, "Zrušiť" on their own, and a new-request form
+- **Ďalší krok** — shared editor; day vs exact time, or in progress; a stale tab is refused and refreshed
+- **Naposledy** + "Zaznamenať kontakt" + quick events
+- **Cena & ponuky** — current price + breakdown, what the client received (o nás · cenník · cena · návrh, with dates,
+  "?" on unverified old deals), the price-mismatch warning, "Zaznamenať odoslanie", and for the manager the old-deal
+  review panel
+- **Návrh** — full management for the manager, confidence summary for the rep; both get "Odkaz do emailu" and
+  "Odoslané…"
+- **Výsledok** (manager), **História** (rep: business steps; manager: audit too; crossed-out entries stay visible with
+  their reason, "Opraviť" on sends / SMS / replies), **Údaje** with diff
 
-## 6. Deals
+## 8. Dashboard — `/dashboard`
 
-A deal is a lead after a positive first call (`pipelineEnteredAt` set), whatever its status later becomes. A handoff may leave
-`ownerId = null` when no eligible recipient is configured; the manager sees and assigns these ("Nepriradené").
+Composed by permission: callers see their batch, the queue, callbacks and a calendar; deal owners see their open deals
+and what is due; the manager additionally gets "Čaká na mňa" (open requests, oldest first, red past two days),
+"Obchodníci" (per owner: open deals, overdue, follow-ups today, new this week, overdue callbacks, last activity),
+"Nepriradené", and "Volajúci" (stale batches, deactivated users still holding work).
 
-- Historical deals (before the rollout) → owner Michal, via the backfill **[ROLLOUT]**.
-- Timea's new handoffs → her team leader. SALES_REP's own handoffs → the rep.
+## 9. Design tracking
 
-Business follow-up cycle for every deal:
+The manager creates a design for a deal; whoever sends it to the client (rep or manager) copies the ready email link
+("Odkaz do emailu") and records the send. The deal then shows whether the client really looked at it ("videli to") and
+whether they came back after a new version. The rep sees that summary, never the raw tracking link.
+Mechanics: `context/project-overview.md` §6.
 
-| Client wants | What happens | App |
-|---|---|---|
-| Quote | Owner sets the price (or asks the manager: PRICE request), sends the email, marks the quote sent | `quoteSentAt`, `priceDisclosed`; next action CALL in 7 business-calendar days; saving a price or marking the quote sent completes an open PRICE request |
-| About-us email | Owner sends it, marks it sent | `aboutUsSentAt`; CALL in 7 days; completes an open EMAIL request |
-| Design proposal | DESIGN request → Michal builds the design, attaches a tracked link, marks it sent | `Design` + `Tracker`; `designSentAt`; CALL in 7 days for the owner; DESIGN request DONE |
-| Later | snooze to a date | SNOOZED, next action CALL on that date |
-| No | not interested (with reason) | LOST, `closedAt`, open requests cancelled |
-| Yes | ORDER request → manager sets WON | WON, `closedAt`, ORDER DONE, other requests cancelled |
+## 10. Statistics — `/dashboard/stats`
 
-Requests (`DealRequest`, kinds PRICE / DESIGN / EMAIL / ORDER / REOPEN / OTHER):
+Unfinished; see `context/project-overview.md` §7 before touching it.
 
-- Max one OPEN request per deal and kind; asking again appends the note.
-- DONE only through the business action that does the work (price saved/quote sent, design sent, email sent, WON, reopen).
-  Only OTHER has a manual "Vybavené". Declining ("Zamietnuť") requires a reason the rep sees. A rep can cancel their own.
-- Closing a deal leaves no OPEN request; the only request a rep can create on a closed deal is REOPEN.
+## 11. Rules that hold everywhere
 
----
-
-## 7. Deals workspace: `/dashboard/pipeline` (one screen, every role)
-
-Since round 2 (`context/new-feature/round2-deal-workspace.md`, wave 1) there is **one** deal screen. `/dashboard/clients`
-and `/dashboard/clients/[id]` only redirect to it. The menu label differs ("Pipeline" for managers, "Moji klienti" for
-reps), the screen does not.
-
-**Who sees which rows** is decided by `dealScope(viewer)` (`lib/domain/dealScope.ts`) on the server:
-
-| Scope | Who | Rows |
-|---|---|---|
-| `all` | `deals.viewAll` (MANAGER, ADMIN) | every deal |
-| `team` | `deals.viewTeam` (prepared for a future sales-team leader; no role holds it yet) | own + team members' deals |
-| `own` | everyone else with `deals.view` (SALES_REP) | `ownerId = viewer.id` |
-
-`?owner=` is a filter **within** that scope and is validated server-side (`resolveOwnerFilter`): a viewer whose scope is
-`own` is forced back to themselves whatever the URL says. Scope is never read from the path or from the query.
-
-**Filters** (identical for both roles; the owner/handoff selects render only when the scope can contain other people):
-
-1. owner - ja (default) / všetci / nepriradené / a person, plus "Od:" (who handed the deal over, `handedOffById`)
-2. status tabs - Aktívne (default), Spiace, Vyhraté, Stratené, Nedostupné, Všetky
-3. view pills - Požiadavky (count; with a request-kind filter), **Na dnes** (default), Všetko, Volať, Poslať CP,
-   Poslať email, Návrh v procese, Čaká na klienta, Odoslaná CP, Odoslaný návrh
-
-"Na dnes" replaces the old card sections: open deals with no open request that need attention today - due or overdue,
-woken snoozes, missing next step, missing date, a due "check with client" date. The SQL predicate mirrors
-`clientSection()` and a parity test asserts they agree over every open deal. "Požiadavky" and "Na dnes" span statuses;
-the other pills work inside the status tab. Search covers company, web, phone and email.
-
-Ordering and paging happen in SQL over the whole filtered set (urgency rank, then `nextActionAt`, then `id`;
-the requests view by oldest open request), 50 rows per page with "Načítať ďalších 50".
-
-**Layout:** desktop table (`# | Firma | Typ | [Stav] | Ďalší krok | Naposledy | Cena | [Rieši] | akcie`), phone cards.
-Every row shows both the next step and the last contact. Clicking a row opens the action sheet (record what happened and
-what is next); the `i` icon opens the detail; the phone icon dials.
-
-**Manager-only** (hidden without `deals.manage`, and refused server-side regardless): status, owner and project type
-selects, WON/close, "Znovu otvoriť", design & tracker management, resolving requests, "Presunúť obchody" (bulk owner
-transfer in batches of 200, skipping rows being edited), the unassigned-deals banner.
-
-Detail `/dashboard/pipeline/[id]` (non-deals and out-of-scope deals → 404) - same page for everyone, wide left column +
-"Údaje" on the right:
-
-- `Požiadavky`: for the manager, each open request with the action that completes it (price field, jump to design, mark
-  email sent, mark WON, reopen, "Vybavené" only for OTHER) and "Zamietnuť" with a required reason; for the rep, the list
-  of their requests with the manager's answer, "Zrušiť" on their own, and a new-request form. `ORDER`, `DESIGN` and
-  `OTHER` require a note (enforced in the command) - the ORDER note is where "what did they actually order" lives.
-- `Ďalší krok`: shared editor (`components/deals/NextActionEditor.tsx`), day vs exact time, or in progress;
-  stale tab → refresh
-- `Naposledy` + quick events, `Cena`, design (full management for the manager, read-only confidence summary for the rep),
-  `Email "O nás"`, `Výsledok` (manager), `História` (rep sees business steps, manager sees the audit trail too), `Údaje`
-
-Activity `source` follows the actor, not the route: `deals.manage` writes `PIPELINE`, everyone else `CLIENTS`.
-
-Manager dashboard blocks on `/dashboard`:
-
-- "Čaká na mňa": all open requests, oldest first (red when the oldest is older than 2 days)
-- "Obchodníci": per other deal owner: open deals, overdue next actions, follow-ups today, new deals this week, overdue callbacks,
-  last activity; row → the deals screen filtered to that owner
-- "Nepriradené": open deals without an owner
-- "Volajúci": callers holding an unfinished batch older than 1 day, or deactivated users with call work → assignment tool
-
----
-
-## 8. Working a deal (rep and manager)
-
-Row click opens the action sheet - a drawer on the phone, a dialog on the desktop (`ResponsiveSheet`). One
-interaction is recorded in three steps (`logFollowUp`, one transaction, carries revision + idempotency key):
-
-1. **Čo sa stalo** - dovolal/a som sa · nezdvihli · odpísali / ozvali sa · bez kontaktu (len naplánovať).
-   Plus the paths that end the deal or park it: ozvať sa o pár mesiacov (2/4/6 or a date), nemajú záujem / zlé číslo.
-2. **Čo povedali** (`lib/domain/clientReplies.ts`) - ešte sa nepozreli · pozreli, chcú zmeny · neprišlo im to ·
-   ozvú sa sami · majú poradu · rieši to niekto iný · cena je vysoká · chcú cenovú ponuku · chcú návrh · chcú objednať.
-   The last three are outcomes in themselves (quote / design request / order request); the others pre-fill a next step
-   and a date. The key lands in `Activity.meta.reply`, the label is copied into the note.
-3. **Ďalší krok** - from the shared list (`lib/domain/nextStepOptions.ts`): zavolať (date required), čakáme na klienta
-   (date = check day), poslať CP / email (empty date = today), poslať návrh (in progress), vlastný krok.
-
-The key rule: **the contact result survives the next step.** "Nezdvihli" is recorded as `NO_ANSWER` even when the caller
-picks something other than the suggested "zavolať ďalší pracovný deň", so the row keeps showing
-`Naposledy: Nezdvihli · dnes · 3. pokus` next to `Ďalší krok`. The streak counts consecutive non-reverted `NO_ANSWER`
-calls and resets on any real contact.
-
-The sheet also has: mark quote / email sent, ask the manager (kind + note; ORDER/DESIGN/OTHER require the note), open
-detail. A closed deal opens read-only - the rep gets "Požiadať o znovuotvorenie", the manager reopens it in the detail.
-The deal detail has the same flow behind "Zaznamenať kontakt" in the `Naposledy` card, for both roles.
-
-"Chcú objednať" parks the deal on the `ORDER` next step ("Objednávka - potvrdiť") and opens an ORDER request, so the
-board says we are waiting for the manager, not for the client.
-
-Rep rules: sets prices and marks quotes/emails sent on own **open** deals; asks the manager when unsure; never sees other
-people's deals; closed deals are read-only except the REOPEN request. The manager may act on any deal in any state.
-
-First calls (`/dashboard/calls`) keep their own menu - there, picking up is implicit - but they use the same responsive
-sheet.
-
----
-
-## 9. Dashboard `/dashboard`
-
-Composed by permission:
-
-- no calls / deals / pipeline permission (SCOUT, SCOUT_LEADER): a welcome page
-- callers (`calls.view`): own batch, pool count, own callbacks due/overdue, own retries; urgent own callbacks
-- deal owners (`deals.view` without `deals.viewAll`): own open deals, next actions due today / overdue, links to the deal detail
-- managers (`deals.viewAll`): the blocks from section 7, all deals due/overdue, calendar
-- "Pridať kontakty" only with `contacts.create`
-
----
-
-## 10. Design tracking
-
-- Managers create a `Design` on a deal → the app creates a `Tracker` with a unique token → the client gets the design URL
-  with `?p=TOKEN`.
-- The public scripts `/p.js` and `/scripts/tracker.js` read the token, strip it from the address bar, and post events to `/api/p`.
-- Events: PAGE_VIEW (weak signal, may be a scanner) and ENGAGED_VIEW (active time/scroll).
-- `DesignVersion` records updates; events store which version was seen.
-- `lib/tracking/confidence.ts` summarizes the events into a confidence signal. It is a hint, not proof.
-- Reps see only the confidence summary for their own deals (no URLs, tokens, versions or IPs).
-- Tracking ingest is the only lead-related write that does not bump `Lead.revision`.
-
----
-
-## 11. Admin `/dashboard/admin` (Michal)
-
-- Users: create (with role, including "Obchodník" = SALES_REP), edit profile/role, reset password, deactivate/reactivate.
-  Public signup is disabled (the signup action was removed).
-- Teams: create, rename, delete, set leader, set membership (from user detail). The team card says when positive calls of
-  members go to the leader.
-- Deactivating a user (or changing their role to one without call rights) waits for their in-flight work, releases their
-  uncalled NEW contacts to the pool in the same transaction, and never leaves them assigned (otherwise it does not happen and
-  asks to retry). The user detail then shows remaining retries, callbacks, snoozes and deals with links to move them.
-
----
-
-## 12. Statistics `/dashboard/stats`
-
-Unfinished; expected to be redesigned. Current data: first calls by user and outcome, contacts added per user/day, contact pool
-(pool vs. callers' batches), team scoping for leaders.
-
-Principles:
-
-- measure each role on its real job (no call stats for scouts)
-- first calls = `Activity source CALL_QUEUE`; follow-ups = `source CLIENTS`; handoffs per caller = `handedOffById`;
-  deals per owner = `ownerId` (the last three are available in data, not yet shown)
-- exclude activities with `revertedAt` from outcome counts (not yet done)
-
----
-
-## 13. Known issues to keep in mind
-
-- Production is not migrated yet: schema push, backfill (`prisma/backfill/2026-09-assignments.ts`), team "Obchod" and the
-  deploy are the separate, approved rollout (planning §14). Old code must not run against a backfilled database while people
-  call (planning §14.1).
-- `prisma db push` stops with a data-loss warning for the new unique index on `Activity.idempotencyKey` (a new, all-NULL column);
-  the reviewed diff was applied with `prisma db execute` on the test database instead (see progress tracker).
-- Statistics still use server-local days.
-- `components/layout/MobileNav.tsx` has a pre-existing lint error (setState in effect).
+Business calendar, locking, revision and retry rules: `context/project-overview.md` §5. What a user notices: a stale
+tab refuses to save and refreshes itself; a busy row offers "Skúsiť znova".

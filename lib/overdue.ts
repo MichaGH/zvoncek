@@ -1,5 +1,5 @@
 // Zdieľaná logika "ako urgentný je naplánovaný termín".
-// Používa to /dashboard/calls (callbackAt + callbackHasTime), pipeline aj moji klienti
+// Používa to /dashboard/calls (callbackAt + callbackHasTime) aj /dashboard/pipeline
 // (nextActionAt + nextActionHasTime) – cez komponent <UrgencyLabel/>.
 // Dni sa porovnávajú v obchodnom kalendári Europe/Bratislava (server aj prehliadač vypíšu to isté).
 

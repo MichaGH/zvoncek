@@ -11,9 +11,8 @@ import Logo from "@/components/Logo";
 const NAV: { href: string; label: string; perm: Permission | null; hideIf?: Permission }[] = [
     { href: "/dashboard",          label: "Dashboard",  perm: null              },
     { href: "/dashboard/calls",    label: "Volania",    perm: "calls.view"      },
-    // Jedna obrazovka obchodov (round 2, D-01); rola mení len názov v menu.
-    { href: "/dashboard/pipeline", label: "Klienti",    perm: "deals.view", hideIf: "deals.viewAll" },
-    { href: "/dashboard/pipeline", label: "Pipeline",   perm: "deals.viewAll"   },
+    // Jedna obrazovka obchodov pre všetky roly (round 2, D-01) – jeden odkaz, jeden názov.
+    { href: "/dashboard/pipeline", label: "Pipeline",   perm: "deals.view"      },
     { href: "/dashboard/contacts", label: "Kontakty",   perm: "contacts.access" },
     { href: "/dashboard/stats",    label: "Štatistiky", perm: "stats.view"      },
     { href: "/dashboard/admin",    label: "Admin",      perm: "admin.access"    },

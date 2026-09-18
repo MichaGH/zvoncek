@@ -30,13 +30,8 @@ import {
     DrawerTrigger,
 } from "@/components/ui/drawer";
 import { CONFIDENCE_LABEL, CONFIDENCE_VARIANT } from "@/lib/dictionaries";
-import {
-    addDesignVersion,
-    createDesign,
-    removeDesign,
-    setDesignSent,
-    updateDesignMeta,
-} from "@/lib/actions/tracking";
+import { addDesignVersion, createDesign, removeDesign, updateDesignMeta } from "@/lib/actions/tracking";
+import { copyEmailLink } from "@/components/shared/copyEmailLink";
 import type { DesignView, TrackedEventRow } from "@/lib/queries/tracking";
 import { BUSINESS_TZ } from "@/lib/domain/businessTime";
 
@@ -79,11 +74,14 @@ type FormState = { id: string; mode: "version" | "meta" } | null;
 export default function DesignTrackingCard({
     leadId,
     designs,
-    quoteSentAt,
+    priceSent,
+    onRecordSend,
 }: {
     leadId: string;
     designs: DesignView[];
-    quoteSentAt: string | null;
+    priceSent: boolean;
+    // „Odoslané" otvára spoločný dialóg „Čo sme poslali" s týmto návrhom (round 2 §2c 5.2) – žiadny vlastný prepínač.
+    onRecordSend?: (designId: string) => void;
 }) {
     const router = useRouter();
     const [busy, setBusy] = useState(false);
@@ -102,7 +100,7 @@ export default function DesignTrackingCard({
     const [copiedId, setCopiedId] = useState<string | null>(null);
 
     const anySent = designs.some((d) => d.sentAt);
-    const designNoPrice = anySent && !quoteSentAt;
+    const designNoPrice = anySent && !priceSent;
 
     async function run(fn: () => Promise<unknown>) {
         setBusy(true);
@@ -136,6 +134,15 @@ export default function DesignTrackingCard({
             updateDesignMeta(id, { label: mLabel.trim() || null, repoUrl: mRepo.trim() || null }),
         );
         setForm(null);
+    }
+
+    async function copyForEmail(design: DesignView) {
+        const tracked = trackedUrl(design);
+        if (!design.targetUrl || !tracked) return;
+        if (await copyEmailLink(design.targetUrl, tracked)) {
+            setCopiedId(`mail-${design.id}`);
+            setTimeout(() => setCopiedId((c) => (c === `mail-${design.id}` ? null : c)), 1500);
+        }
     }
 
     async function copyPlain(design: DesignView) {
@@ -369,15 +376,27 @@ export default function DesignTrackingCard({
                                 </div>
                             ) : (
                                 <div className="flex flex-wrap items-center gap-1">
-                                    <Button
-                                        size="sm"
-                                        variant={isSent ? "secondary" : "default"}
-                                        onClick={() => run(() => setDesignSent(design.id, !isSent))}
-                                        disabled={busy}
-                                    >
-                                        <Send className="mr-1.5 h-3.5 w-3.5" />
-                                        {isSent ? "Neposlaný" : "Označiť poslaný"}
-                                    </Button>
+                                    {onRecordSend && (
+                                        <Button
+                                            size="sm"
+                                            variant={isSent ? "secondary" : "default"}
+                                            onClick={() => onRecordSend(design.id)}
+                                            disabled={busy}
+                                        >
+                                            <Send className="mr-1.5 h-3.5 w-3.5" />
+                                            {isSent ? "Poslané znova…" : "Odoslané…"}
+                                        </Button>
+                                    )}
+                                    {tracked && (
+                                        <Button size="sm" variant="outline" onClick={() => copyForEmail(design)} disabled={busy}>
+                                            {copiedId === `mail-${design.id}` ? (
+                                                <Check className="mr-1.5 h-3.5 w-3.5" />
+                                            ) : (
+                                                <Copy className="mr-1.5 h-3.5 w-3.5" />
+                                            )}
+                                            Odkaz do emailu
+                                        </Button>
+                                    )}
                                     <Button
                                         size="sm"
                                         variant="outline"

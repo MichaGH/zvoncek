@@ -8,7 +8,9 @@ import type { AccessUser } from "@/lib/access/user";
 import { createPlanningActivity, describeNextAction } from "@/lib/activityLog";
 import { ensureOpenRequest, closeRequestsForStatus } from "@/lib/domain/dealRequests";
 import * as deal from "@/lib/domain/dealMutations";
-import { idempotentReplay } from "@/lib/domain/idempotency";
+import { activityReplay, idempotentReplay } from "@/lib/domain/idempotency";
+import { recordOffer } from "@/lib/domain/offerMutations";
+import { businessDate } from "@/lib/domain/businessTime";
 import {
     dealStateForFollowUp,
     FOLLOW_UP_NEXT_KINDS,
@@ -26,7 +28,7 @@ import { can } from "@/lib/permissions";
 // Zdroj aktivity sa určuje podľa AKTÉRA, nie podľa cesty (round 2, D-01): manažér = PIPELINE, ostatní = CLIENTS.
 // Štatistiky tak vedia rozlíšiť „follow-up obchodníka" od manažérskeho zásahu aj po zlúčení obrazoviek.
 
-function sourceFor(user: AccessUser): "PIPELINE" | "CLIENTS" {
+export function sourceFor(user: AccessUser): "PIPELINE" | "CLIENTS" {
     return can(user, "deals.manage") ? "PIPELINE" : "CLIENTS";
 }
 
@@ -57,32 +59,68 @@ async function owned(
     }
 }
 
-// ── Follow-up hovor ─────────────────────────────────────────────────────────
+// ── Interakcia (hovor, odpoveď, SMS, len plán) ──────────────────────────────
 
-const followUpSchema = z.object({
-    leadId: z.string().min(1),
-    outcome: z.enum(FOLLOW_UP_OUTCOMES),
-    expectedRevision: z.number().int().min(0),
-    idempotencyKey: z.string().min(8).max(100),
-    schedule: scheduleSchema.nullish(),
-    note: z.string().max(5000).nullish(),
-    nextKind: z.enum(FOLLOW_UP_NEXT_KINDS).nullish(),
-    lostReason: z.string().max(500).nullish(),
-    reply: z.enum(REPLY_KEYS as [string, ...string[]]).nullish(),
-});
+// Čo sa naozaj stalo – do histórie ide ako správny typ, nie všetko ako „hovor" (round 2 §2c, 9a.3):
+//   CALL    = hovor (aj nezdvihli)          → Activity CALL
+//   REPLIED = klient odpísal                → Activity CLIENT_REPLIED
+//   SMS     = poslali sme SMS               → Activity SMS_SENT (nemení, čo klient vie)
+//   NONE    = bez kontaktu, len naplánovať  → žiadny kontakt, len zmena ďalšieho kroku
+const CONTACTS = ["CALL", "REPLIED", "SMS", "NONE"] as const;
+type Contact = (typeof CONTACTS)[number];
+
+const followUpSchema = z
+    .object({
+        leadId: z.string().min(1),
+        contact: z.enum(CONTACTS).default("CALL"),
+        outcome: z.enum(FOLLOW_UP_OUTCOMES),
+        expectedRevision: z.number().int().min(0),
+        idempotencyKey: z.string().min(8).max(100),
+        schedule: scheduleSchema.nullish(),
+        note: z.string().max(5000).nullish(),
+        nextKind: z.enum(FOLLOW_UP_NEXT_KINDS).nullish(),
+        lostReason: z.string().max(500).nullish(),
+        reply: z.enum(REPLY_KEYS as [string, ...string[]]).nullish(),
+        // Cena povedaná v tomto hovore – zapíše sa ako OFFER_SENT (telefón) v tej istej transakcii.
+        phonePrice: z
+            .object({ amount: z.number().finite().min(0).max(10_000_000), note: z.string().max(2000).nullish() })
+            .strict()
+            .nullish(),
+    })
+    .strict();
 
 export type FollowUpInput = z.input<typeof followUpSchema>;
+
+const CONTACT_TYPE: Record<Exclude<Contact, "NONE">, "CALL" | "CLIENT_REPLIED" | "SMS_SENT"> = {
+    CALL: "CALL",
+    REPLIED: "CLIENT_REPLIED",
+    SMS: "SMS_SENT",
+};
+const PLANNING_TYPES = ["NEXT_ACTION_SET", "NEXT_ACTION_CHANGED", "NEXT_ACTION_CLEARED"] as const;
+const CLOSING_OUTCOMES = ["NO_ANSWER", "BAD_NUMBER", "NOT_INTERESTED"];
 
 export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promise<CommandResult> {
     if (!can(user, "deals.work") && !can(user, "deals.manage")) return FORBIDDEN;
     const parsed = followUpSchema.safeParse(raw);
     if (!parsed.success) return { error: "Neplatné údaje." };
     const input = parsed.data;
-    const source = sourceFor(user);
-    const replayKey = { userId: user.id, leadId: input.leadId, source, outcome: input.outcome };
+    // SMS a „len plán" nie sú rozhovor – nenesú výsledok hovoru; odpoveď klienta nemôže byť „nezdvihli".
+    if ((input.contact === "SMS" || input.contact === "NONE") && input.outcome !== "POSITIVE") return { error: "Neplatné údaje." };
+    if (input.contact === "REPLIED" && input.outcome === "NO_ANSWER") return { error: "Neplatné údaje." };
+    if (input.phonePrice && (input.contact !== "CALL" || CLOSING_OUTCOMES.includes(input.outcome))) return { error: "Neplatné údaje." };
 
-    const replay = await idempotentReplay(input.idempotencyKey, replayKey);
-    if (replay) return "error" in replay ? replay : { success: true };
+    const source = sourceFor(user);
+    const replay = () =>
+        input.contact === "CALL"
+            ? idempotentReplay(input.idempotencyKey, { userId: user.id, leadId: input.leadId, source, outcome: input.outcome })
+            : activityReplay(input.idempotencyKey, {
+                  userId: user.id,
+                  leadId: input.leadId,
+                  types: input.contact === "NONE" ? PLANNING_TYPES : [CONTACT_TYPE[input.contact]],
+              });
+
+    const first = await replay();
+    if (first) return "error" in first ? first : { success: true };
 
     try {
         await withLockTx(async (tx) => {
@@ -96,7 +134,8 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
             try {
                 state = dealStateForFollowUp(
                     input.outcome,
-                    { when, nextKind: input.nextKind, note: input.note, lostReason: input.lostReason },
+                    // Text SMS nie je poznámka ku kroku.
+                    { when, nextKind: input.nextKind, note: input.contact === "SMS" ? null : input.note, lostReason: input.lostReason },
                     lead,
                     now,
                 );
@@ -104,21 +143,26 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
                 throw new AccessError("FORBIDDEN", error instanceof Error ? error.message : "Neplatný výsledok.");
             }
             // V histórii chceme čítať „čo povedali" bez lúštenia meta; kľúč ostáva strojovo spracovateľný.
-            const note = noteWithReply(input.reply, input.note);
+            const note = input.contact === "SMS" ? input.note?.trim() || null : noteWithReply(input.reply, input.note);
 
-            await tx.activity.create({
-                data: {
-                    leadId: lead.id,
-                    userId: actor.id,
-                    type: "CALL",
-                    category: "BUSINESS",
-                    source,
-                    outcome: input.outcome,
-                    note,
-                    ...(input.reply ? { meta: { reply: input.reply } } : {}),
-                    idempotencyKey: input.idempotencyKey,
-                },
-            });
+            let contactId: string | null = null;
+            if (input.contact !== "NONE") {
+                const contact = await tx.activity.create({
+                    data: {
+                        leadId: lead.id,
+                        userId: actor.id,
+                        type: CONTACT_TYPE[input.contact],
+                        category: "BUSINESS",
+                        source,
+                        outcome: input.contact === "SMS" ? null : input.outcome,
+                        note,
+                        ...(input.reply && input.contact !== "SMS" ? { meta: { reply: input.reply } } : {}),
+                        idempotencyKey: input.idempotencyKey,
+                    },
+                    select: { id: true },
+                });
+                contactId = contact.id;
+            }
 
             const { closes, lostReason, request, status, ...next } = state;
             await tx.lead.update({
@@ -133,14 +177,34 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
             markLeadBumped(tx, lead.id);
 
             await tx.activity.create({
-                data: createPlanningActivity({
-                    leadId: lead.id,
-                    userId: actor.id,
-                    type: !next.nextActionKind ? "NEXT_ACTION_CLEARED" : lead.nextActionKind ? "NEXT_ACTION_CHANGED" : "NEXT_ACTION_SET",
-                    source,
-                    note: describeNextAction(next),
-                }),
+                data: {
+                    ...createPlanningActivity({
+                        leadId: lead.id,
+                        userId: actor.id,
+                        type: !next.nextActionKind ? "NEXT_ACTION_CLEARED" : lead.nextActionKind ? "NEXT_ACTION_CHANGED" : "NEXT_ACTION_SET",
+                        source,
+                        note: describeNextAction(next),
+                    }),
+                    ...(input.contact === "NONE" ? { idempotencyKey: input.idempotencyKey } : {}),
+                },
             });
+            if (input.phonePrice && contactId) {
+                await recordOffer(
+                    tx,
+                    actor,
+                    lead,
+                    {
+                        channel: "PHONE",
+                        contents: ["PRICE"],
+                        sentOn: businessDate(now),
+                        historical: false,
+                        price: input.phonePrice,
+                        followUp: false,
+                        callActivityId: contactId,
+                    },
+                    source,
+                );
+            }
             if (request) await ensureOpenRequest(tx, lead.id, request, actor, note, source);
             if (closes) await closeRequestsForStatus(tx, lead.id, status as "LOST" | "UNREACHABLE", actor.id, source);
         });
@@ -150,7 +214,7 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
             isUniqueViolation(error) ||
             (error instanceof AccessError && ["STALE", "DEAL_CLOSED", "NOT_FOUND"].includes(error.code));
         if (lostRace) {
-            const again = await idempotentReplay(input.idempotencyKey, replayKey);
+            const again = await replay();
             if (again) return "error" in again ? again : { success: true };
         }
         return toActionError(error, "Nepodarilo sa uložiť. Skús znova.", "logFollowUp");
@@ -169,15 +233,6 @@ export const updateDealContactAs = (user: AccessUser, leadId: string, data: deal
 
 export const saveDealQuoteAs = (user: AccessUser, leadId: string, input: { price: number | null; priceNote: string | null }) =>
     owned(user, leadId, "saveDealQuote", (tx, lead, actor, source) => deal.saveQuote(tx, actor, lead, input, source));
-
-export const setDealQuoteSentAs = (user: AccessUser, leadId: string, sent: boolean) =>
-    owned(user, leadId, "setDealQuoteSent", (tx, lead, actor, source) => deal.setQuoteSent(tx, actor, lead, sent, source));
-
-export const setDealPriceDisclosedAs = (user: AccessUser, leadId: string, disclosed: boolean) =>
-    owned(user, leadId, "setDealPriceDisclosed", (tx, lead, actor, source) => deal.setPriceDisclosed(tx, actor, lead, disclosed, source));
-
-export const logDealEmailSentAs = (user: AccessUser, leadId: string) =>
-    owned(user, leadId, "logDealEmailSent", (tx, lead, actor, source) => deal.logSent(tx, actor, lead, "EMAIL_SENT", source));
 
 export const addDealNoteAs = (user: AccessUser, leadId: string, note: string) =>
     owned(user, leadId, "addDealNote", (tx, lead, actor, source) => deal.addBusinessNote(tx, actor, lead, { note }, source));

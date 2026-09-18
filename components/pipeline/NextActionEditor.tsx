@@ -26,7 +26,7 @@ export type NextActionSaveInput = {
 
 type SaveFn = (input: NextActionSaveInput, expectedRevision: number) => Promise<{ success: true } | ActionError>;
 
-// Editor „Ďalší krok" – spoločný pre pipeline (manažér) aj moji klienti (vlastník). Dátum/čas ide na server ako
+// Editor „Ďalší krok" – spoločný pre manažéra aj vlastníka obchodu. Dátum/čas ide na server ako
 // Schedule v Europe/Bratislava; uloženie vyžaduje aktuálnu revíziu (zastaraná karta → obnovenie).
 export default function NextActionEditor({
     lead,

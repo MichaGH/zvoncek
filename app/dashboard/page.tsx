@@ -40,10 +40,11 @@ export default async function DashboardPage() {
     const hello = `${greeting()}, ${viewer.firstName}`;
     const canCalls = can(viewer, "calls.view");
     const canPipeline = can(viewer, "deals.viewAll");
-    const canClients = can(viewer, "deals.view") && !canPipeline;
+    // Vlastné obchody bez práva vidieť všetky – rovnaká stránka, iný rozsah (dealScope).
+    const canOwnDeals = can(viewer, "deals.view") && !canPipeline;
 
     // Pridávači kontaktov – jednoduchá uvítacia stránka (ich práca žije v Kontaktoch a Štatistikách).
-    if (!canCalls && !canPipeline && !canClients) {
+    if (!canCalls && !canPipeline && !canOwnDeals) {
         return (
             <DashboardShell>
                 <DashboardPageHeader title="Dashboard" description={`${hello} · ${todayLabel}`} />
@@ -58,7 +59,7 @@ export default async function DashboardPage() {
 
     const [calls, deals, manager] = await Promise.all([
         canCalls ? getCallerToday(viewer) : Promise.resolve(null),
-        canPipeline || canClients ? getDealsToday(viewer) : Promise.resolve(null),
+        canPipeline || canOwnDeals ? getDealsToday(viewer) : Promise.resolve(null),
         canPipeline ? getManagerToday(viewer) : Promise.resolve(null),
     ]);
     const today = todayKey();
@@ -253,12 +254,7 @@ export default async function DashboardPage() {
                         </Link>
                     </Button>
                 )}
-                {canClients && (
-                    <Button asChild variant="outline">
-                        <Link href="/dashboard/pipeline">Moji klienti</Link>
-                    </Button>
-                )}
-                {canPipeline && (
+                {(canPipeline || canOwnDeals) && (
                     <Button asChild variant="outline">
                         <Link href="/dashboard/pipeline">Pipeline</Link>
                     </Button>

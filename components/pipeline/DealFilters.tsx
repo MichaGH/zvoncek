@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { REQUEST_KIND_LABEL } from "@/lib/dictionaries";
 import { DEAL_STATUS_TABS, DEAL_VIEWS, dealsHref, NO_VIEW, type DealFilterParams } from "@/lib/domain/dealFilters";
-import type { DealUserOption } from "@/lib/queries/deals";
+import type { DealUserOption } from "@/lib/queries/pipeline";
 import { cn } from "@/lib/utils";
 
 // Tri úrovne filtrov, rovnaké pre obchodníka aj manažéra (round 2, D-02/D-12):
@@ -35,6 +35,7 @@ export default function DealFilters({
     handoffs,
     showOwner,
     showRequests,
+    showLegacy,
 }: {
     params: DealFilterParams;
     counts: { today: number; requests: number };
@@ -42,11 +43,13 @@ export default function DealFilters({
     handoffs: DealUserOption[];
     showOwner: boolean;
     showRequests: boolean;
+    showLegacy: boolean; // „Neoverené" – staré obchody na overenie, len manažér
 }) {
     const router = useRouter();
     const [search, setSearch] = useState(params.q ?? "");
     const todo = DEAL_VIEWS.filter((v) => v.group === "todo");
     const running = DEAL_VIEWS.filter((v) => v.group === "running");
+    const legacy = DEAL_VIEWS.filter((v) => v.group === "legacy");
 
     function go(patch: Partial<DealFilterParams>) {
         router.push(dealsHref(params, patch));
@@ -173,6 +176,15 @@ export default function DealFilters({
                         {v.label}
                     </Pill>
                 ))}
+                {showLegacy &&
+                    legacy.map((v) => (
+                        <span key={v.key} className="flex items-center gap-1">
+                            <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden />
+                            <Pill href={dealsHref(params, { view: v.key })} active={params.view === v.key}>
+                                {v.label}
+                            </Pill>
+                        </span>
+                    ))}
             </div>
 
             {/* druh požiadavky – len v pohľade Požiadavky */}

@@ -33,7 +33,3 @@ export async function updateDesignMeta(designId: string, input: { label?: string
 export async function removeDesign(designId: string) {
     return run((u) => cmd.removeDesignAs(u, designId));
 }
-
-export async function setDesignSent(designId: string, sent: boolean) {
-    return run((u) => cmd.setDesignSentAs(u, designId, Boolean(sent)));
-}

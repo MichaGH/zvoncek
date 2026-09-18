@@ -13,7 +13,7 @@ export type DealScope =
 
 type Viewer = Pick<AccessUser, "id" | "role" | "teamId">;
 
-// teamUserIds sa načítava len ak je rozsah tímový (volajúci ho dodá; queries/deals si ho vypýta cez teamScopeUserIds).
+// teamUserIds sa načítava len ak je rozsah tímový (volajúci ho dodá; getDealScope v lib/queries/pipeline dotiahne členov tímu).
 export function dealScope(viewer: Viewer, teamUserIds?: string[]): DealScope {
     if (can(viewer, "deals.viewAll")) return { kind: "all" };
     if (can(viewer, "deals.viewTeam") && viewer.teamId) {

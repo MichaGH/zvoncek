@@ -7,21 +7,26 @@ import { toast } from "sonner";
 import type { CallOutcome, DealRequestKind, LeadStatus, NextActionKind } from "@/app/generated/prisma/enums";
 import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { ActionError } from "@/lib/access/errors";
-import { createDealRequest, logDealEmailSent, logFollowUp, setDealQuoteSent } from "@/lib/actions/deals";
+import { createDealRequest, logFollowUp } from "@/lib/actions/pipeline";
 import { ACTIVITY_LABEL, NEXT_ACTION_LABEL, OUTCOME_LABEL, REQUEST_KIND_LABEL, STATUS_LABEL } from "@/lib/dictionaries";
 import { addBusinessCalendarDays, businessDate, businessDayMonth } from "@/lib/domain/businessTime";
 import { CLIENT_REPLIES } from "@/lib/domain/clientReplies";
 import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
 import { FOLLOW_UP_NEXT_KINDS, type FollowUpNextKind, type FollowUpOutcome } from "@/lib/domain/leadFlow";
 import { NEXT_STEP_OPTIONS } from "@/lib/domain/nextStepOptions";
+import { formatMoney } from "@/lib/domain/offers";
 import type { Schedule } from "@/lib/domain/schedule";
 
 // Akčné okno obchodu (round 2, D-04/D-05/D-11): jedna interakcia = kontakt → čo povedali → ďalší krok.
 // Rieši to, že po nastavení ďalšieho kroku už nebolo vidno, či sa vôbec volalo: výsledok hovoru sa zapíše vždy,
 // aj keď si používateľ zvolí iný krok než predvolený.
+//
+// Do histórie ide to, čo sa naozaj stalo (round 2 §2c 9a.3): hovor = CALL, odpísali = CLIENT_REPLIED, SMS = SMS_SENT,
+// „bez kontaktu" = len zmena kroku. „Poslali sme ponuku" otvára dialóg „Čo sme poslali" (v detaile obchodu).
 //
 // Na telefóne je to drawer, na PC dialóg (ResponsiveSheet). Prvé hovory (telesales) majú vlastnú ponuku –
 // tam je zdvihnutie implicitné, preto majú vlastný komponent CallDrawer.
@@ -34,18 +39,29 @@ export type InteractionTarget = {
     status: LeadStatus;
     revision: number;
     noAnswerStreak?: number;
+    price: number | null;
     lastActivity: { type: keyof typeof ACTIVITY_LABEL; outcome: CallOutcome | null; note: string | null; at: string } | null;
     openRequests: { id: string; kind: DealRequestKind }[];
 };
 
-type Step = "contact" | "reply" | "next" | "snooze" | "lost" | "sent" | "request";
-type Contact = "ANSWERED" | "NO_ANSWER" | "REPLIED" | "NONE";
+type Step = "contact" | "reply" | "next" | "snooze" | "lost" | "request";
+type Contact = "ANSWERED" | "NO_ANSWER" | "REPLIED" | "SMS" | "NONE";
 
 const CONTACT_LABEL: Record<Contact, string> = {
     ANSWERED: "Dovolal/a som sa",
     NO_ANSWER: "Nezdvihli",
     REPLIED: "Odpísali",
+    SMS: "Poslali sme SMS",
     NONE: "Bez kontaktu",
+};
+
+// Druh kontaktu pre server – hovor (aj nezdvihli) je CALL.
+const CONTACT_KIND: Record<Contact, "CALL" | "REPLIED" | "SMS" | "NONE"> = {
+    ANSWERED: "CALL",
+    NO_ANSWER: "CALL",
+    REPLIED: "REPLIED",
+    SMS: "SMS",
+    NONE: "NONE",
 };
 
 const REFRESH_CODES = new Set(["NOT_ASSIGNED", "NOT_FOUND", "STALE", "DEAL_CLOSED", "IDEMPOTENCY_CONFLICT", "UNAUTHENTICATED", "FORBIDDEN"]);
@@ -98,10 +114,13 @@ export default function InteractionSheet({
     target,
     caps,
     onClose,
+    onRecordOffer,
 }: {
     target: InteractionTarget | null;
     caps: DealCapabilities;
     onClose: () => void;
+    // V detaile otvorí dialóg priamo; v zozname sa prejde do detailu (?zaznam=ponuka).
+    onRecordOffer?: () => void;
 }) {
     const router = useRouter();
     const [pending, start] = useTransition();
@@ -116,12 +135,18 @@ export default function InteractionSheet({
     const [requestKind, setRequestKind] = useState<DealRequestKind>("PRICE");
     const [requestNote, setRequestNote] = useState("");
     const [idempotencyKey, setIdempotencyKey] = useState(newKey);
+    const [toldPrice, setToldPrice] = useState(false);
+    const [toldAmount, setToldAmount] = useState(target?.price != null ? String(target.price) : "");
 
     if (!target) return null;
     const D = target;
     const closed = D.status === "WON" || D.status === "LOST" || D.status === "UNREACHABLE";
     const detailHref = `/dashboard/pipeline/${D.id}`;
     const stepOption = NEXT_STEPS.find((o) => o.kind === kind);
+    const toldAmountNumber = toldAmount.trim() === "" ? null : Number(toldAmount.replace(",", "."));
+    const toldValid = toldAmountNumber !== null && Number.isFinite(toldAmountNumber) && toldAmountNumber >= 0;
+    // Cena povedaná v hovore – len pri „dovolal/a som sa"; rozpis sa nemení (note sa neposiela).
+    const phonePrice = contact === "ANSWERED" && toldPrice && toldValid && toldAmountNumber !== null ? { amount: toldAmountNumber } : undefined;
     const dateMissing = stepOption?.date === "required" && !date;
 
     function handle(r: { success: true } | ActionError, ok: string, retry?: () => void) {
@@ -159,10 +184,12 @@ export default function InteractionSheet({
                 try {
                     const r = await logFollowUp({
                         leadId: D.id,
+                        contact: CONTACT_KIND[contact],
                         outcome,
                         expectedRevision: D.revision,
                         idempotencyKey,
                         note: note.trim() || null,
+                        ...(phonePrice ? { phonePrice } : {}),
                         ...extra,
                     });
                     handle(r, `Zaznamenané: ${label}`, run);
@@ -191,8 +218,10 @@ export default function InteractionSheet({
             send(option.outcome, option.label, { reply: key });
             return;
         }
-        if (option.nextKind) setKind(option.nextKind);
-        setDate(option.days ? addBusinessCalendarDays(businessDate(new Date()), option.days) : "");
+        // Povedaná cena sa zvyčajne potvrdzuje emailom – predvolený krok „Poslať cenu" dnes.
+        if (phonePrice) setKind("SEND_QUOTE");
+        else if (option.nextKind) setKind(option.nextKind);
+        setDate(!phonePrice && option.days ? addBusinessCalendarDays(businessDate(new Date()), option.days) : "");
         setTime("");
         setStep("next");
     }
@@ -327,21 +356,51 @@ export default function InteractionSheet({
                                     🗓️ Bez kontaktu – len naplánovať…
                                 </Button>
                                 <div className="my-2 h-px bg-border" />
-                                <Button variant="outline" className={big} disabled={pending || !canWork} onClick={() => setStep("snooze")}>
+                                {onRecordOffer ? (
+                                    <Button variant="outline" className={big} disabled={pending || !canWork} onClick={onRecordOffer}>
+                                        📨 Poslali sme ponuku…
+                                    </Button>
+                                ) : (
+                                    <Button asChild variant="outline" className={big} disabled={pending || !canWork}>
+                                        <Link href={`${detailHref}?zaznam=ponuka`}>📨 Poslali sme ponuku…</Link>
+                                    </Button>
+                                )}
+                                <Button
+                                    variant="outline"
+                                    className={big}
+                                    disabled={pending || !canWork}
+                                    onClick={() => {
+                                        setContact("SMS");
+                                        setReply(null);
+                                        setStep("next");
+                                    }}
+                                >
+                                    💬 Poslali sme SMS…
+                                </Button>
+                                <div className="my-2 h-px bg-border" />
+                                <Button
+                                    variant="outline"
+                                    className={big}
+                                    disabled={pending || !canWork}
+                                    onClick={() => {
+                                        setContact("ANSWERED");
+                                        setStep("snooze");
+                                    }}
+                                >
                                     💤 Ozvať sa o pár mesiacov…
                                 </Button>
                                 <Button
                                     variant="destructive"
                                     className="h-12 w-full justify-start text-base"
                                     disabled={pending || !canWork}
-                                    onClick={() => setStep("lost")}
+                                    onClick={() => {
+                                        setContact("ANSWERED");
+                                        setStep("lost");
+                                    }}
                                 >
                                     ✕ Nemajú záujem…
                                 </Button>
                                 <div className="my-2 h-px bg-border" />
-                                <Button variant="ghost" className="w-full justify-start" disabled={pending || !canWork} onClick={() => setStep("sent")}>
-                                    Označiť ako poslané…
-                                </Button>
                                 {caps.createRequests && (
                                     <Button variant="ghost" className="w-full justify-start" disabled={pending} onClick={() => setStep("request")}>
                                         Požiadať manažéra…
@@ -355,6 +414,27 @@ export default function InteractionSheet({
 
                         {step === "reply" && (
                             <>
+                                {contact === "ANSWERED" && (
+                                    <div className="space-y-2 rounded-lg border p-3">
+                                        <label className="flex items-center gap-3 text-sm">
+                                            <Checkbox data-vaul-no-drag checked={toldPrice} onCheckedChange={(v) => setToldPrice(v === true)} />
+                                            <span>
+                                                Povedal/a som cenu
+                                                {toldPrice && D.price != null && toldAmount === String(D.price) ? ` ${formatMoney(D.price)}` : ""}
+                                            </span>
+                                        </label>
+                                        {toldPrice && (D.price == null || toldAmount !== String(D.price)) && (
+                                            <Input
+                                                data-vaul-no-drag
+                                                inputMode="decimal"
+                                                placeholder="Aká suma zaznela (€)"
+                                                value={toldAmount}
+                                                onChange={(e) => setToldAmount(e.target.value)}
+                                                className="text-[16px]"
+                                            />
+                                        )}
+                                    </div>
+                                )}
                                 <p className="px-1 pb-1 text-sm text-muted-foreground">Čo povedali?</p>
                                 <div className="grid gap-2 md:grid-cols-2">
                                     {CLIENT_REPLIES.map((r) => (
@@ -362,7 +442,7 @@ export default function InteractionSheet({
                                             key={r.key}
                                             variant="outline"
                                             className="h-12 justify-start text-base"
-                                            disabled={pending}
+                                            disabled={pending || (toldPrice && !toldValid)}
                                             onClick={() => pickReply(r.key)}
                                         >
                                             {r.label}
@@ -462,30 +542,6 @@ export default function InteractionSheet({
                                 </Button>
                                 <Button variant="ghost" className="w-full text-muted-foreground" disabled={pending} onClick={() => send("BAD_NUMBER", "Zlé číslo")}>
                                     Zlé / nefunkčné číslo
-                                </Button>
-                                <Button variant="ghost" className="w-full" onClick={() => setStep("contact")}>
-                                    ← Späť
-                                </Button>
-                            </>
-                        )}
-
-                        {step === "sent" && (
-                            <>
-                                <Button
-                                    variant="outline"
-                                    className={big}
-                                    disabled={pending}
-                                    onClick={() => start(async () => handle(await setDealQuoteSent(D.id, true), "Cenová ponuka označená ako odoslaná"))}
-                                >
-                                    Cenová ponuka odoslaná
-                                </Button>
-                                <Button
-                                    variant="outline"
-                                    className={big}
-                                    disabled={pending}
-                                    onClick={() => start(async () => handle(await logDealEmailSent(D.id), "Email označený ako odoslaný"))}
-                                >
-                                    Email „O nás“ odoslaný
                                 </Button>
                                 <Button variant="ghost" className="w-full" onClick={() => setStep("contact")}>
                                     ← Späť

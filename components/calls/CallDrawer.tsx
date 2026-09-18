@@ -169,11 +169,11 @@ export default function CallDrawer({
                                 <Button variant="outline" className={big} onClick={() => selectInterest("WANTS_DESIGN", "Chcú návrh")}>
                                     🎨 Chcú návrh zdarma
                                 </Button>
-                                <Button variant="outline" className={big} onClick={() => selectInterest("WANTS_QUOTE", "Chcú cenovú ponuku")}>
-                                    💶 Chcú cenovú ponuku
+                                <Button variant="outline" className={big} onClick={() => selectInterest("WANTS_QUOTE", "Chcú konkrétnu cenu")}>
+                                    💶 Chcú konkrétnu cenu
                                 </Button>
-                                <Button variant="outline" className={big} onClick={() => selectInterest("WANTS_EMAIL", "Máme napísať")}>
-                                    ✉️ Máme im napísať
+                                <Button variant="outline" className={big} onClick={() => selectInterest("WANTS_EMAIL", "Chcú info emailom")}>
+                                    ✉️ Chcú info emailom (o nás, cenník)
                                 </Button>
                                 <Button variant="ghost" className="w-full" onClick={() => setStep("main")}>← Späť</Button>
                             </>

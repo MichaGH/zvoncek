@@ -2,7 +2,7 @@
 
 Feature: caller assignment, SALES_REP, `/dashboard/clients`, manager oversight.
 
-Design baseline: `context/new-feature/planning.md` rev. 4; implementation record: `context/progress-tracker.md`.
+Design baseline: `context/features/01-salesrep/planning.md` rev. 4; implementation record: `context/progress-tracker.md`.
 
 Review date: 2026-09-17. This is an independent review of the implementation on the Neon **test** branch. No production rollout was attempted.
 

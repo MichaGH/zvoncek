@@ -69,7 +69,7 @@ const CLASSES = [
 
 // Klasifikácia každého nezmazaného leadu. $1 = id vlastníka historických obchodov.
 // Podmienky c1..c9 sú vzájomne výlučné; skript to navyše overuje (matches <= 1).
-// Odchýlka od §11.3 riadok 5 (CALLWORK_OK): stačí AKÝKOĽVEK CALL_QUEUE hovor (aj vrátený), lebo vrátenie jediného
+// Podľa §11.3 riadok 5 (CALLWORK_OK) stačí AKÝKOĽVEK CALL_QUEUE hovor (aj vrátený), lebo vrátenie jediného
 // hovoru nechá lead ako CALLING RETRY s priradením bez nevráteného hovoru (§15: „backfill ho zaradí ako call work").
 const CLASSIFY_SQL = `
 WITH act AS (

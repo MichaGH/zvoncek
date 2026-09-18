@@ -6,7 +6,7 @@ import { Role } from "@/app/generated/prisma/enums";
 //
 // Tímové varianty (*.viewTeam / *.manageTeam) sú vedomé zúženie *.viewAll: vedúci
 // tímu vidí/spravuje len členov SVOJHO tímu (scoping vynútený server-side cez
-// getTeamScopeUserIds). Ten istý mechanizmus obslúži budúceho telesales/spoločného
+// getTeamScopeForLeader pri kontaktoch/štatistikách a getDealScope pri obchodoch). Ten istý mechanizmus obslúži budúceho telesales/spoločného
 // vedúceho – stačí pridať rolu a priradiť jej existujúce tímové práva.
 export type Permission =
     | "today.view"
@@ -173,9 +173,8 @@ export function requiredPermissionForPath(path: string): Permission | null {
     if (path.startsWith("/dashboard/calls/assignments")) return "calls.assign";
     if (path.startsWith("/dashboard/calls")) return "calls.view";
     // Jedna obrazovka obchodov pre všetky roly, ktoré na nich pracujú; ROZSAH (vlastné / tím / všetko)
-    // rieši dealScope() na serveri, nie cesta. /dashboard/clients je len presmerovanie (round 2).
+    // rieši dealScope() na serveri, nie cesta.
     if (path.startsWith("/dashboard/pipeline")) return "deals.view";
-    if (path.startsWith("/dashboard/clients")) return "deals.view";
     if (path.startsWith("/dashboard/contacts/new")) return "contacts.create";
     if (path.startsWith("/dashboard/contacts")) return "contacts.access";
     if (path.startsWith("/dashboard/stats")) return "stats.view";

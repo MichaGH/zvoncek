@@ -108,6 +108,14 @@ model Lead {
   priceNote      String? // rozpis/poznámka: "499 stránka + 299 admin systém" – na hover
   priceDisclosed Boolean  @default(false) // klient cenu pozná (ústne aj mailom)
 
+  // ČO KLIENT DOSTAL (round 2, wave 3a) – súhrn platných OFFER_SENT aktivít, vždy prepočítaný (lib/domain/offers.ts).
+  // quoteSentAt / aboutUsSentAt / priceDisclosed vyššie sú odvtedy ZMRAZENÉ staré údaje – nový kód ich nezapisuje.
+  offerAboutUsAt        DateTime? // prvýkrát „o nás"
+  offerPricelistAt      DateTime? // prvýkrát cenník
+  offerPriceAt          DateTime? // naposledy konkrétna cena (email aj telefón)
+  hadLegacySends        Boolean   @default(false) // mal odoslania ešte zo starého systému – nastaví jednorazový krok, potom sa nemení
+  legacySendsReviewedAt DateTime? // manažér potvrdil, čo klient zo starého systému naozaj dostal
+
   lostReason String? // "nemajú záujem", "zlé číslo"
 
   // kto kontakt pridal – pre štatistiky pridávania
@@ -210,6 +218,8 @@ enum ActivityType {
   REQUEST_CREATED // požiadavka na manažéra
   REQUEST_RESOLVED // požiadavka vybavená / zamietnutá
   DEAL_REOPENED // audit: manažér znovu otvoril uzavretý obchod
+  OFFER_SENT // čo klient dostal (o nás / cenník / cena / návrh) – obsah v meta; nahrádza QUOTE_SENT/EMAIL_SENT/DESIGN_SENT
+  CLIENT_REPLIED // klient odpísal (email) – kontakt, nie hovor
 }
 
 enum CallOutcome {
@@ -250,7 +260,7 @@ enum ActivitySource {
   PIPELINE
   CONTACTS
   ADMIN
-  CLIENTS // akcie z /dashboard/clients
+  CLIENTS // práca vlastníka obchodu bez deals.manage (názov z čias /dashboard/clients); manažér zapisuje PIPELINE
 }
 
 enum NextActionKind {
@@ -308,7 +318,8 @@ model Design {
   repoUrl        String? // GitHub repo – nech po vypnutí hostingu vieme, ktorý projekt to bol
   isLive         Boolean   @default(true) // ručný príznak: beží stránka? (pri vytvorení predpokladáme áno)
   currentVersion Int       @default(1)
-  sentAt         DateTime? // kedy bol návrh označený ako poslaný klientovi (revertovateľné)
+  sentAt         DateTime? // kedy bol návrh prvýkrát poslaný: prepočítané z OFFER_SENT, inak legacySentAt
+  legacySentAt   DateTime? // dátum odoslania zo starého systému – skopírovaný jednorazovým krokom, potom sa nemení
   createdById    String?
   deletedAt      DateTime? // soft delete
 

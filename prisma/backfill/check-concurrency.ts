@@ -344,12 +344,21 @@ tests.requests = async () => {
     const priceReq = await prisma.dealRequest.findFirstOrThrow({ where: { leadId: id, kind: "PRICE" } });
     check("requests: rep saves price → own PRICE request DONE", codeOf(pr) === "OK" && codeOf(saved) === "OK" && priceReq.status === "DONE", `${priceReq.status} ${priceReq.resolutionNote}`);
     const before = await leadRev(id);
-    const sent = await work.setDealQuoteSentAs(rep, id, true);
+    const offers = await import("../../lib/commands/offers");
+    const { businessDate: bd } = await import("../../lib/domain/businessTime");
+    const sent = await offers.recordOfferSentAs(rep, {
+        leadId: id,
+        expectedRevision: before,
+        idempotencyKey: key(),
+        contents: ["PRICE"],
+        sentOn: bd(new Date()),
+        followUp: true,
+    });
     const afterLead = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { nextActionKind: true, nextActionAt: true, nextActionHasTime: true, revision: true, ownerId: true } });
     const { businessDate, addBusinessCalendarDays } = await import("../../lib/domain/businessTime");
     const expected = addBusinessCalendarDays(businessDate(new Date()), 7);
     check(
-        "requests: quote sent → CALL +7 business days (day-only), one revision bump",
+        "requests: price sent (OFFER_SENT) → CALL +7 business days (day-only), one revision bump",
         codeOf(sent) === "OK" && afterLead.nextActionKind === "CALL" && !afterLead.nextActionHasTime && afterLead.nextActionAt !== null &&
             businessDate(afterLead.nextActionAt) === expected && afterLead.revision === before + 1,
         JSON.stringify({ at: afterLead.nextActionAt && businessDate(afterLead.nextActionAt), expected, delta: afterLead.revision - before }),
@@ -361,10 +370,18 @@ tests.requests = async () => {
     check("requests: manager price keeps owner", owner === rep.id, `owner=${owner === rep.id ? "rep" : owner}`);
 
     // Návrh odoslaný manažérom → DESIGN DONE.
-    const { createDesignAs, setDesignSentAs } = await import("../../lib/commands/tracking");
+    const { createDesignAs } = await import("../../lib/commands/tracking");
     await createDesignAs(manager, { leadId: id, label: "A" });
     const d = await prisma.design.findFirstOrThrow({ where: { leadId: id }, select: { id: true } });
-    const ds = await setDesignSentAs(manager, d.id, true);
+    const ds = await offers.recordOfferSentAs(manager, {
+        leadId: id,
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        contents: ["DESIGN"],
+        designIds: [d.id],
+        sentOn: bd(new Date()),
+        followUp: true,
+    });
     const designReq = await prisma.dealRequest.findFirstOrThrow({ where: { id: design[0].id } });
     check("requests: design marked sent → DESIGN DONE", codeOf(ds) === "OK" && designReq.status === "DONE", designReq.status);
 
@@ -470,19 +487,23 @@ tests.revision = async () => {
     const pipeline = await import("../../lib/commands/pipeline");
     const work = await import("../../lib/commands/dealWork");
     const tracking = await import("../../lib/commands/tracking");
+    const offers = await import("../../lib/commands/offers");
+    const { businessDate } = await import("../../lib/domain/businessTime");
+    const today = businessDate(new Date());
     const manager = await makeUser("MANAGER");
     const rep = await makeUser("SALES_REP");
     const id = await makeDeal(rep, "WANTS_DESIGN");
     const steps: [string, () => Promise<unknown>][] = [
         ["updateLead", () => pipeline.updateLeadAs(manager, id, { note: "n1", email: "a@b.c" })],
         ["saveQuote", () => pipeline.saveQuoteAs(manager, id, { price: 100, priceNote: null })],
-        ["setPriceDisclosed", () => pipeline.setPriceDisclosedAs(manager, id, true)],
+        ["recordOffer ABOUT_US", async () => offers.recordOfferSentAs(manager, { leadId: id, expectedRevision: await leadRev(id), idempotencyKey: key(), contents: ["ABOUT_US"], sentOn: today, followUp: false })],
         ["setProjectType", () => pipeline.setProjectTypeAs(manager, id, "ESHOP")],
         ["setNextAction", async () => pipeline.setNextActionAs(manager, id, { kind: "CALL", schedule: { kind: "daysFromToday", days: 2 } }, await leadRev(id))],
-        ["logSent EMAIL", () => pipeline.logSentAs(manager, id, "EMAIL_SENT")],
+        ["recordOffer PRICELIST+PRICE", async () => offers.recordOfferSentAs(manager, { leadId: id, expectedRevision: await leadRev(id), idempotencyKey: key(), contents: ["PRICELIST", "PRICE"], sentOn: today, followUp: true })],
         ["addBusinessNote", () => pipeline.addBusinessNoteAs(manager, id, "poznámka")],
         ["createDesign", () => tracking.createDesignAs(manager, { leadId: id, label: "B" })],
-        ["setDesignSent", async () => tracking.setDesignSentAs(manager, (await prisma.design.findFirstOrThrow({ where: { leadId: id } })).id, true)],
+        ["recordOffer DESIGN", async () => offers.recordOfferSentAs(manager, { leadId: id, expectedRevision: await leadRev(id), idempotencyKey: key(), contents: ["DESIGN"], designIds: [(await prisma.design.findFirstOrThrow({ where: { leadId: id } })).id], sentOn: today, followUp: false })],
+        ["correctRecord", async () => offers.correctRecordAs(manager, (await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "OFFER_SENT", revertedAt: null } })).id, "test opravy")],
         ["createDealRequest", () => work.createDealRequestAs(rep, id, "OTHER", "x")],
         ["logFollowUp", async () => work.logFollowUpAs(rep, { leadId: id, outcome: "WANTS_DESIGN", expectedRevision: await leadRev(id), idempotencyKey: key() })],
         ["changeOwner", () => pipeline.changeOwnerAs(manager, id, manager.id)],
@@ -752,7 +773,7 @@ tests.deleteTeamVsHandoffs = async () => {
     );
 };
 
-// ── Regresné testy k revízii (context/new-feature/revision.md) ─────────────────
+// ── Regresné testy k revízii (context/features/01-salesrep/revision.md) ─────────────────
 
 // R-01: crafted payload s extra poľami (stav, vlastník, značka, zmazanie) sa odmietne na oboch vstupoch; nič sa nezmení.
 tests.r01CraftedInput = async () => {
@@ -789,7 +810,7 @@ tests.r01CraftedInput = async () => {
 
 // R-02: poradie sa počíta pred LIMIT – urgentný obchod a najstaršia požiadavka sú na 1. strane aj pri > 50 obchodoch.
 tests.r02PipelineOrder = async () => {
-    const { getDealList } = await import("../../lib/queries/deals");
+    const { getDealList } = await import("../../lib/queries/pipeline");
     const { dealScope } = await import("../../lib/domain/dealScope");
     const owner = await makeUser("MANAGER");
     const requester = await makeUser("SALES_REP");
@@ -832,7 +853,7 @@ tests.r02PipelineOrder = async () => {
 
 // R-03: detail pre bývalého vlastníka po presune nevráti nič (rozsah je v samotnom dotaze).
 tests.r03DetailScope = async () => {
-    const { getDealDetail } = await import("../../lib/queries/deals");
+    const { getDealDetail } = await import("../../lib/queries/pipeline");
     const { dealScope } = await import("../../lib/domain/dealScope");
     const { dealCapabilities } = await import("../../lib/domain/dealCapabilities");
     const pipeline = await import("../../lib/commands/pipeline");
@@ -861,7 +882,7 @@ tests.r03DetailScope = async () => {
 
 // R-04: hľadanie je stránkované – 101 zhôd je dosiahnuteľných.
 tests.r04SearchPaging = async () => {
-    const { getDealList } = await import("../../lib/queries/deals");
+    const { getDealList } = await import("../../lib/queries/pipeline");
     const { dealScope } = await import("../../lib/domain/dealScope");
     const rep = await makeUser("SALES_REP");
     const token = `srch${RUN}`;
@@ -892,7 +913,7 @@ tests.r04SearchPaging = async () => {
 
 // W1-A: obchodník nevidí cudzí obchod bez ohľadu na ?owner= – rozsah je v dotaze, nie v URL.
 tests.w1RepScope = async () => {
-    const { getDealList, getDealDetail } = await import("../../lib/queries/deals");
+    const { getDealList, getDealDetail } = await import("../../lib/queries/pipeline");
     const { dealScope, resolveOwnerFilter } = await import("../../lib/domain/dealScope");
     const { dealCapabilities } = await import("../../lib/domain/dealCapabilities");
     const repA = await makeUser("SALES_REP");
@@ -918,7 +939,7 @@ tests.w1RepScope = async () => {
 
 // W1-B: manažérovo „owner=<obchodník>" vráti presne to, čo vidí obchodník sám, v rovnakom poradí.
 tests.w1ManagerSeesRepBoard = async () => {
-    const { getDealList } = await import("../../lib/queries/deals");
+    const { getDealList } = await import("../../lib/queries/pipeline");
     const { dealScope, resolveOwnerFilter } = await import("../../lib/domain/dealScope");
     const manager = await makeUser("MANAGER");
     const rep = await makeUser("SALES_REP");
@@ -936,7 +957,7 @@ tests.w1ManagerSeesRepBoard = async () => {
 
 // W1-C: pilulka „Na dnes" (SQL) sa zhoduje s clientSection() nad všetkými otvorenými obchodmi v databáze.
 tests.w1TodayParity = async () => {
-    const { getDealList, getDealCounts } = await import("../../lib/queries/deals");
+    const { getDealList, getDealCounts } = await import("../../lib/queries/pipeline");
     const { dealScope } = await import("../../lib/domain/dealScope");
     const { clientSection } = await import("../../lib/domain/clientSections");
     const manager = await makeUser("MANAGER");
@@ -1152,7 +1173,7 @@ tests.w2OrderStep = async () => {
 // W2-D: počítadlo „N. pokus" (SQL v zozname aj v detaile) ráta po sebe idúce nezdvihnutia a po dovolaní sa vynuluje.
 tests.w2NoAnswerStreak = async () => {
     const work = await import("../../lib/commands/dealWork");
-    const { getDealList, getDealDetail } = await import("../../lib/queries/deals");
+    const { getDealList, getDealDetail } = await import("../../lib/queries/pipeline");
     const { dealScope } = await import("../../lib/domain/dealScope");
     const { dealCapabilities } = await import("../../lib/domain/dealCapabilities");
     const rep = await makeUser("SALES_REP");
@@ -1216,6 +1237,312 @@ tests.w2NextStepRules = async () => {
             afterDesign.nextActionAt !== null &&
             codeOf(callWithoutDate) !== "OK",
         `kind=${afterDesign.nextActionKind} mode=${afterDesign.nextActionMode} call=${codeOf(callWithoutDate)}`,
+    );
+};
+
+// ── Round 2, wave 3a: čo klient dostal (§2c) ─────────────────────────────────────
+
+async function w3a() {
+    const offers = await import("../../lib/commands/offers");
+    const work = await import("../../lib/commands/dealWork");
+    const pipeline = await import("../../lib/commands/pipeline");
+    const bt = await import("../../lib/domain/businessTime");
+    const today = bt.businessDate(new Date());
+    const daysAgo = (n: number) => bt.addBusinessCalendarDays(today, -n);
+    const record = async (u: AccessUser, leadId: string, extra: Partial<Parameters<typeof offers.recordOfferSentAs>[1]>) =>
+        offers.recordOfferSentAs(u, {
+            leadId,
+            expectedRevision: await leadRev(leadId),
+            idempotencyKey: key(),
+            contents: ["ABOUT_US"],
+            sentOn: today,
+            followUp: false,
+            ...extra,
+        });
+    const lead = (id: string) => prisma.lead.findUniqueOrThrow({ where: { id } });
+    return { offers, work, pipeline, bt, today, daysAgo, record, lead };
+}
+
+// W3a-A: záznam odoslania nastaví súhrn + krok o 7 dní, zvýši revíziu raz; ten istý kľúč (aj súbežne) = jeden záznam.
+tests.w3aRecordIdempotent = async () => {
+    const { offers, bt, today, lead } = await w3a();
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep, "WANTS_EMAIL");
+    const before = await leadRev(id);
+    const k = key();
+    const input = { leadId: id, expectedRevision: before, idempotencyKey: k, contents: ["ABOUT_US", "PRICELIST"] as ("ABOUT_US" | "PRICELIST")[], sentOn: today, followUp: true };
+    const [r1, r2] = await Promise.all([offers.recordOfferSentAs(rep, input), offers.recordOfferSentAs(rep, input)]);
+    const r3 = await offers.recordOfferSentAs(rep, input);
+    const l = await lead(id);
+    const rows = await prisma.activity.count({ where: { leadId: id, type: "OFFER_SENT" } });
+    const expected = bt.addBusinessCalendarDays(today, 7);
+    check(
+        "W3a-A: record sets summary + CALL +7, one bump; same key twice in parallel and again = one record",
+        codeOf(r1) === "OK" && codeOf(r2) === "OK" && codeOf(r3) === "OK" && rows === 1 &&
+            l.offerAboutUsAt !== null && l.offerPricelistAt !== null && l.offerPriceAt === null &&
+            l.nextActionKind === "CALL" && l.nextActionAt !== null && bt.businessDate(l.nextActionAt) === expected &&
+            l.revision === before + 1,
+        `r=${codeOf(r1)},${codeOf(r2)},${codeOf(r3)} rows=${rows} rev+${l.revision - before} next=${l.nextActionKind}`,
+    );
+    const other = await offers.recordOfferSentAs(rep, { ...input, contents: ["PRICELIST"] });
+    check("W3a-A: a reused key with different content is not a second write", codeOf(other) === "OK" && (await prisma.activity.count({ where: { leadId: id, type: "OFFER_SENT" } })) === 1, codeOf(other));
+
+    // Dve rôzne kľúče s tou istou revíziou súčasne → presne jeden prejde, druhý STALE.
+    const rev = await leadRev(id);
+    const both = await Promise.all([0, 1].map(() => offers.recordOfferSentAs(rep, { ...input, idempotencyKey: key(), expectedRevision: rev })));
+    const ok = both.filter((b) => codeOf(b) === "OK").length;
+    check("W3a-A: two different submits on the same revision → exactly one wins", ok === 1 && both.some((b) => codeOf(b) === "ERR:STALE"), JSON.stringify(tally(both)));
+};
+
+// W3a-B: posielaná cena je snímka – neskoršia zmena ceny obchodu nezmení, čo klient dostal; bez ceny sa cena poslať nedá.
+tests.w3aPriceSnapshot = async () => {
+    const { record, pipeline, lead } = await w3a();
+    const { getDealDetail } = await import("../../lib/queries/pipeline");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const { dealCapabilities } = await import("../../lib/domain/dealCapabilities");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const noPrice = await record(rep, id, { contents: ["PRICE"] });
+    await pipeline.saveQuoteAs(manager, id, { price: 1000, priceNote: "Web 550 · admin 450" });
+    const sent = await record(rep, id, { contents: ["PRICE"] });
+    await pipeline.saveQuoteAs(manager, id, { price: 1200, priceNote: null });
+    const detail = await getDealDetail(id, dealScope(rep), dealCapabilities(rep));
+    const l = await lead(id);
+    check(
+        "W3a-B: price is snapshotted at send time; no price → refused",
+        codeOf(noPrice) !== "OK" && codeOf(sent) === "OK" && detail?.offers.lastPrice?.amount === "1000" &&
+            detail.offers.lastPrice.note === "Web 550 · admin 450" && l.offerPriceAt !== null && Number(l.price) === 1200,
+        `noPrice=${codeOf(noPrice)} last=${JSON.stringify(detail?.offers.lastPrice)} price=${l.price}`,
+    );
+};
+
+// W3a-C: oprava nezávisí od poradia; návrh = prvé platné odoslanie alebo starý údaj.
+tests.w3aCorrectionOrder = async () => {
+    const { offers, record, pipeline, bt, daysAgo, lead } = await w3a();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+
+    const finals: string[] = [];
+    for (const order of [
+        [0, 1],
+        [1, 0],
+    ]) {
+        const id = await makeDeal(rep);
+        await pipeline.saveQuoteAs(manager, id, { price: 1000, priceNote: null });
+        await record(rep, id, { contents: ["PRICE"], sentOn: daysAgo(3) });
+        await pipeline.saveQuoteAs(manager, id, { price: 1100, priceNote: null });
+        await record(rep, id, { contents: ["PRICE"] });
+        const rows = await prisma.activity.findMany({ where: { leadId: id, type: "OFFER_SENT" }, orderBy: { createdAt: "asc" } });
+        const afterFirst = await offers.correctRecordAs(rep, rows[order[0]].id, "omyl v teste");
+        const mid = await lead(id);
+        await offers.correctRecordAs(manager, rows[order[1]].id, "omyl v teste");
+        const end = await lead(id);
+        finals.push(`${codeOf(afterFirst)}|mid=${mid.offerPriceAt ? "set" : "null"}|end=${end.offerPriceAt ? "set" : "null"}|disclosed=${end.priceDisclosed}`);
+    }
+    check(
+        "W3a-C: correcting two price sends in either order ends with no price known (legacy priceDisclosed untouched)",
+        finals.every((f) => f === "OK|mid=set|end=null|disclosed=false"),
+        finals.join(" ; "),
+    );
+
+    // Návrh poslaný 5 a 1 deň dozadu → oprava skoršieho = sentAt je ten neskorší.
+    const id = await makeDeal(rep);
+    const { createDesignAs } = await import("../../lib/commands/tracking");
+    await createDesignAs(manager, { leadId: id, label: "smrek1" });
+    const design = await prisma.design.findFirstOrThrow({ where: { leadId: id } });
+    await record(rep, id, { contents: ["DESIGN"], designIds: [design.id], sentOn: daysAgo(5) });
+    await record(rep, id, { contents: ["DESIGN"], designIds: [design.id], sentOn: daysAgo(1) });
+    const first = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "OFFER_SENT" }, orderBy: { createdAt: "asc" } });
+    const beforeFix = (await prisma.design.findUniqueOrThrow({ where: { id: design.id } })).sentAt;
+    await offers.correctRecordAs(rep, first.id, "omyl v teste");
+    const afterFix = (await prisma.design.findUniqueOrThrow({ where: { id: design.id } })).sentAt;
+    check(
+        "W3a-C: design sent date = first valid send; correcting the earlier one moves it to the later one",
+        beforeFix !== null && bt.businessDate(beforeFix) === daysAgo(5) && afterFix !== null && bt.businessDate(afterFix) === daysAgo(1),
+        `before=${beforeFix && bt.businessDate(beforeFix)} after=${afterFix && bt.businessDate(afterFix)}`,
+    );
+
+    // Starý návrh (legacySentAt) → nové odoslanie ho neposunie a oprava nového ho nezmaže.
+    const id2 = await makeDeal(rep);
+    await createDesignAs(manager, { leadId: id2, label: "stary" });
+    const old = await prisma.design.findFirstOrThrow({ where: { leadId: id2 } });
+    const legacyAt = bt.businessDayStart(daysAgo(20));
+    await prisma.design.update({ where: { id: old.id }, data: { sentAt: legacyAt, legacySentAt: legacyAt } });
+    await record(rep, id2, { contents: ["DESIGN"], designIds: [old.id] });
+    const withNew = (await prisma.design.findUniqueOrThrow({ where: { id: old.id } })).sentAt;
+    const newRow = await prisma.activity.findFirstOrThrow({ where: { leadId: id2, type: "OFFER_SENT" } });
+    await offers.correctRecordAs(rep, newRow.id, "omyl v teste");
+    const afterCorrect = (await prisma.design.findUniqueOrThrow({ where: { id: old.id } })).sentAt;
+    check(
+        "W3a-C: legacy design date survives a new send and its correction",
+        withNew?.getTime() === legacyAt.getTime() && afterCorrect?.getTime() === legacyAt.getTime(),
+        `withNew=${withNew?.toISOString()} after=${afterCorrect?.toISOString()}`,
+    );
+};
+
+// W3a-D: starý obchod – staré príznaky znamenajú „?", spätný záznam bez vedľajších účinkov, potvrdenie len manažér.
+tests.w3aLegacy = async () => {
+    const { offers, record, daysAgo, lead } = await w3a();
+    const { clientKnowledge } = await import("../../lib/domain/offers");
+    const { getDealDetail, getDealList } = await import("../../lib/queries/pipeline");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const { dealCapabilities } = await import("../../lib/domain/dealCapabilities");
+    const work = await import("../../lib/commands/dealWork");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    await prisma.lead.update({ where: { id }, data: { hadLegacySends: true, priceDisclosed: true, quoteSentAt: new Date() } });
+    await work.createDealRequestAs(rep, id, "PRICE", "neviem cenu");
+    const nextBefore = (await lead(id)).nextActionKind;
+
+    const detail0 = await getDealDetail(id, dealScope(manager), dealCapabilities(manager));
+    const k0 = clientKnowledge(detail0!.offers);
+    const repHistorical = await record(rep, id, { historical: true, contents: ["PRICE"], price: { amount: 700, note: null }, sentOn: daysAgo(30) });
+    const hist = await record(manager, id, { historical: true, contents: ["ABOUT_US", "PRICE"], price: { amount: 700, note: null }, sentOn: daysAgo(30) });
+    const l = await lead(id);
+    const openPrice = await prisma.dealRequest.count({ where: { leadId: id, kind: "PRICE", status: "OPEN" } });
+    const { rows } = await getDealList({ scope: dealScope(manager), owner: { userId: rep.id }, view: "all", take: 500 });
+    const row = rows.find((r) => r.id === id);
+    const detail1 = await getDealDetail(id, dealScope(manager), dealCapabilities(manager));
+    const k1 = clientKnowledge(detail1!.offers);
+    check(
+        "W3a-D: legacy flags mean '?', historical entry is manager-only and touches no step, ticket or 'Naposledy'",
+        k0.PRICE.state === "unknown" && k0.PRICELIST.state === "unknown" && codeOf(repHistorical) !== "OK" && codeOf(hist) === "OK" &&
+            l.offerPriceAt !== null && l.nextActionKind === nextBefore && openPrice === 1 && row?.lastActivity?.type !== "OFFER_SENT" &&
+            detail1?.lastTouch?.type !== "OFFER_SENT" && k1.PRICE.state === "yes" && k1.PRICELIST.state === "unknown" && Number(l.price ?? 0) !== 700,
+        `k0=${k0.PRICE.state}/${k0.PRICELIST.state} rep=${codeOf(repHistorical)} hist=${codeOf(hist)} step=${l.nextActionKind}/${nextBefore} open=${openPrice} last=${row?.lastActivity?.type} k1=${k1.PRICE.state}/${k1.PRICELIST.state}`,
+    );
+
+    const repConfirm = await offers.confirmLegacyReviewedAs(rep, id);
+    const confirm = await offers.confirmLegacyReviewedAs(manager, id);
+    const detail2 = await getDealDetail(id, dealScope(manager), dealCapabilities(manager));
+    const k2 = clientKnowledge(detail2!.offers);
+    const afterReview = await record(manager, id, { historical: true, contents: ["PRICELIST"], sentOn: daysAgo(10) });
+    check(
+        "W3a-D: only the manager confirms review; afterwards empty = 'no' and historical entries are closed",
+        codeOf(repConfirm) !== "OK" && codeOf(confirm) === "OK" && k2.PRICELIST.state === "no" && k2.ABOUT_US.state === "yes" && codeOf(afterReview) !== "OK",
+        `rep=${codeOf(repConfirm)} mgr=${codeOf(confirm)} k2=${k2.PRICELIST.state}/${k2.ABOUT_US.state} after=${codeOf(afterReview)}`,
+    );
+};
+
+// W3a-E: typ kontaktu sa ukladá pravdivo – bez kontaktu nie je hovor, odpoveď nie je hovor a resetuje „N. pokus", SMS nič nemení.
+tests.w3aContactTypes = async () => {
+    const { work } = await w3a();
+    const { getDealList } = await import("../../lib/queries/pipeline");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const countType = (type: "CALL" | "CLIENT_REPLIED" | "SMS_SENT") => prisma.activity.count({ where: { leadId: id, type, source: "CLIENTS" } });
+    const base = { leadId: id, outcome: "POSITIVE" as const, nextKind: "WAITING_FOR_CLIENT" as const };
+
+    const k = key();
+    const none = await work.logFollowUpAs(rep, { ...base, contact: "NONE", expectedRevision: await leadRev(id), idempotencyKey: k });
+    const noneAgain = await work.logFollowUpAs(rep, { ...base, contact: "NONE", expectedRevision: (await leadRev(id)) - 1, idempotencyKey: k });
+    const callsAfterNone = await countType("CALL");
+    const planning = await prisma.activity.count({ where: { leadId: id, idempotencyKey: k } });
+
+    for (let i = 0; i < 2; i++) {
+        await work.logFollowUpAs(rep, { leadId: id, outcome: "NO_ANSWER", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    }
+    const streakOf = async () => (await getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "all", take: 500 })).rows.find((r) => r.id === id)?.noAnswerStreak;
+    const streak2 = await streakOf();
+    const replied = await work.logFollowUpAs(rep, { ...base, contact: "REPLIED", reply: "WILL_CONTACT_US", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const streak0 = await streakOf();
+    const sms = await work.logFollowUpAs(rep, { ...base, contact: "SMS", note: "web + kontakt", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const smsRow = await prisma.activity.findFirst({ where: { leadId: id, type: "SMS_SENT" }, select: { note: true, outcome: true } });
+    const smsLead = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { nextActionNote: true } });
+    const badSms = await work.logFollowUpAs(rep, { leadId: id, contact: "SMS", outcome: "NO_ANSWER", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const badNone = await work.logFollowUpAs(rep, { leadId: id, contact: "NONE", outcome: "WANTS_QUOTE", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const badReply = await work.logFollowUpAs(rep, { leadId: id, contact: "REPLIED", outcome: "NO_ANSWER", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    check(
+        "W3a-E: 'bez kontaktu' writes no call (replay OK), a reply is CLIENT_REPLIED and resets the streak, SMS is SMS_SENT without outcome",
+        codeOf(none) === "OK" && codeOf(noneAgain) === "OK" && callsAfterNone === 0 && planning === 1 &&
+            streak2 === 2 && codeOf(replied) === "OK" && streak0 === 0 && (await countType("CLIENT_REPLIED")) === 1 &&
+            codeOf(sms) === "OK" && smsRow?.note === "web + kontakt" && smsRow.outcome === null && smsLead.nextActionNote === null &&
+            codeOf(badSms) !== "OK" && codeOf(badNone) !== "OK" && codeOf(badReply) !== "OK",
+        `none=${codeOf(none)}/${codeOf(noneAgain)} calls=${callsAfterNone} plan=${planning} streak=${streak2}→${streak0} sms=${JSON.stringify(smsRow)} bad=${codeOf(badSms)},${codeOf(badNone)},${codeOf(badReply)}`,
+    );
+};
+
+// W3a-F: cena povedaná v hovore = OFFER_SENT (telefón) v tej istej transakcii; „Naposledy" ostáva hovor.
+tests.w3aPhonePrice = async () => {
+    const { work, lead } = await w3a();
+    const { getDealList } = await import("../../lib/queries/pipeline");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const before = await leadRev(id);
+    const r = await work.logFollowUpAs(rep, {
+        leadId: id,
+        outcome: "POSITIVE",
+        nextKind: "SEND_QUOTE",
+        phonePrice: { amount: 900 },
+        expectedRevision: before,
+        idempotencyKey: key(),
+    });
+    const l = await lead(id);
+    const offer = await prisma.activity.findFirst({ where: { leadId: id, type: "OFFER_SENT" }, select: { meta: true } });
+    const call = await prisma.activity.findFirst({ where: { leadId: id, type: "CALL", source: "CLIENTS" }, select: { id: true } });
+    const meta = offer?.meta as { channel?: string; callActivityId?: string; price?: { amount?: string } } | null;
+    const row = (await getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "all", take: 500 })).rows.find((x) => x.id === id);
+    const onNoAnswer = await work.logFollowUpAs(rep, { leadId: id, outcome: "NO_ANSWER", phonePrice: { amount: 1 }, expectedRevision: await leadRev(id), idempotencyKey: key() });
+    check(
+        "W3a-F: phone price saves the price + a PHONE record linked to the call, one bump; 'Naposledy' stays the call; refused on no-answer",
+        codeOf(r) === "OK" && Number(l.price) === 900 && l.offerPriceAt !== null && l.revision === before + 1 &&
+            meta?.channel === "PHONE" && meta.callActivityId === call?.id && meta.price?.amount === "900" &&
+            row?.lastActivity?.type === "CALL" && codeOf(onNoAnswer) !== "OK",
+        `r=${codeOf(r)} price=${l.price} rev+${l.revision - before} meta=${JSON.stringify(meta)} last=${row?.lastActivity?.type} na=${codeOf(onNoAnswer)}`,
+    );
+};
+
+// W3a-G: kto smie opraviť a čo sa dá opraviť; prečiarknutý záznam zmizne z „Naposledy".
+tests.w3aCorrectionRules = async () => {
+    const { offers, work } = await w3a();
+    const { getDealList } = await import("../../lib/queries/pipeline");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const other = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    await work.logFollowUpAs(rep, { leadId: id, contact: "SMS", outcome: "POSITIVE", nextKind: "WAITING_FOR_CLIENT", note: "sms", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const sms = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "SMS_SENT" } });
+    const call = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "CALL" } });
+    const lastBefore = (await getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "all", take: 500 })).rows.find((r) => r.id === id)?.lastActivity?.type;
+    const foreign = await offers.correctRecordAs(other, sms.id, "nie môj obchod");
+    const short = await offers.correctRecordAs(rep, sms.id, "x");
+    const onCall = await offers.correctRecordAs(manager, call.id, "hovor sa neopravuje");
+    const byManager = await offers.correctRecordAs(manager, sms.id, "omyl v teste");
+    const twice = await offers.correctRecordAs(rep, sms.id, "omyl v teste");
+    const lastAfter = (await getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "all", take: 500 })).rows.find((r) => r.id === id)?.lastActivity?.type;
+    const stored = await prisma.activity.findUniqueOrThrow({ where: { id: sms.id }, select: { revertedAt: true, revertedById: true, meta: true } });
+    check(
+        "W3a-G: foreign rep NOT_FOUND, short reason / a CALL refused, manager corrects, twice = STALE, 'Naposledy' skips it",
+        codeOf(foreign) === "ERR:NOT_FOUND" && codeOf(short) !== "OK" && codeOf(onCall) === "ERR:FORBIDDEN" && codeOf(byManager) === "OK" &&
+            codeOf(twice) === "ERR:STALE" && lastBefore === "SMS_SENT" && lastAfter !== "SMS_SENT" &&
+            stored.revertedById === manager.id && JSON.stringify(stored.meta).includes("omyl v teste"),
+        `foreign=${codeOf(foreign)} short=${codeOf(short)} call=${codeOf(onCall)} mgr=${codeOf(byManager)} twice=${codeOf(twice)} last=${lastBefore}→${lastAfter}`,
+    );
+};
+
+// W3a-H: poradie odoslaní – spätný záznam v ten istý deň je starší než bežný; posledná cena = kotva.
+tests.w3aOrdering = async () => {
+    const { summarizeOffers } = await import("../../lib/domain/offers");
+    const mk = (id: string, sentOn: string, historical: boolean, createdAt: string, amount: string) => ({
+        id,
+        createdAt: new Date(createdAt),
+        revertedAt: null,
+        meta: { channel: "EMAIL" as const, contents: ["PRICE" as const], price: { amount, note: null }, sentOn, historical },
+    });
+    const normalFirst = summarizeOffers([
+        mk("a", "2026-09-10", false, "2026-09-10T08:00:00Z", "1100"),
+        mk("b", "2026-09-10", true, "2026-09-18T08:00:00Z", "900"),
+    ]);
+    const later = summarizeOffers([mk("a", "2026-09-10", false, "2026-09-10T08:00:00Z", "1100"), mk("c", "2026-09-12", false, "2026-09-12T08:00:00Z", "1300")]);
+    check(
+        "W3a-H: a backdated entry never overtakes a normal one on the same day; the latest price is the anchor",
+        normalFirst.lastPrice?.amount === "1100" && later.lastPrice?.amount === "1300",
+        `sameDay=${normalFirst.lastPrice?.amount} later=${later.lastPrice?.amount}`,
     );
 };
 

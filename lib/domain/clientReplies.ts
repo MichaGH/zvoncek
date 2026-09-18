@@ -5,7 +5,7 @@ import type { FollowUpNextKind, FollowUpOutcome } from "@/lib/domain/leadFlow";
 // takže história ostane čitateľná aj keď sa zoznam neskôr zmení. Žiadny stĺpec ani enum v DB (zatiaľ).
 //
 // Pridať/odobrať odpoveď = jeden riadok tu. Ak sa niektorá ustáli a budeme na ňu chcieť štatistiku,
-// povýši sa na `Activity.replyKind` (S-04 v context/new-feature/db-changes.md) s backfillom z `meta`.
+// povýši sa na `Activity.replyKind` (S-04 v context/features/01-salesrep/round2-deal-workspace.md §4) s backfillom z `meta`.
 
 export type ClientReply = {
     key: string;
@@ -25,7 +25,8 @@ export const CLIENT_REPLIES: ClientReply[] = [
     { key: "DECIDING", label: "Majú poradu / rozhodujú sa", outcome: "POSITIVE", nextKind: "CALL", days: 7, needsDate: true },
     { key: "SOMEONE_ELSE", label: "Rieši to niekto iný", outcome: "POSITIVE", nextKind: "CALL", days: 3, needsDate: true },
     { key: "PRICE_HIGH", label: "Cena je vysoká", outcome: "POSITIVE", nextKind: "CALL", days: 3, needsDate: true },
-    { key: "WANTS_QUOTE", label: "Chcú cenovú ponuku", outcome: "WANTS_QUOTE", terminal: true },
+    { key: "WANTS_INFO", label: "Chcú info (o nás, cenník)", outcome: "POSITIVE", nextKind: "SEND_EMAIL" },
+    { key: "WANTS_QUOTE", label: "Chcú konkrétnu cenu", outcome: "WANTS_QUOTE", terminal: true },
     { key: "WANTS_DESIGN", label: "Chcú návrh", outcome: "WANTS_DESIGN", terminal: true },
     { key: "WANTS_TO_ORDER", label: "Chcú objednať", outcome: "WANTS_TO_ORDER", terminal: true },
 ];

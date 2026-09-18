@@ -3,14 +3,16 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Check, Pencil, Phone, PhoneCall, XCircle } from "lucide-react";
+import { Check, Copy, Pencil, Phone, PhoneCall, Send, XCircle } from "lucide-react";
 import { LeadStatus, ProjectType, type DealRequestKind } from "@/app/generated/prisma/enums";
 import { DashboardContent, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import CenovaPonukaCard from "@/components/pipeline/CenovaPonukaCard";
 import DesignTrackingCard from "@/components/pipeline/DesignTrackingCard";
 import RequestsCard from "@/components/pipeline/RequestsCard";
-import NextActionEditor from "@/components/deals/NextActionEditor";
-import InteractionSheet, { type InteractionTarget } from "@/components/deals/InteractionSheet";
+import NextActionEditor from "@/components/pipeline/NextActionEditor";
+import InteractionSheet, { type InteractionTarget } from "@/components/pipeline/InteractionSheet";
+import OfferSentDialog from "@/components/pipeline/OfferSentDialog";
+import { copyEmailLink } from "@/components/shared/copyEmailLink";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,16 +26,15 @@ import type { ActionError } from "@/lib/access/errors";
 import {
     addDealNote,
     cancelOwnDealRequest,
+    correctRecord,
     createDealRequest,
-    logDealEmailSent,
     setDealNextAction,
     updateDealContact,
-} from "@/lib/actions/deals";
+} from "@/lib/actions/pipeline";
 import {
     addBusinessNote,
     changeOwner,
     changeStatus,
-    logSent,
     markLost,
     reopenDeal,
     setNextAction,
@@ -52,16 +53,19 @@ import {
     REQUEST_STATUS_LABEL,
     STATUS_LABEL,
 } from "@/lib/dictionaries";
-import { BUSINESS_TZ } from "@/lib/domain/businessTime";
+import { BUSINESS_TZ, businessDate, businessDayMonth, businessDayStart } from "@/lib/domain/businessTime";
 import { CLIENT_SECTION_LABEL } from "@/lib/domain/clientSections";
 import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
-import type { DealDetailData, DealUserOption } from "@/lib/queries/deals";
+import type { DealDetailData, DealUserOption } from "@/lib/queries/pipeline";
 import type { DesignView } from "@/lib/queries/tracking";
 import { fmtAgo } from "@/lib/utils";
 
 // Jeden detail obchodu pre obchodníka aj manažéra (round 2, D-01). Rozdiel je v `caps`:
 // manažérske ovládanie (stav, vlastník, typ projektu, WON/reopen, návrhy, vybavenie požiadaviek) sa iba nevykreslí,
 // ale rozhoduje o ňom server – každý príkaz má vlastný guard pod zámkom Lead riadku.
+
+// Záznamy, ktoré sa dajú prečiarknuť (round 2 §2c 5.4) – autor alebo manažér, s dôvodom.
+const CORRECTABLE = new Set(["OFFER_SENT", "SMS_SENT", "CLIENT_REPLIED"]);
 
 const QUICK_EVENTS = ["Klient sľúbil poslať podklady", "Podklady neprišli", "Návrh si ešte nepozreli", "Máme sa ozvať po porade"];
 const DEAL_STATUS_OPTIONS: LeadStatus[] = ["ACTIVE", "SNOOZED", "WON", "LOST", "UNREACHABLE"];
@@ -104,12 +108,14 @@ export default function DealDetail({
     viewerId,
     users,
     designs,
+    openOffer = false,
 }: {
     lead: DealDetailData;
     caps: DealCapabilities;
     viewerId: string;
     users: DealUserOption[];
     designs: DesignView[];
+    openOffer?: boolean;
 }) {
     const router = useRouter();
     const [pending, startTransition] = useTransition();
@@ -131,6 +137,13 @@ export default function DealDetail({
     const [interaction, setInteraction] = useState(false);
     const [requestKind, setRequestKind] = useState<DealRequestKind>("PRICE");
     const [requestNote, setRequestNote] = useState("");
+    // Z akčného okna v zozname sa „Poslali sme ponuku" otvára tu (?zaznam=ponuka), lebo dialóg potrebuje návrhy a cenu.
+    const [offerDialog, setOfferDialog] = useState<null | { historical: boolean; designId?: string }>(() =>
+        openOffer ? { historical: false } : null,
+    );
+    const [correcting, setCorrecting] = useState<string | null>(null);
+    const [correctionReason, setCorrectionReason] = useState("");
+    const [copiedDesign, setCopiedDesign] = useState<string | null>(null);
 
     const isClosed = CLOSED.includes(lead.status);
     const editable = caps.work && (caps.manage || !isClosed);
@@ -145,14 +158,12 @@ export default function DealDetail({
         ? {
               setNextAction: (input: Parameters<typeof setNextAction>[1], rev: number) => setNextAction(lead.id, input, rev),
               updateContact: (data: typeof form) => updateLead(lead.id, data),
-              emailSent: () => logSent(lead.id, "EMAIL_SENT"),
               addNote: (note: string) => addBusinessNote(lead.id, note),
               quoteMode: "pipeline" as const,
           }
         : {
               setNextAction: (input: Parameters<typeof setDealNextAction>[1], rev: number) => setDealNextAction(lead.id, input, rev),
               updateContact: (data: typeof form) => updateDealContact(lead.id, data),
-              emailSent: () => logDealEmailSent(lead.id),
               addNote: (note: string) => addDealNote(lead.id, note),
               quoteMode: "clients" as const,
           };
@@ -213,22 +224,35 @@ export default function DealDetail({
         status: lead.status,
         revision: lead.revision,
         noAnswerStreak: lead.noAnswerStreak,
-        lastActivity: businessActivities[0]
-            ? {
-                  type: businessActivities[0].type,
-                  outcome: businessActivities[0].outcome,
-                  note: businessActivities[0].note,
-                  at: businessActivities[0].createdAt,
-              }
-            : null,
+        price: lead.price,
+        lastActivity: lead.lastTouch,
         openRequests: openRequests.map((r) => ({ id: r.id, kind: r.kind })),
     };
+
+    function saveCorrection(activityId: string) {
+        startTransition(async () => {
+            if (report(await correctRecord(lead.id, activityId, correctionReason))) {
+                toast.success("Záznam opravený – skontroluj ďalší krok");
+                setCorrecting(null);
+                setCorrectionReason("");
+            }
+            router.refresh();
+        });
+    }
+
+    async function copyDesignLink(id: string, url: string | null, tracked: string | null) {
+        if (!url || !tracked) return;
+        if (await copyEmailLink(url, tracked)) {
+            setCopiedDesign(id);
+            setTimeout(() => setCopiedDesign((c) => (c === id ? null : c)), 1500);
+        } else toast.error("Schránka nie je dostupná");
+    }
 
     return (
         <>
             <DashboardPageHeader
                 backHref="/dashboard/pipeline"
-                backLabel="Späť na obchody"
+                backLabel="Späť na pipeline"
                 title={
                     <span className="flex items-center gap-2">
                         <span className="text-muted-foreground">#{lead.number}</span>
@@ -350,26 +374,26 @@ export default function DealDetail({
                                 )}
                             </CardHeader>
                             <CardContent className="space-y-4">
-                                {businessActivities[0] ? (
+                                {lead.lastTouch ? (
                                     <div className="space-y-1 text-sm">
                                         <div className="flex flex-wrap items-center gap-2">
-                                            <span className="font-medium">{ACTIVITY_LABEL[businessActivities[0].type]}</span>
+                                            <span className="font-medium">{ACTIVITY_LABEL[lead.lastTouch.type]}</span>
                                             {lead.noAnswerStreak > 1 && (
                                                 <Badge variant="outline" className="font-normal">
                                                     {lead.noAnswerStreak}. pokus
                                                 </Badge>
                                             )}
-                                            {businessActivities[0].outcome && (
+                                            {lead.lastTouch.outcome && (
                                                 <span className="text-xs text-muted-foreground">
-                                                    {OUTCOME_LABEL[businessActivities[0].outcome]}
+                                                    {OUTCOME_LABEL[lead.lastTouch.outcome]}
                                                 </span>
                                             )}
                                             <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-                                                {formatDateTime(businessActivities[0].createdAt)}
+                                                {formatDateTime(lead.lastTouch.at)}
                                             </span>
                                         </div>
-                                        {businessActivities[0].note && (
-                                            <p className="text-muted-foreground">{businessActivities[0].note}</p>
+                                        {lead.lastTouch.note && (
+                                            <p className="whitespace-pre-wrap text-muted-foreground">{lead.lastTouch.note}</p>
                                         )}
                                     </div>
                                 ) : (
@@ -421,16 +445,23 @@ export default function DealDetail({
                             leadId={lead.id}
                             price={lead.price}
                             priceNote={lead.priceNote}
-                            priceDisclosed={lead.priceDisclosed}
-                            quoteSentAt={lead.quoteSentAt}
+                            offers={lead.offers}
                             mode={api.quoteMode}
                             readOnly={!editable}
+                            isManager={caps.manage}
+                            onRecord={() => setOfferDialog({ historical: false })}
+                            onHistorical={() => setOfferDialog({ historical: true })}
                         />
 
                         {/* Návrh & sledovanie – správa len pre manažéra, súhrn pre každého */}
                         {caps.manageDesigns ? (
                             <div id="design" className="scroll-mt-20">
-                                <DesignTrackingCard leadId={lead.id} designs={designs} quoteSentAt={lead.quoteSentAt} />
+                                <DesignTrackingCard
+                                    leadId={lead.id}
+                                    designs={designs}
+                                    priceSent={lead.offers.offerPriceAt !== null}
+                                    onRecordSend={editable ? (designId) => setOfferDialog({ historical: false, designId }) : undefined}
+                                />
                             </div>
                         ) : (
                             <Card>
@@ -452,37 +483,24 @@ export default function DealDetail({
                                                     {d.lastViewedAt ? ` · naposledy ${fmtAgo(d.lastViewedAt)}` : ""}
                                                 </Badge>
                                             )}
+                                            {/* Sledovaný odkaz sa nikdy nezobrazuje ako klikateľný – len sa skopíruje hotový do emailu. */}
+                                            {d.trackedUrl && d.url && (
+                                                <Button size="sm" variant="outline" className="h-7" onClick={() => copyDesignLink(d.id, d.url, d.trackedUrl)}>
+                                                    {copiedDesign === d.id ? <Check className="mr-1 h-3.5 w-3.5" /> : <Copy className="mr-1 h-3.5 w-3.5" />}
+                                                    Odkaz do emailu
+                                                </Button>
+                                            )}
+                                            {editable && (
+                                                <Button size="sm" variant="ghost" className="h-7" onClick={() => setOfferDialog({ historical: false, designId: d.id })}>
+                                                    <Send className="mr-1 h-3.5 w-3.5" />
+                                                    Odoslané
+                                                </Button>
+                                            )}
                                         </div>
                                     ))}
                                 </CardContent>
                             </Card>
                         )}
-
-                        {/* Email „o nás" */}
-                        <Card>
-                            <CardHeader className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <CardTitle className="text-base">Email „o nás“</CardTitle>
-                                    {lead.aboutUsSentAt && (
-                                        <Badge variant="secondary" className="font-normal">
-                                            Poslané {formatDate(lead.aboutUsSentAt)}
-                                        </Badge>
-                                    )}
-                                </div>
-                            </CardHeader>
-                            <CardContent>
-                                <Button
-                                    type="button"
-                                    variant={lead.aboutUsSentAt ? "secondary" : "default"}
-                                    size="sm"
-                                    disabled={busy || !editable || Boolean(lead.aboutUsSentAt)}
-                                    onClick={() => runBusiness(() => api.emailSent())}
-                                >
-                                    {lead.aboutUsSentAt && <Check className="mr-1.5 h-3.5 w-3.5" />}
-                                    {lead.aboutUsSentAt ? "Označené ako poslané" : "Označiť ako poslané"}
-                                </Button>
-                            </CardContent>
-                        </Card>
 
                         {/* Požiadavky – zoznam pre každého, formulár pre toho, kto ich podáva */}
                         {(caps.createRequests || lead.requests.length > 0) && (
@@ -657,9 +675,16 @@ export default function DealDetail({
                                         {visibleActivities.map((activity, index) => (
                                             <div key={activity.id}>
                                                 {index > 0 && <Separator />}
-                                                <div className="space-y-1 py-3 text-sm">
+                                                <div className={`space-y-1 py-3 text-sm${activity.revertedAt ? " opacity-60" : ""}`}>
                                                     <div className="flex flex-wrap items-center gap-2">
-                                                        <span className="font-medium">{ACTIVITY_LABEL[activity.type]}</span>
+                                                        <span className={`font-medium${activity.revertedAt ? " line-through" : ""}`}>
+                                                            {ACTIVITY_LABEL[activity.type]}
+                                                        </span>
+                                                        {activity.offer?.historical && (
+                                                            <Badge variant="outline" className="font-normal">
+                                                                doplnené spätne
+                                                            </Badge>
+                                                        )}
                                                         {caps.manage && (
                                                             <span className="text-xs text-muted-foreground">
                                                                 {ACTIVITY_SOURCE_LABEL[activity.source]}
@@ -668,6 +693,9 @@ export default function DealDetail({
                                                             </span>
                                                         )}
                                                         <span className="ml-auto text-xs text-muted-foreground">
+                                                            {activity.offer && activity.offer.sentOn !== businessDate(new Date(activity.createdAt))
+                                                                ? `poslané ${businessDayMonth(businessDayStart(activity.offer.sentOn))} · zaznamenané `
+                                                                : ""}
                                                             {formatDateTime(activity.createdAt)} · {activity.userName}
                                                         </span>
                                                     </div>
@@ -675,8 +703,52 @@ export default function DealDetail({
                                                         <p className="text-xs text-muted-foreground">{OUTCOME_LABEL[activity.outcome]}</p>
                                                     )}
                                                     {activity.note && (
-                                                        <p className="whitespace-pre-wrap text-muted-foreground">{activity.note}</p>
+                                                        <p className={`whitespace-pre-wrap text-muted-foreground${activity.revertedAt ? " line-through" : ""}`}>
+                                                            {activity.note}
+                                                        </p>
                                                     )}
+                                                    {activity.revertedAt && (
+                                                        <p className="text-xs text-muted-foreground">
+                                                            Opravené {formatDateTime(activity.revertedAt)}
+                                                            {activity.correctionReason ? ` – ${activity.correctionReason}` : ""}
+                                                        </p>
+                                                    )}
+                                                    {!activity.revertedAt &&
+                                                        CORRECTABLE.has(activity.type) &&
+                                                        caps.work &&
+                                                        (caps.manage || (!isClosed && activity.userId === viewerId)) &&
+                                                        (correcting === activity.id ? (
+                                                            <div className="flex flex-col gap-2 pt-1 sm:flex-row">
+                                                                <Input
+                                                                    autoFocus
+                                                                    value={correctionReason}
+                                                                    onChange={(e) => setCorrectionReason(e.target.value)}
+                                                                    placeholder="Dôvod opravy (napr. neodoslané, iný obsah)"
+                                                                />
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="destructive"
+                                                                    disabled={pending || correctionReason.trim().length < 3}
+                                                                    onClick={() => saveCorrection(activity.id)}
+                                                                >
+                                                                    Prečiarknuť
+                                                                </Button>
+                                                                <Button size="sm" variant="ghost" onClick={() => setCorrecting(null)}>
+                                                                    Zrušiť
+                                                                </Button>
+                                                            </div>
+                                                        ) : (
+                                                            <button
+                                                                type="button"
+                                                                className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                                                                onClick={() => {
+                                                                    setCorrecting(activity.id);
+                                                                    setCorrectionReason("");
+                                                                }}
+                                                            >
+                                                                Opraviť
+                                                            </button>
+                                                        ))}
                                                 </div>
                                             </div>
                                         ))}
@@ -743,6 +815,24 @@ export default function DealDetail({
                     target={interactionTarget}
                     caps={caps}
                     onClose={() => setInteraction(false)}
+                    onRecordOffer={() => {
+                        setInteraction(false);
+                        setOfferDialog({ historical: false });
+                    }}
+                />
+            )}
+            {offerDialog && (
+                <OfferSentDialog
+                    key={`offer-${lead.revision}-${offerDialog.historical}-${offerDialog.designId ?? ""}`}
+                    deal={lead}
+                    viewerId={viewerId}
+                    isManager={caps.manage}
+                    historical={offerDialog.historical}
+                    preselectDesignId={offerDialog.designId}
+                    onClose={() => {
+                        setOfferDialog(null);
+                        if (openOffer) router.replace(`/dashboard/pipeline/${lead.id}`, { scroll: false });
+                    }}
                 />
             )}
         </>

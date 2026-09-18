@@ -13,7 +13,8 @@ Rules for the implementing agent:
   or by an agent Michal explicitly instructs for that session.
 - Never use `--accept-data-loss` or `--force-reset`.
 - Keep the Prisma model name `Lead`. All permission checks go through `can()` + the access helpers (§6).
-- Every `Lead` mutation follows the locking discipline in §10.1. No exceptions.
+- Every mutation of an existing `Lead` follows the locking discipline in §10.1. Contact creation has no existing row
+  to lock and inserts at revision 0.
 - Implement in the phase order of §13. Each phase must pass `npx tsc --noEmit` and lint before the next starts.
 
 Revision 2 changes (from design review): removed automatic claim reclaim; batch claims by explicit action; `Lead.revision`
@@ -1287,7 +1288,8 @@ Typical CONFLICT cases (not exhaustive, the rule is "not rows 1–9"):
 - a deal with `A` set
 - `dealAct` without a positive first call
 - ACTIVE or WON with `pos = 0`
-- NEW whose calls are all reverted, or a CALL_ST lead without a non-reverted queue call
+- NEW whose calls are all reverted, or a CALL_ST lead without any CALL_QUEUE call (an assigned CALL_ST lead with only
+  reverted CALL_QUEUE calls is `CALLWORK_OK` under row 5)
 - `closedAt` set on a non-deal
 
 **Anchor pass** (same transaction, after the class updates; independent of the class). This gives legacy non-deal calls a revert

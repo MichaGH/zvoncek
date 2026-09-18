@@ -3,8 +3,8 @@ import { redirect } from "next/navigation";
 import { TriangleAlert } from "lucide-react";
 import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import RefreshButton from "@/components/dashboard/RefreshButton";
-import DealFilters from "@/components/deals/DealFilters";
-import DealList from "@/components/deals/DealList";
+import DealFilters from "@/components/pipeline/DealFilters";
+import DealList from "@/components/pipeline/DealList";
 import TransferDealsDialog from "@/components/pipeline/TransferDealsDialog";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/access/user";
@@ -27,10 +27,10 @@ import {
     getDealOwnerOptions,
     getDealScope,
     getHandoffOptions,
-} from "@/lib/queries/deals";
+} from "@/lib/queries/pipeline";
 
 // Jedna obrazovka obchodov pre obchodníka aj manažéra (round 2, D-01). Rozsah rieši dealScope() na serveri,
-// rola mení len ponuku filtrov a ovládacie prvky. /dashboard/clients sem presmerúva.
+// rola mení len ponuku filtrov a ovládacie prvky.
 
 export default async function DealsPage({
     searchParams,
@@ -77,7 +77,7 @@ export default async function DealsPage({
     return (
         <DashboardPage>
             <DashboardPageHeader
-                title={caps.seeOthers ? "Pipeline" : "Moji klienti"}
+                title="Pipeline"
                 description={`${counts.open} otvorených · ${counts.today} na dnes${counts.requests ? ` · ${counts.requests} požiadaviek` : ""}`}
                 actions={
                     <>
@@ -103,6 +103,7 @@ export default async function DealsPage({
                         handoffs={handoffs}
                         showOwner={caps.seeOthers}
                         showRequests={caps.resolveRequests || caps.createRequests}
+                        showLegacy={caps.manage}
                     />
                 </div>
             </DashboardPageHeader>

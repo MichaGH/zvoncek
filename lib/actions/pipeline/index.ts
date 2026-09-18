@@ -5,10 +5,17 @@ import type { DealRequestStatus, LeadStatus, NextActionKind, NextActionMode, Pro
 import { UNAUTHENTICATED } from "@/lib/access/errors";
 import { requireUser } from "@/lib/access/user";
 import * as cmd from "@/lib/commands/pipeline";
-import type { DealContactInput } from "@/lib/domain/dealMutations";
+import * as work from "@/lib/commands/dealWork";
+import * as offers from "@/lib/commands/offers";
+import type { DealContactInput, NextActionInput } from "@/lib/domain/dealMutations";
 import type { Schedule } from "@/lib/domain/schedule";
+import type { DealRequestKind } from "@/app/generated/prisma/enums";
 
-// Tenké server akcie pipeline: aktuálny používateľ z DB + príkaz (guard, zámky, revízia) + revalidácia.
+// Tenké server akcie obrazovky obchodov (/dashboard/pipeline): aktuálny používateľ z DB + príkaz
+// (guard, zámky, revízia) + revalidácia. Dve úrovne guardu, jeden súbor:
+//   - manažérske akcie  → lib/commands/pipeline.ts  (requireDealManage, akýkoľvek stav)
+//   - práca na obchode  → lib/commands/dealWork.ts  (requireDealWork = vlastník alebo manažér)
+// Komponent volá tú úroveň, ktorá zodpovedá jeho právam; server si právo aj tak overuje sám.
 
 function revalidatePipeline(leadId?: string) {
     revalidatePath("/dashboard/pipeline");
@@ -16,11 +23,13 @@ function revalidatePipeline(leadId?: string) {
     revalidatePath("/dashboard");
 }
 
-async function run(leadId: string | undefined, fn: (user: NonNullable<Awaited<ReturnType<typeof requireUser>>>) => Promise<cmd.CommandResult>) {
+type User = NonNullable<Awaited<ReturnType<typeof requireUser>>>;
+
+async function run<T extends object>(leadId: string | undefined, fn: (user: User) => Promise<T>) {
     const user = await requireUser();
     if (!user) return UNAUTHENTICATED;
     const result = await fn(user);
-    if ("success" in result) revalidatePipeline(leadId);
+    if (!("error" in result)) revalidatePipeline(leadId);
     return result;
 }
 
@@ -30,14 +39,6 @@ export async function updateLead(leadId: string, data: DealContactInput) {
 
 export async function saveQuote(leadId: string, input: { price: number | null; priceNote: string | null }) {
     return run(leadId, (u) => cmd.saveQuoteAs(u, leadId, input));
-}
-
-export async function setQuoteSent(leadId: string, sent: boolean) {
-    return run(leadId, (u) => cmd.setQuoteSentAs(u, leadId, Boolean(sent)));
-}
-
-export async function setPriceDisclosed(leadId: string, disclosed: boolean) {
-    return run(leadId, (u) => cmd.setPriceDisclosedAs(u, leadId, Boolean(disclosed)));
 }
 
 export async function setProjectType(leadId: string, projectType: ProjectType | null) {
@@ -64,20 +65,12 @@ export async function setNextAction(
     return run(leadId, (u) => cmd.setNextActionAs(u, leadId, input, expectedRevision));
 }
 
-export async function logSent(leadId: string, what: "QUOTE_SENT" | "EMAIL_SENT") {
-    return run(leadId, (u) => cmd.logSentAs(u, leadId, what));
-}
-
 export async function markLost(leadId: string, reason: string | null) {
     return run(leadId, (u) => cmd.markLostAs(u, leadId, reason));
 }
 
 export async function addBusinessNote(leadId: string, note: string) {
-    return run(leadId, (u) => cmd.addBusinessNoteAs(u, leadId, note, "NOTE"));
-}
-
-export async function logBusinessActivity(leadId: string, type: "SMS_SENT", note?: string) {
-    return run(leadId, (u) => cmd.addBusinessNoteAs(u, leadId, note ?? "", type));
+    return run(leadId, (u) => cmd.addBusinessNoteAs(u, leadId, note));
 }
 
 export async function resolveDealRequest(requestId: string, status: Exclude<DealRequestStatus, "OPEN">, note: string | null) {
@@ -90,4 +83,48 @@ export async function transferDeals(input: cmd.TransferDealsInput) {
     const result = await cmd.transferDealsAs(user, input);
     revalidatePipeline();
     return result;
+}
+
+// ── Práca na obchode (vlastník alebo manažér) ────────────────────────────────
+
+export async function logFollowUp(input: work.FollowUpInput) {
+    return run(input?.leadId, (u) => work.logFollowUpAs(u, input));
+}
+
+export async function setDealNextAction(leadId: string, input: NextActionInput, expectedRevision: number) {
+    return run(leadId, (u) => work.setDealNextActionAs(u, leadId, input, expectedRevision));
+}
+
+export async function updateDealContact(leadId: string, data: DealContactInput) {
+    return run(leadId, (u) => work.updateDealContactAs(u, leadId, data));
+}
+
+export async function saveDealQuote(leadId: string, input: { price: number | null; priceNote: string | null }) {
+    return run(leadId, (u) => work.saveDealQuoteAs(u, leadId, input));
+}
+
+export async function addDealNote(leadId: string, note: string) {
+    return run(leadId, (u) => work.addDealNoteAs(u, leadId, note));
+}
+
+export async function createDealRequest(leadId: string, kind: DealRequestKind, note: string | null) {
+    return run(leadId, (u) => work.createDealRequestAs(u, leadId, kind, note));
+}
+
+export async function cancelOwnDealRequest(requestId: string, note: string | null) {
+    return run(undefined, (u) => work.cancelOwnDealRequestAs(u, requestId, note));
+}
+
+// ── Čo klient dostal (round 2, wave 3a) ──────────────────────────────────────
+
+export async function recordOfferSent(input: offers.RecordOfferSentInput) {
+    return run(input?.leadId, (u) => offers.recordOfferSentAs(u, input));
+}
+
+export async function correctRecord(leadId: string, activityId: string, reason: string) {
+    return run(leadId, (u) => offers.correctRecordAs(u, activityId, reason));
+}
+
+export async function confirmLegacyReviewed(leadId: string) {
+    return run(leadId, (u) => offers.confirmLegacyReviewedAs(u, leadId));
 }

@@ -7,7 +7,7 @@ import {
     isOverdue,
 } from "@/lib/domain/businessTime";
 
-// Úplná klasifikácia obchodu do sekcie „Moji klienti" (plán §7.4). Čistá funkcia bez DB:
+// Úplná klasifikácia obchodu do sekcie na obrazovke obchodov. Čistá funkcia bez DB:
 // pravidlá zhora nadol, prvá zhoda vyhráva, každý obchod dostane práve jednu sekciu.
 
 export const CLIENT_SECTIONS = [

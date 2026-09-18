@@ -22,18 +22,22 @@ export const NO_VIEW = "all";
 export const DEAL_VIEWS = [
     { key: "today", label: "Na dnes", group: "focus" },
     { key: "call", label: "Volať", group: "todo" },
-    { key: "quote", label: "Poslať CP", group: "todo" },
+    { key: "quote", label: "Poslať cenu", group: "todo" },
     { key: "email", label: "Poslať email", group: "todo" },
     { key: "design", label: "Návrh v procese", group: "todo" },
     { key: "waiting", label: "Čaká na klienta", group: "running" },
-    { key: "quote_sent", label: "Odoslaná CP", group: "running" },
-    { key: "design_sent", label: "Odoslaný návrh", group: "running" },
+    // Čo klient už má (round 2 §2c) – podľa nových záznamov OFFER_SENT, nie podľa starých polí.
+    { key: "got_pricelist", label: "Dostali cenník", group: "running" },
+    { key: "got_price", label: "Dostali cenu", group: "running" },
+    { key: "got_design", label: "Dostali návrh", group: "running" },
+    // Staré obchody, ktorých odoslania ešte manažér neoveril (zobrazuje sa len manažérovi).
+    { key: "unverified", label: "Neoverené", group: "legacy" },
 ] as const;
 
 export type DealViewKey = (typeof DEAL_VIEWS)[number]["key"] | "requests";
 
 const VIEW_KEYS = new Set<string>([...DEAL_VIEWS.map((v) => v.key), "requests"]);
-const CROSS_STATUS_VIEWS = new Set<string>(["requests", "today"]);
+const CROSS_STATUS_VIEWS = new Set<string>(["requests", "today", "unverified"]);
 
 export function isDealView(value: string | undefined): value is DealViewKey {
     return Boolean(value && VIEW_KEYS.has(value));

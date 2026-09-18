@@ -41,9 +41,9 @@ export const OUTCOME_LABEL: Record<CallOutcome, string> = {
     BAD_NUMBER: "Zlé číslo",
     NOT_INTERESTED: "Nemajú záujem",
     CALL_AGAIN: "Zavolať neskôr",
-    WANTS_QUOTE: "Chcú cenovú ponuku",
+    WANTS_QUOTE: "Chcú konkrétnu cenu",
     WANTS_DESIGN: "Chcú návrh",
-    WANTS_EMAIL: "Máme napísať",
+    WANTS_EMAIL: "Chcú info emailom",
     SNOOZE: "Ozvať sa neskôr",
     POSITIVE: "Pozitívny posun",
     WANTS_TO_ORDER: "Chcú objednať",
@@ -51,9 +51,9 @@ export const OUTCOME_LABEL: Record<CallOutcome, string> = {
 
 export const ACTIVITY_LABEL: Record<ActivityType, string> = {
     CALL: "Hovor",
-    QUOTE_SENT: "Poslaná CP",
-    DESIGN_SENT: "Poslaný návrh",
-    EMAIL_SENT: "Email",
+    QUOTE_SENT: "CP (starý záznam)",
+    DESIGN_SENT: "Návrh odoslaný (starý záznam)",
+    EMAIL_SENT: "Email (starý záznam)",
     SMS_SENT: "SMS",
     NOTE: "Poznámka",
     NEXT_ACTION_SET: "Ďalší krok nastavený",
@@ -72,6 +72,8 @@ export const ACTIVITY_LABEL: Record<ActivityType, string> = {
     REQUEST_CREATED: "Požiadavka",
     REQUEST_RESOLVED: "Požiadavka vybavená",
     DEAL_REOPENED: "Obchod znovu otvorený",
+    OFFER_SENT: "Poslali sme",
+    CLIENT_REPLIED: "Odpísali",
 };
 
 export const ACTIVITY_CATEGORY_LABEL: Record<ActivityCategory, string> = {
@@ -145,9 +147,9 @@ export const CONFIDENCE_VARIANT: Record<
 
 export const NEXT_ACTION_LABEL: Record<NextActionKind, string> = {
     CALL: "Zavolať",
-    SEND_QUOTE: "Poslať cenovú ponuku",
+    SEND_QUOTE: "Poslať cenu",
     SEND_DESIGN: "Poslať návrh",
-    SEND_EMAIL: "Poslať email",
+    SEND_EMAIL: "Poslať úvodný email",
     WAITING_FOR_CLIENT: "Čakáme na klienta",
     ORDER: "Objednávka – potvrdiť",
     CUSTOM: "Vlastný krok",

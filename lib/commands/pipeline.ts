@@ -41,12 +41,6 @@ export const updateLeadAs = (user: AccessUser, leadId: string, data: deal.DealCo
 export const saveQuoteAs = (user: AccessUser, leadId: string, input: { price: number | null; priceNote: string | null }) =>
     managed(user, leadId, "saveQuote", (tx, lead, actor) => deal.saveQuote(tx, actor, lead, input, "PIPELINE"));
 
-export const setQuoteSentAs = (user: AccessUser, leadId: string, sent: boolean) =>
-    managed(user, leadId, "setQuoteSent", (tx, lead, actor) => deal.setQuoteSent(tx, actor, lead, sent, "PIPELINE"));
-
-export const setPriceDisclosedAs = (user: AccessUser, leadId: string, disclosed: boolean) =>
-    managed(user, leadId, "setPriceDisclosed", (tx, lead, actor) => deal.setPriceDisclosed(tx, actor, lead, disclosed, "PIPELINE"));
-
 export const setProjectTypeAs = (user: AccessUser, leadId: string, projectType: ProjectType | null) =>
     managed(user, leadId, "setProjectType", (tx, lead, actor) => deal.setProjectType(tx, actor, lead, projectType));
 
@@ -55,14 +49,11 @@ export const setNextActionAs = (user: AccessUser, leadId: string, input: deal.Ne
         expectedRevision,
     });
 
-export const logSentAs = (user: AccessUser, leadId: string, what: "QUOTE_SENT" | "EMAIL_SENT") =>
-    managed(user, leadId, "logSent", (tx, lead, actor) => deal.logSent(tx, actor, lead, what, "PIPELINE"));
-
 export const markLostAs = (user: AccessUser, leadId: string, reason: string | null) =>
     managed(user, leadId, "markLost", (tx, lead, actor) => deal.markLost(tx, actor, lead, reason, "PIPELINE"));
 
-export const addBusinessNoteAs = (user: AccessUser, leadId: string, note: string, type: "NOTE" | "SMS_SENT" = "NOTE") =>
-    managed(user, leadId, "addBusinessNote", (tx, lead, actor) => deal.addBusinessNote(tx, actor, lead, { note, type }, "PIPELINE"));
+export const addBusinessNoteAs = (user: AccessUser, leadId: string, note: string) =>
+    managed(user, leadId, "addBusinessNote", (tx, lead, actor) => deal.addBusinessNote(tx, actor, lead, { note }, "PIPELINE"));
 
 export const changeStatusAs = (user: AccessUser, leadId: string, status: LeadStatus) =>
     managed(user, leadId, "changeStatus", async (tx, lead, actor) => {

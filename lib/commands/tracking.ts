@@ -2,16 +2,8 @@ import { AccessError, FORBIDDEN, toActionError, type ActionError } from "@/lib/a
 import { requireDealManage } from "@/lib/access/leads";
 import { withLockTx, type Tx } from "@/lib/access/locks";
 import type { AccessUser } from "@/lib/access/user";
-import {
-    createAuditActivity,
-    createBusinessActivity,
-    createPlanningActivity,
-    describeNextAction,
-    nextActionData,
-} from "@/lib/activityLog";
-import { resolveOpenRequests } from "@/lib/domain/dealRequests";
-import { followUpInSevenDays } from "@/lib/domain/dealMutations";
-import { bump, bumpLeadOnce, markLeadBumped } from "@/lib/domain/revision";
+import { createBusinessActivity } from "@/lib/activityLog";
+import { bumpLeadOnce } from "@/lib/domain/revision";
 import { can } from "@/lib/permissions";
 import { generateToken } from "@/lib/tracking/tokens";
 
@@ -120,53 +112,4 @@ export const removeDesignAs = (user: AccessUser, designId: string) =>
     withDesign(user, designId, "removeDesign", async (tx, design) => {
         await tx.design.update({ where: { id: design.id }, data: { deletedAt: new Date() } });
         await bumpLeadOnce(tx, design.leadId);
-    });
-
-// Per-návrh „poslané" – revertovateľné. Pri zapnutí: designSentAt, DESIGN_SENT, follow-up hovor o 7 dní (pre vlastníka
-// obchodu), DESIGN požiadavka → DONE.
-export const setDesignSentAs = (user: AccessUser, designId: string, sent: boolean) =>
-    withDesign(user, designId, "setDesignSent", async (tx, design, actor) => {
-        const now = new Date();
-        await tx.design.update({ where: { id: design.id }, data: { sentAt: sent ? now : null } });
-        const lead = await tx.lead.findUniqueOrThrow({
-            where: { id: design.leadId },
-            select: { nextActionKind: true, nextActionAt: true, nextActionNote: true },
-        });
-        if (sent) {
-            const next = nextActionData("CALL", followUpInSevenDays(now), "Zavolať, či si návrh pozreli", false);
-            const hadNext = Boolean(lead.nextActionKind || lead.nextActionAt || lead.nextActionNote);
-            await tx.lead.update({ where: { id: design.leadId }, data: { designSentAt: now, ...next, ...bump } });
-            markLeadBumped(tx, design.leadId);
-            await tx.activity.create({
-                data: createBusinessActivity({ leadId: design.leadId, userId: actor.id, type: "DESIGN_SENT", source: "PIPELINE" }),
-            });
-            await tx.activity.create({
-                data: createPlanningActivity({
-                    leadId: design.leadId,
-                    userId: actor.id,
-                    type: hadNext ? "NEXT_ACTION_CHANGED" : "NEXT_ACTION_SET",
-                    source: "PIPELINE",
-                    note: describeNextAction(next),
-                }),
-            });
-            await resolveOpenRequests(tx, design.leadId, ["DESIGN"], "DONE", actor.id, "Návrh odoslaný", "PIPELINE");
-        } else {
-            // Prepočítaj lead.designSentAt z ostatných poslaných návrhov.
-            const latest = await tx.design.findFirst({
-                where: { leadId: design.leadId, deletedAt: null, sentAt: { not: null } },
-                orderBy: { sentAt: "desc" },
-                select: { sentAt: true },
-            });
-            await tx.lead.update({ where: { id: design.leadId }, data: { designSentAt: latest?.sentAt ?? null, ...bump } });
-            markLeadBumped(tx, design.leadId);
-            await tx.activity.create({
-                data: createAuditActivity({
-                    leadId: design.leadId,
-                    userId: actor.id,
-                    type: "TRACKER_UPDATED",
-                    source: "PIPELINE",
-                    note: "Návrh označený ako neposlaný",
-                }),
-            });
-        }
     });

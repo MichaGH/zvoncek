@@ -120,7 +120,7 @@ export function leadStateForOutcome(
                 nextActionAt: businessTodayStart(now),
                 nextActionHasTime: false,
                 nextActionMode: "SCHEDULED",
-                nextActionNote: "Poslať cenovú ponuku",
+                nextActionNote: "Poslať cenu",
             };
         case "WANTS_EMAIL":
             return {
@@ -132,7 +132,7 @@ export function leadStateForOutcome(
                 nextActionAt: businessTodayStart(now),
                 nextActionHasTime: false,
                 nextActionMode: "SCHEDULED",
-                nextActionNote: "Napísať email / poslať informácie o nás",
+                nextActionNote: "Poslať úvodný email (o nás + cenník)",
             };
         case "WANTS_DESIGN":
             return {
@@ -247,7 +247,7 @@ export function dealStateForFollowUp(
                 nextActionAt: businessTodayStart(now),
                 nextActionHasTime: false,
                 nextActionMode: "SCHEDULED",
-                nextActionNote: "Poslať cenovú ponuku",
+                nextActionNote: "Poslať cenu",
             };
         case "WANTS_DESIGN":
             return {

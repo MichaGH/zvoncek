@@ -1,3 +1,4 @@
+import { z } from "zod";
 import prisma from "@/lib/db";
 import { Prisma } from "@/app/generated/prisma/client";
 import type { AccessUser } from "@/lib/access/user";
@@ -14,6 +15,8 @@ import {
 import { isDealView, viewIgnoresStatus } from "@/lib/domain/dealFilters";
 import { ROLE_PERMISSIONS } from "@/lib/permissions";
 import { summarizeEvents, type Confidence } from "@/lib/tracking/confidence";
+import { trackedUrl } from "@/lib/domain/designLinks";
+import { parseOfferMeta, summarizeOffers, type OfferRow } from "@/lib/domain/offers";
 import type {
     ActivityType,
     CallOutcome,
@@ -53,10 +56,14 @@ function viewWhere(view?: string): Prisma.LeadWhereInput {
             return { nextActionMode: "IN_PROGRESS" };
         case "waiting":
             return { nextActionKind: "WAITING_FOR_CLIENT" };
-        case "quote_sent":
-            return { quoteSentAt: { not: null } };
-        case "design_sent":
+        case "got_pricelist":
+            return { offerPricelistAt: { not: null } };
+        case "got_price":
+            return { offerPriceAt: { not: null } };
+        case "got_design":
             return { designs: { some: { deletedAt: null, sentAt: { not: null } } } };
+        case "unverified":
+            return { hadLegacySends: true, legacySendsReviewedAt: null };
         case "requests":
             return { requests: { some: { status: "OPEN" } } };
         default:
@@ -145,15 +152,27 @@ type DealLead = {
     nextActionNote: string | null;
     closedAt: Date | null;
     price: { toString(): string } | null;
-    priceDisclosed: boolean;
-    quoteSentAt: Date | null;
-    aboutUsSentAt: Date | null;
+    offerPricelistAt: Date | null;
+    offerPriceAt: Date | null;
+    hadLegacySends: boolean;
+    legacySendsReviewedAt: Date | null;
     designs: { id: string }[];
     owner: { id: string; firstName: string } | null;
     handedOffBy: { firstName: string; lastName: string } | null;
     requests: { id: string; kind: DealRequestKind; createdAt: Date }[];
     activities: { type: ActivityType; outcome: CallOutcome | null; note: string | null; createdAt: Date }[];
 };
+
+// „Naposledy" = posledný skutočný kontakt: bez prečiarknutých záznamov, bez ceny povedanej v hovore (tá je súčasťou
+// toho hovoru) a bez spätne doplnených starých odoslaní (round 2 §2c 5.3, 5.7).
+const LAST_TOUCH_WHERE = {
+    category: "BUSINESS" as const,
+    revertedAt: null,
+    NOT: [
+        { type: "OFFER_SENT" as const, meta: { path: ["channel"], equals: "PHONE" } },
+        { type: "OFFER_SENT" as const, meta: { path: ["historical"], equals: true } },
+    ],
+} satisfies Prisma.ActivityWhereInput;
 
 const LIST_SELECT = {
     id: true,
@@ -171,15 +190,16 @@ const LIST_SELECT = {
     nextActionNote: true,
     closedAt: true,
     price: true,
-    priceDisclosed: true,
-    quoteSentAt: true,
-    aboutUsSentAt: true,
+    offerPricelistAt: true,
+    offerPriceAt: true,
+    hadLegacySends: true,
+    legacySendsReviewedAt: true,
     designs: { where: { deletedAt: null, sentAt: { not: null } }, select: { id: true }, take: 1 },
     owner: { select: { id: true, firstName: true } },
     handedOffBy: { select: { firstName: true, lastName: true } },
     requests: { where: { status: "OPEN" as const }, select: { id: true, kind: true, createdAt: true }, orderBy: { createdAt: "asc" as const } },
     activities: {
-        where: { category: "BUSINESS" as const },
+        where: LAST_TOUCH_WHERE,
         orderBy: { createdAt: "desc" as const },
         take: 1,
         select: { type: true, outcome: true, note: true, createdAt: true },
@@ -196,7 +216,7 @@ async function noAnswerStreaks(ids: string[]): Promise<Map<string, number>> {
                    a.outcome,
                    row_number() OVER (PARTITION BY a."leadId" ORDER BY a."createdAt" DESC) AS rn
               FROM "Activity" a
-             WHERE a."leadId" = ANY(${ids}) AND a.type = 'CALL' AND a."revertedAt" IS NULL
+             WHERE a."leadId" = ANY(${ids}) AND a.type IN ('CALL', 'CLIENT_REPLIED') AND a."revertedAt" IS NULL
         )
         SELECT "leadId",
                (COALESCE(min(rn) FILTER (WHERE outcome <> 'NO_ANSWER'), max(rn) + 1) - 1)::bigint AS streak
@@ -237,10 +257,10 @@ function toDealRow(lead: DealLead, now: Date, noAnswerStreak = 0) {
         nextActionNote: lead.nextActionNote,
         closedAt: lead.closedAt?.toISOString() ?? null,
         price: lead.price ? Number(lead.price) : null,
-        priceDisclosed: lead.priceDisclosed,
-        quoteSentAt: lead.quoteSentAt?.toISOString() ?? null,
-        aboutUsSentAt: lead.aboutUsSentAt?.toISOString() ?? null,
+        gotPricelist: lead.offerPricelistAt !== null,
+        gotPrice: lead.offerPriceAt !== null,
         hasDesignSent: lead.designs.length > 0,
+        legacyUnreviewed: lead.hadLegacySends && lead.legacySendsReviewedAt === null,
         ownerId: lead.owner?.id ?? null,
         owner: lead.owner?.firstName ?? null,
         handedOffBy: lead.handedOffBy ? `${lead.handedOffBy.firstName} ${lead.handedOffBy.lastName}`.trim() : null,
@@ -377,10 +397,12 @@ export async function getDealDetail(
                 select: {
                     id: true,
                     label: true,
+                    targetUrl: true,
                     currentVersion: true,
                     sentAt: true,
                     tracker: {
                         select: {
+                            token: true,
                             events: {
                                 select: { type: true, versionAtView: true, botFlag: true, durationMs: true, occurredAt: true },
                             },
@@ -396,10 +418,25 @@ export async function getDealDetail(
     const cls = clientSection({ ...lead, openRequestCount }, now);
     let noAnswerStreak = 0;
     for (const a of lead.activities) {
-        if (a.type !== "CALL" || a.revertedAt) continue;
+        if ((a.type !== "CALL" && a.type !== "CLIENT_REPLIED") || a.revertedAt) continue;
         if (a.outcome !== "NO_ANSWER") break;
         noAnswerStreak++;
     }
+
+    // Čo klient dostal: súhrn z platných OFFER_SENT (posledná poslaná cena ako kotva) + staré údaje len ako „?".
+    const offerRows: OfferRow[] = [];
+    for (const a of lead.activities) {
+        if (a.type !== "OFFER_SENT") continue;
+        const meta = parseOfferMeta(a.meta);
+        if (meta) offerRows.push({ id: a.id, createdAt: a.createdAt, revertedAt: a.revertedAt, meta });
+    }
+    const offers = summarizeOffers(offerRows);
+    // Rovnaké pravidlo ako LAST_TOUCH_WHERE v zozname.
+    const lastTouch = lead.activities.find((a) => {
+        if (a.category !== "BUSINESS" || a.revertedAt) return false;
+        const offer = a.type === "OFFER_SENT" ? parseOfferMeta(a.meta) : null;
+        return !offer || (offer.channel !== "PHONE" && !offer.historical);
+    });
 
     return {
         id: lead.id,
@@ -423,10 +460,24 @@ export async function getDealDetail(
         nextActionNote: lead.nextActionNote,
         price: lead.price != null ? Number(lead.price) : null,
         priceNote: lead.priceNote,
-        priceDisclosed: lead.priceDisclosed,
-        quoteSentAt: lead.quoteSentAt?.toISOString() ?? null,
-        designSentAt: lead.designSentAt?.toISOString() ?? null,
-        aboutUsSentAt: lead.aboutUsSentAt?.toISOString() ?? null,
+        offers: {
+            offerAboutUsAt: lead.offerAboutUsAt?.toISOString() ?? null,
+            offerPricelistAt: lead.offerPricelistAt?.toISOString() ?? null,
+            offerPriceAt: lead.offerPriceAt?.toISOString() ?? null,
+            designSentAt: lead.designs.reduce<string | null>((max, d) => {
+                const at = d.sentAt?.toISOString() ?? null;
+                return at && (!max || at > max) ? at : max;
+            }, null),
+            hadLegacySends: lead.hadLegacySends,
+            legacySendsReviewedAt: lead.legacySendsReviewedAt?.toISOString() ?? null,
+            lastPrice: offers.lastPrice,
+            // Staré polia – zobrazujú sa len ako „čo tvrdil starý záznam", nikdy ako „áno".
+            legacy: {
+                quoteSentAt: lead.quoteSentAt?.toISOString() ?? null,
+                aboutUsSentAt: lead.aboutUsSentAt?.toISOString() ?? null,
+                priceDisclosed: lead.priceDisclosed,
+            },
+        },
         lostReason: lead.lostReason,
         closedAt: lead.closedAt?.toISOString() ?? null,
         pipelineEnteredAt: lead.pipelineEnteredAt?.toISOString() ?? null,
@@ -445,22 +496,36 @@ export async function getDealDetail(
             createdBy: `${r.createdBy.firstName} ${r.createdBy.lastName}`.trim(),
             resolvedBy: r.resolvedBy ? `${r.resolvedBy.firstName} ${r.resolvedBy.lastName}`.trim() : null,
         })),
-        activities: lead.activities.map((a) => ({
-            id: a.id,
-            type: a.type,
-            category: a.category,
-            source: a.source,
-            outcome: a.outcome,
-            note: a.note,
-            userName: a.user.firstName,
-            createdAt: a.createdAt.toISOString(),
-        })),
+        lastTouch: lastTouch
+            ? { type: lastTouch.type, outcome: lastTouch.outcome, note: lastTouch.note, at: lastTouch.createdAt.toISOString() }
+            : null,
+        activities: lead.activities.map((a) => {
+            const offer = a.type === "OFFER_SENT" ? parseOfferMeta(a.meta) : null;
+            const correction = correctionOf(a.meta);
+            return {
+                id: a.id,
+                type: a.type,
+                category: a.category,
+                source: a.source,
+                outcome: a.outcome,
+                note: a.note,
+                userId: a.userId,
+                userName: a.user.firstName,
+                createdAt: a.createdAt.toISOString(),
+                revertedAt: a.revertedAt?.toISOString() ?? null,
+                correctionReason: correction,
+                offer: offer ? { sentOn: offer.sentOn, historical: offer.historical, channel: offer.channel } : null,
+            };
+        }),
         // Súhrn sledovania návrhu – bez tokenov, URL a IP (spravovanie návrhov má manažér vo vlastnej karte).
         designs: lead.designs.map((d) => {
             const s = summarizeEvents(d.tracker?.events ?? [], d.currentVersion);
             return {
                 id: d.id,
                 label: d.label,
+                url: d.targetUrl,
+                // Sledovaný odkaz len pre tlačidlo „Skopírovať odkaz do emailu" – v UI sa nevykresľuje ako klikateľný.
+                trackedUrl: d.targetUrl && d.tracker?.token ? trackedUrl(d.targetUrl, d.tracker.token) : null,
                 sentAt: d.sentAt?.toISOString() ?? null,
                 confidence: s.confidence as Confidence,
                 views: s.totalViews,
@@ -468,6 +533,13 @@ export async function getDealDetail(
             };
         }),
     };
+}
+
+// Dôvod opravy prečiarknutého záznamu (meta.correction – lib/domain/offerMutations.ts correctRecord).
+const correctionSchema = z.object({ correction: z.object({ reason: z.string() }) });
+function correctionOf(meta: unknown): string | null {
+    const parsed = correctionSchema.safeParse(meta);
+    return parsed.success ? parsed.data.correction.reason : null;
 }
 
 export type DealDetailData = NonNullable<Awaited<ReturnType<typeof getDealDetail>>>;
