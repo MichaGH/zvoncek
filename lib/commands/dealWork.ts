@@ -117,6 +117,14 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
                   userId: user.id,
                   leadId: input.leadId,
                   types: input.contact === "NONE" ? PLANNING_TYPES : [CONTACT_TYPE[input.contact]],
+                  // Ten istý kľúč s iným výsledkom / textom = iný zápis, nie opakovanie.
+                  fingerprint: (row) => (input.contact === "NONE" ? "plan" : `${row.outcome ?? ""}|${row.note ?? ""}`),
+                  want:
+                      input.contact === "NONE"
+                          ? "plan"
+                          : input.contact === "SMS"
+                            ? `|${input.note?.trim() || ""}`
+                            : `${input.outcome}|${noteWithReply(input.reply, input.note) ?? ""}`,
               });
 
     const first = await replay();
@@ -164,7 +172,9 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
                 contactId = contact.id;
             }
 
-            const { closes, lostReason, request, status, ...next } = state;
+            const { closes, lostReason, request, status: stateStatus, ...next } = state;
+            // „Len naplánovať" (aj „Zmeniť krok" v detaile) nemení stav – spiaci obchod ostane spiaci (round 2 §2d).
+            const status = input.contact === "NONE" ? lead.status : stateStatus;
             await tx.lead.update({
                 where: { id: lead.id },
                 data: {

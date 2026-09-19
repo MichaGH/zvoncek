@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { NextActionKind } from "@/app/generated/prisma/enums";
 import { businessDate, businessDayStart, isValidBusinessDate } from "@/lib/domain/businessTime";
 
 // Čo klient dostal (round 2, wave 3a – context/features/01-salesrep/round2-deal-workspace.md §2c).
@@ -30,6 +31,7 @@ const offerMetaSchema = z.object({
     sentOn: z.string(),
     historical: z.boolean(),
     callActivityId: z.string().optional(),
+    migrated: z.boolean().optional(), // prevedené zo starého systému skriptom 2026-09-offer-migrate.ts (ak sa použije)
     correction: z.object({ reason: z.string(), byId: z.string(), at: z.string() }).nullable().optional(),
 });
 
@@ -50,20 +52,36 @@ export function formatMoney(amount: string | number): string {
     return `${n.toLocaleString("sk-SK", { maximumFractionDigits: 2 })} €`;
 }
 
+// Krátky obsah odoslania: „návrh smrek1 + cena 1 100 €" / „cena 900 € (telefonicky)".
+export function offerSummary(meta: Pick<OfferMeta, "channel" | "contents" | "price" | "designs">): string {
+    if (meta.channel === "PHONE") return meta.price ? `cena ${formatMoney(meta.price.amount)} (telefonicky)` : "cena (telefonicky)";
+    return meta.contents
+        .map((c) => {
+            if (c === "PRICE" && meta.price) return `cena ${formatMoney(meta.price.amount)}`;
+            if (c === "DESIGN" && meta.designs?.length) {
+                return `návrh ${meta.designs.map((d) => d.label ?? d.url ?? "").filter(Boolean).join(", ")}`.trim();
+            }
+            return OFFER_CONTENT_LABEL[c];
+        })
+        .join(" + ");
+}
+
 // Čitateľný text do Activity.note, aby história nepotrebovala lúštiť meta.
 export function offerNote(meta: Pick<OfferMeta, "channel" | "contents" | "price" | "designs">): string {
     if (meta.channel === "PHONE") {
         return meta.price ? `Cena telefonicky: ${formatMoney(meta.price.amount)}` : "Cena telefonicky";
     }
-    const parts = meta.contents.map((c) => {
-        if (c === "PRICE" && meta.price) return `cena ${formatMoney(meta.price.amount)}`;
-        if (c === "DESIGN" && meta.designs?.length) {
-            return `návrh ${meta.designs.map((d) => d.label ?? d.url ?? "").filter(Boolean).join(", ")}`.trim();
-        }
-        return OFFER_CONTENT_LABEL[c];
-    });
     const priceNote = meta.contents.includes("PRICE") && meta.price?.note ? `\n${meta.price.note}` : "";
-    return `Poslali sme: ${parts.join(" + ")}${priceNote}`;
+    return `Poslali sme: ${offerSummary(meta)}${priceNote}`;
+}
+
+// Posledné, čo klient od nás dostal (platné záznamy, v poradí compareOffers). Zobrazuje sa pri „Naposledy",
+// aby po ďalšom hovore nezmizlo, že čakáme, kým si pozrú návrh / cenu (round 2 §2d).
+export function lastOfferOf(rows: OfferRow[]): { text: string; at: string } | null {
+    // Spätne doplnené staré odoslania sa tu nezobrazujú – „Naposledy" je o nedávnom kontakte (§2c 5.3).
+    const valid = rows.filter((r) => r.revertedAt === null && !r.meta.historical).sort(compareOffers);
+    const last = valid[valid.length - 1];
+    return last ? { text: offerSummary(last.meta), at: offerInstant(last.meta, last.createdAt).toISOString() } : null;
 }
 
 // Kedy to klient dostal ako okamih: dnešné (a včasné) záznamy nesú presný čas zápisu, spätné len deň.
@@ -146,6 +164,42 @@ export function clientKnowledge(k: KnowledgeInput): Record<OfferContent, Knowled
     };
 }
 
+// Odtlačok obsahu odoslania pre idempotentné opakovanie: ten istý kľúč musí niesť ten istý obsah.
+export function offerFingerprint(x: {
+    channel: OfferChannel;
+    contents: readonly string[];
+    sentOn: string;
+    historical: boolean;
+    designIds?: readonly string[];
+}): string {
+    return JSON.stringify([x.channel, [...x.contents].sort(), x.sentOn, x.historical, [...(x.designIds ?? [])].sort()]);
+}
+
+export function offerFingerprintOfMeta(meta: unknown): string {
+    const m = parseOfferMeta(meta);
+    return m
+        ? offerFingerprint({ channel: m.channel, contents: m.contents, sentOn: m.sentOn, historical: m.historical, designIds: m.designs?.map((d) => d.id) })
+        : "";
+}
+
 export function isValidSentOn(value: string, today: string): boolean {
     return isValidBusinessDate(value) && value <= today;
 }
+
+// „Naposledy" = posledný SKUTOČNÝ kontakt s klientom. Úpravy (cena, krok), požiadavky ani audit sem nepatria.
+export const LAST_TOUCH_TYPES = ["CALL", "CLIENT_REPLIED", "SMS_SENT", "OFFER_SENT", "NOTE", "QUOTE_SENT", "EMAIL_SENT", "DESIGN_SENT"] as const;
+
+// Čo potrebuje dialóg „Čo sme poslali" – dodá ho detail aj riadok zoznamu (dialóg sa otvára na mieste, round 2 §2d).
+export type OfferDialogDeal = {
+    id: string;
+    revision: number;
+    owner: { id: string; firstName: string } | null;
+    price: number | null;
+    priceNote: string | null;
+    nextActionKind: NextActionKind | null;
+    nextActionAt: string | null;
+    offers: KnowledgeInput & {
+        legacy: { quoteSentAt: string | null; aboutUsSentAt: string | null; priceDisclosed: boolean };
+    };
+    designs: { id: string; label: string | null; url: string | null; trackedUrl: string | null; sentAt: string | null }[];
+};

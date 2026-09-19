@@ -26,7 +26,7 @@ import type { Schedule } from "@/lib/domain/schedule";
 // aj keď si používateľ zvolí iný krok než predvolený.
 //
 // Do histórie ide to, čo sa naozaj stalo (round 2 §2c 9a.3): hovor = CALL, odpísali = CLIENT_REPLIED, SMS = SMS_SENT,
-// „bez kontaktu" = len zmena kroku. „Poslali sme ponuku" otvára dialóg „Čo sme poslali" (v detaile obchodu).
+// „bez kontaktu" = len zmena kroku. „Poslali sme ponuku" otvára dialóg „Čo sme poslali" na mieste.
 //
 // Na telefóne je to drawer, na PC dialóg (ResponsiveSheet). Prvé hovory (telesales) majú vlastnú ponuku –
 // tam je zdvihnutie implicitné, preto majú vlastný komponent CallDrawer.
@@ -40,6 +40,8 @@ export type InteractionTarget = {
     revision: number;
     noAnswerStreak?: number;
     price: number | null;
+    priceNote?: string | null;
+    lastOffer?: { text: string; at: string } | null;
     lastActivity: { type: keyof typeof ACTIVITY_LABEL; outcome: CallOutcome | null; note: string | null; at: string } | null;
     openRequests: { id: string; kind: DealRequestKind }[];
 };
@@ -115,28 +117,32 @@ export default function InteractionSheet({
     caps,
     onClose,
     onRecordOffer,
+    replan,
 }: {
     target: InteractionTarget | null;
     caps: DealCapabilities;
     onClose: () => void;
-    // V detaile otvorí dialóg priamo; v zozname sa prejde do detailu (?zaznam=ponuka).
+    // „Zmeniť krok" v detaile: rovno obrazovka ďalšieho kroku, predvyplnená, ako „bez kontaktu – len naplánovať".
+    replan?: { kind: FollowUpNextKind; date: string; time: string; note: string };
+    // Otvorí dialóg „Čo sme poslali" (zoznam aj detail ho majú po ruke – round 2 §2d).
     onRecordOffer?: () => void;
 }) {
     const router = useRouter();
     const [pending, start] = useTransition();
-    const [step, setStep] = useState<Step>("contact");
-    const [contact, setContact] = useState<Contact>("ANSWERED");
+    const [step, setStep] = useState<Step>(replan ? "next" : "contact");
+    const [contact, setContact] = useState<Contact>(replan ? "NONE" : "ANSWERED");
     const [reply, setReply] = useState<string | null>(null);
-    const [kind, setKind] = useState<FollowUpNextKind>("CALL");
-    const [date, setDate] = useState("");
-    const [time, setTime] = useState("");
-    const [note, setNote] = useState("");
+    const [kind, setKind] = useState<FollowUpNextKind>(replan?.kind ?? "CALL");
+    const [date, setDate] = useState(replan?.date ?? "");
+    const [time, setTime] = useState(replan?.time ?? "");
+    const [note, setNote] = useState(replan?.note ?? "");
     const [reason, setReason] = useState("");
     const [requestKind, setRequestKind] = useState<DealRequestKind>("PRICE");
     const [requestNote, setRequestNote] = useState("");
     const [idempotencyKey, setIdempotencyKey] = useState(newKey);
     const [toldPrice, setToldPrice] = useState(false);
     const [toldAmount, setToldAmount] = useState(target?.price != null ? String(target.price) : "");
+    const [toldNote, setToldNote] = useState<string | null>(null); // null = neupravené (pri tej istej sume ostane rozpis)
 
     if (!target) return null;
     const D = target;
@@ -146,7 +152,10 @@ export default function InteractionSheet({
     const toldAmountNumber = toldAmount.trim() === "" ? null : Number(toldAmount.replace(",", "."));
     const toldValid = toldAmountNumber !== null && Number.isFinite(toldAmountNumber) && toldAmountNumber >= 0;
     // Cena povedaná v hovore – len pri „dovolal/a som sa"; rozpis sa nemení (note sa neposiela).
-    const phonePrice = contact === "ANSWERED" && toldPrice && toldValid && toldAmountNumber !== null ? { amount: toldAmountNumber } : undefined;
+    const phonePrice =
+        contact === "ANSWERED" && toldPrice && toldValid && toldAmountNumber !== null
+            ? { amount: toldAmountNumber, ...(toldNote !== null ? { note: toldNote.trim() || null } : {}) }
+            : undefined;
     const dateMissing = stepOption?.date === "required" && !date;
 
     function handle(r: { success: true } | ActionError, ok: string, retry?: () => void) {
@@ -258,6 +267,11 @@ export default function InteractionSheet({
                     {D.noAnswerStreak && D.noAnswerStreak > 1 ? ` · ${D.noAnswerStreak}. pokus` : ""}
                 </span>
             )}
+            {D.lastOffer && D.lastActivity?.type !== "OFFER_SENT" && (
+                <span>
+                    · Odoslané: {D.lastOffer.text} {businessDayMonth(new Date(D.lastOffer.at))}
+                </span>
+            )}
             {D.openRequests.map((r) => (
                 <span key={r.id}>· Požiadavka: {REQUEST_KIND_LABEL[r.kind]}</span>
             ))}
@@ -356,13 +370,9 @@ export default function InteractionSheet({
                                     🗓️ Bez kontaktu – len naplánovať…
                                 </Button>
                                 <div className="my-2 h-px bg-border" />
-                                {onRecordOffer ? (
+                                {onRecordOffer && (
                                     <Button variant="outline" className={big} disabled={pending || !canWork} onClick={onRecordOffer}>
                                         📨 Poslali sme ponuku…
-                                    </Button>
-                                ) : (
-                                    <Button asChild variant="outline" className={big} disabled={pending || !canWork}>
-                                        <Link href={`${detailHref}?zaznam=ponuka`}>📨 Poslali sme ponuku…</Link>
                                     </Button>
                                 )}
                                 <Button
@@ -423,15 +433,24 @@ export default function InteractionSheet({
                                                 {toldPrice && D.price != null && toldAmount === String(D.price) ? ` ${formatMoney(D.price)}` : ""}
                                             </span>
                                         </label>
-                                        {toldPrice && (D.price == null || toldAmount !== String(D.price)) && (
-                                            <Input
-                                                data-vaul-no-drag
-                                                inputMode="decimal"
-                                                placeholder="Aká suma zaznela (€)"
-                                                value={toldAmount}
-                                                onChange={(e) => setToldAmount(e.target.value)}
-                                                className="text-[16px]"
-                                            />
+                                        {toldPrice && (
+                                            <>
+                                                <Input
+                                                    data-vaul-no-drag
+                                                    inputMode="decimal"
+                                                    placeholder="Aká suma zaznela (€)"
+                                                    value={toldAmount}
+                                                    onChange={(e) => setToldAmount(e.target.value)}
+                                                    className="text-[16px]"
+                                                />
+                                                <Textarea
+                                                    data-vaul-no-drag
+                                                    placeholder="Rozpis, ak zaznel (nepovinné)"
+                                                    value={toldNote ?? (D.price != null && toldAmount === String(D.price) ? (D.priceNote ?? "") : "")}
+                                                    onChange={(e) => setToldNote(e.target.value)}
+                                                    className="min-h-[52px] text-[16px]"
+                                                />
+                                            </>
                                         )}
                                     </div>
                                 )}

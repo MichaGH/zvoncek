@@ -3,8 +3,7 @@
 Status: **Waves 1, 2, 3a and 3b IMPLEMENTED on the test branch (2026-09-18); waves 3–5 not started.** Wave 3 (manager
 tasks) is designed in `wave-3-task-proposal-final.md` (§2b). Decisions below are settled unless
 §6 says otherwise. Wave 1 changed application code only – no schema or data change (see `context/domain/db-changes.md`). It collects Michal's feedback after using the shipped round-1 feature
-(`context/features/01-salesrep/planning.md` rev. 4, implemented 2026-09-17; its independent review of the same day found
-R-01…R-06, all fixed with regression tests `r01…r06` in `prisma/backfill/check-concurrency.ts`)
+(`context/features/01-salesrep/planning.md` rev. 4, implemented 2026-09-17, reviewed in `context/features/01-salesrep/revision.md`)
 and turns each complaint into a decision with options, cost and risk.
 
 Audience: Michal (decision owner) first, coding agents second. Read `AGENTS.md` and `context/app-workflow.md` first.
@@ -17,11 +16,11 @@ calendar. Everything proposed below must fit those rules; where an item touches 
 
 Item ids: **D-xx** = design decision, **B-xx** = bug/small fix, **S-xx** = schema change.
 
-**Round-1 requests are replaced by wave-3 manager tasks (2026-09-19).** Waves 1–2 built on the round-1 requests
+**Requests / "tickets" are gone from this design (2026-09-19).** Waves 1–2 built on the round-1 requests
 (`DealRequest`, the "Požiadavky" pill, the requests card). Wave 3 replaces them with **manager tasks with a step lock**;
 the only design for that is `context/features/01-salesrep/wave-3-task-proposal-final.md` (situations, reasons, rejected
 alternatives, rules). Where this file still names requests, it describes what waves 1–2 built, marked as such; nothing
-here is a requirement for requests. Later ideas: `context/features/backlog.md`.
+here is a requirement for requests or tickets. Later ideas: `context/features/backlog.md`.
 
 ---
 
@@ -156,7 +155,7 @@ pill a count — `wave-3-task-proposal-final.md` §7.)
 
 - **`Na dnes`** is the new pill and carries the whole value of the old board: due today, overdue, woken from snooze,
   missing a next step, missing a date. Defined once in SQL next to the existing `PIPELINE_RANK_SQL` (which computes
-  exactly this ranking after the round-1 ordering fix R-02, test `r02PipelineOrder`), so the list and the badge cannot disagree.
+  exactly this ranking after the R-02 fix), so the list and the badge cannot disagree.
 - **Default landing:** `Na dnes`, for both roles, with `owner = me`.
 - The owner select is rendered only when the viewer's scope has more than one option.
 - **Desktop = the existing table**; the actions cell on the right gets `📞 tel:` + `i` (D-03). **Mobile = the current
@@ -569,7 +568,7 @@ wherever they differ.
 **Why** (task doc §1a–§1c): using waves 1–2 exposed that the round-1 requests did three jobs at once — a work item, a
 state marker that swallowed the deal, and an implied handover — and were created and closed automatically. The pill
 counted an outbox, an open request hid the rep's due work, and the note rule differed between two creation paths. The
-first wave-3 design (a reshaped request object with a parked `WAITING_FOR_MANAGER` step, an inbox with Pre mňa / Od mňa / Vybavené, a
+first wave-3 design (tickets with a parked `WAITING_FOR_MANAGER` step, an inbox with Pre mňa / Od mňa / Vybavené, a
 comment thread, "two switches" resolution — the former D-16…D-22) and three later alternatives all failed on keeping
 the request and the step in sync; the task doc §1c says why each was dropped.
 
@@ -580,21 +579,19 @@ the request and the step in sync; the task doc §1c says why each was dropped.
   cenu"); the SR may still record contacts and sends, and may snooze / close / replan by cancelling the task in the same
   save;
 - the manager's inbox **"Pre mňa"**, the SR's **"Čakám na manažéra"**, a task card with messages; "Hotovo" delivers the
-  price (saved on the deal) or the návrh, the step becomes due, and "✓ od Michala" stays until the SR sends it (the
-  send records which result it used) or says "Neposielam";
+  price (saved on the deal) or the návrh, the step becomes due, and "✓ od Michala" stays until the SR sends it;
 - **handover** = a HANDOVER task the manager accepts or declines; **takeover** at any time; after either the SR loses
   access and keeps a **História** line (`DealOwnership`); transfers to another SR keep the task, transfers to a manager
-  end it (an open handover then counts as accepted);
+  close it;
 - **counters on every pill**, each computed by the same predicate as its list;
 - reopen is **not** a task (a later *request*, backlog BL-01); "Chcú objednať" is only a reply; the `ORDER` step,
   `DealRequest` and every automatic request writer are removed; deactivation is blocked while the user still owns open
   deals or holds tasks.
 
-Still wanted from the dropped first wave-3 design and carried into the task doc (§1d): takeover at any time with the rep
+Still wanted from the dropped ticket design and carried into the task doc (§1d): takeover at any time with the rep
 losing access, História ("prevzaté 18. 9. · Michal"), ownership history for statistics and future rep → rep transfers,
-counters on every pill, no automatic tasks, the ask text pre-filled from the last call note, "Chcú objednať" as an
-ordinary reply after which an explicit handover may follow. Schema: task doc §4 (S-08…S-11); what production receives
-is decided in `context/domain/db-changes.md`.
+counters on every pill, no automatic tasks, the ask text pre-filled from the last call note, ORDER treated as a
+handover. Schema: task doc §4 (S-08…S-11, additive towards production).
 
 ## 2c. Wave 3a design: what the client received — about us, cenník, price, návrh, SMS (decided 2026-09-18, reviewed four times)
 
@@ -1010,7 +1007,7 @@ The wave-3 task design keeps this: no automatic tasks at all (`wave-3-task-propo
    - "Odpísali" writes a new `ActivityType.CLIENT_REPLIED` (additive) with the reply
    - old rows stay as they are
 4. **Inbox (wave 3):** "Pre mňa" (tasks assigned to me) and "Čakám na manažéra" (my deals waiting on a task) — the
-   earlier three-tab inbox idea is dropped (`wave-3-task-proposal-final.md` §7).
+   earlier three-tab ticket inbox is dropped (`wave-3-task-proposal-final.md` §7).
 
 ### 10. Later, explicitly not in 3a (not scheduled)
 
@@ -1103,9 +1100,6 @@ idempotency replay, strict zod at every boundary, business-calendar day math, se
 
 ## 4. Schema changes
 
-Design history of this round's schema ideas. **The authoritative record of what test and production differ by is
-`context/domain/db-changes.md`**; before any production change it is compared with the live database.
-
 | id | Change | For | Risk |
 |---|---|---|---|
 | S-01 | `NextActionKind += ORDER` | D-10 | none (additive enum); removed again in wave 3 (task doc S-11) |
@@ -1116,11 +1110,8 @@ Design history of this round's schema ideas. **The authoritative record of what 
 | S-06 | *(rejected)* drop `Lead.lockedById` / `lockedAt` | D-14 | destructive; keep the columns |
 | S-07 | *(superseded)* addressed requests → `DealTask.assigneeId` in wave 3 | D-15 | — |
 
-The items of waves 1–3a were additive on test. Wave 3 removes test-only objects (`DealRequest`, `REQUEST_*`,
-`NextActionKind.ORDER`); it runs on a freshly wiped test database, and anything `db push` refuses goes through a
-reviewed SQL diff and `db execute` — never `--accept-data-loss` (`wave-3-task-proposal-final.md` §10). Production is
-changed from the measured live schema to the final target, as recorded in `context/domain/db-changes.md`, in a
-separately approved session.
+All accepted items are additive, so `prisma db push` on the test branch should be clean. Production keeps the
+`migrate diff` → review → `db execute` path from `AGENTS.md`, in a separately approved session.
 
 ## 5. Order of work — the merge is one atomic step
 
@@ -1157,7 +1148,7 @@ New checks wave 1 must add (to `prisma/backfill/check-concurrency.ts` or a dedic
 - a manager's `owner=<rep>` returns exactly that rep's list, in the same order;
 - every capability-gated action still fails server-side for a rep even when the UI hides it (crafted call);
 - the `Na dnes` SQL predicate agrees with `clientSection()` over every deal in the database (parity check, same pattern
-  as the `r02PipelineOrder` ordering parity test).
+  as the R-02 ordering parity test).
 
 ## 6. Still open
 

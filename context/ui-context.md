@@ -52,6 +52,7 @@ Conventions for building screens here. Behaviour lives in `context/app-workflow.
   ages in real time; do not assume every list does.
 - Filter state lives in the URL through `lib/domain/dealFilters.ts` (`parseDealParams` / `dealsHref`), so links and the
   server query cannot disagree. Changing a filter resets paging.
-- Filter pills with a count compute it with the same scope + owner filter as the list, so the number matches what a
+- Filter pills with a count compute it with the same predicate and filters as the list, so the number matches what a
   click shows. **Today only "Na dnes" and "Požiadavky" on the pipeline have counts**; counts on every pill are
-  `[WAVE 3]` (D-22 in `context/features/01-salesrep/round2-deal-workspace.md`). Do not add them outside that wave.
+  `[WAVE 3]` (`context/features/01-salesrep/wave-3-task-proposal-final.md` §7: one predicate per pill, shared by its
+  list and its count). Do not add them outside that wave.

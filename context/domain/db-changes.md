@@ -187,9 +187,12 @@ system. It only sets values, so it is repeatable.
 | Environment | Status |
 |---|---|
 | test | TEST — dry-run 28 leads + 5 designs, `--apply` committed 28 + 5, `--verify` OK |
-| production | **OWED** |
+| production | **NOT IN THE CHOSEN FINAL ROUTE** — §3.3 replaces this temporary test-only legacy step |
 
-### 3.2 Production order for wave 3a
+### 3.2 Original legacy-layer production order — superseded by §3.3
+
+These steps describe the currently implemented test design, **not** the chosen final production route. Retained for
+the test–production delta audit until the revised migration is implemented and verified on test.
 
 1. Round 1 (§1) and wave 2 (§2) first — `OFFER_SENT` code assumes the round-1 schema.
 2. Schema (enum values **before** any code that writes them; not used in the transaction that adds them).
@@ -197,6 +200,130 @@ system. It only sets values, so it is repeatable.
 4. Deploy the new code.
 5. Run `--apply` **again** right after the deploy (old code may have written a send between steps 3 and 4), then
    `--verify` must report 0 left.
+
+### 3.3 DECIDED TARGET — translate old sends, then remove the old send columns (NOT applied)
+
+**Decision (Michal, 2026-09-18):** do not ship the permanent "?" legacy layer. Translate the live database's old
+email, price and návrh facts into canonical `OFFER_SENT` records, verify them on a fresh **duplicate of production**,
+then remove obsolete send columns in a separately reviewed, non-additive contraction. This is a **rollout plan, not
+part of the verified test–production delta above**. The code and test schema still implement the legacy layer today;
+`prisma/backfill/2026-09-offer-migrate.ts` is a prototype and **must not be run with `--apply` on the production clone
+or production in its present form**. The test-only dry-run (2026-09-18, a guessed 2026-09-01 cenník cutoff) found 28
+deals, 27 proposed events and 5 deals with exceptions; these numbers say nothing reliable about live production.
+
+#### Live-data meanings and target mapping to confirm on the duplicate
+
+Michal's description of live data is the business input below, **not a measured inventory**. Produce a read-only
+inventory of every combination, including deleted/closed leads and send evidence outside the deal stage, before
+approving any conversion. `NULL`/false means "not recorded/marked", not proof that nothing was sent.
+
+| Live fact | Meaning under old code | Proposed canonical result / required decision |
+|---|---|---|
+| `Lead.aboutUsSentAt` and/or `EMAIL_SENT` | an email was marked sent; the generic activity could also mean another email | Confirm which were the initial "o nás" email. Create `EMAIL` + `ABOUT_US` only for confirmed sends; reconcile matching activity/field dates and use a field-only fallback only when no matching row exists. A mismatched date is an exception, not automatic deduplication. Do not convert routine replies as offer sends. |
+| Cenník sent to roughly the last 20 recipients | no dedicated old database flag | Review an **explicit set of old email/lead IDs and contents**, then add `PRICELIST` to the **same** email event. A global date cutoff or "last N" rule is not evidence. |
+| `Lead.price`, `priceNote` | today's editable internal price and breakdown | Keep as current price; **no send event merely because a price is present**. They are not historical snapshots. |
+| `Lead.quoteSentAt` / `QUOTE_SENT` | CP marked sent; old code allowed no amount, and undo cleared the field but kept the row | Convert only a confirmed real send to `EMAIL` + `PRICE`, with the amount from a trustworthy old activity note or a manager-confirmed amount. Reconcile field/activity dates; an undo, missing amount, multiple CPs, mismatched dates or disagreement with `priceDisclosed` needs an explicit per-event decision. |
+| `Lead.priceDisclosed = true` | "client knows a price", by any channel; Michal says that in live cases it was the exact calculated price | Reconcile against already-confirmed price sends. If it represents a **separate** disclosure, confirm amount, channel and business date; do not assume `PHONE`, current `Lead.price`, or the toggle's audit timestamp without review. False is not a new send. |
+| `Design` exists, `sentAt = NULL` | návrh exists but was not marked sent | Keep the Design, versions, tracker/token and all view events unchanged; create no `OFFER_SENT`. |
+| `Design.sentAt` and/or `Lead.designSentAt`; old `DESIGN_SENT` rows | návrh marked sent; toggles were reversible, and old `DESIGN_SENT` has no design ID | For each still-valid marked send, create `EMAIL` + `DESIGN` with the right Design ID and confirmed date. Resolve reverted sends, multiple designs, deleted designs and field-only `Lead.designSentAt` explicitly. Keep versions, links, tracker tokens and tracker-event history in place; a view is not proof of email contents. |
+
+This need not mean hand-editing hundreds of deals. After the duplicate's inventory, Michal may approve a **bulk rule**
+for the old initial emails and for `priceDisclosed = true` with a non-null matching price, if the old history and a
+sample support it. Only exceptions need per-record overrides. The roughly 20 cenník recipients still need an explicit
+identification; a cutoff can be used to *find candidates*, never as the final truth. A missing business date, amount
+or channel stays an exception until Michal chooses a documented representation. The old `priceNote` is not a proven
+historical breakdown, even if today's total matches.
+
+**Event identity matters.** If "o nás", cenník, calculated price and/or návrh went in **one email**, create **one**
+`OFFER_SENT` with all confirmed contents, not one row per old flag. Conversely, do not merge separate sends merely
+because they share a day. This preserves the first-email pricing experiment. Migrated historical deals stay out of that
+experiment even after their contents are reconstructed; select them by `meta.migrated`, not `hadLegacySends`.
+
+For each created row record `meta.migrated = true`, the original row/field IDs and confidence/manager decision in
+provenance. Preserve the original `QUOTE_SENT` / `EMAIL_SENT` / `DESIGN_SENT` and audit rows as read-only history; do not
+delete them just to remove the legacy UI. `createdAt` must remain the **migration recording time** and
+`meta.sentOn` the historical client-send day (`historical: true`); keep the original timestamp separately in provenance.
+Attribute an activity-backed send to its original actor. A field-only send has unknown actor and must be labelled as
+migration-attributed, not silently assigned to the deal's current owner. Preserve the old activity's `source` where
+there is one. Preserve `Lead.price` and `priceNote` unchanged. The detail history must present a converted old row as
+the **source of** its canonical event (or in an audit-only expansion), not as a second client send; otherwise every
+old email/CP/návrh appears twice to users and statistics.
+
+#### Prototype defects to fix before using the production duplicate
+
+`2026-09-offer-migrate.ts` currently guesses cenník from `--pricelist-from`; converts every `EMAIL_SENT` to about-us;
+forces `priceDisclosed` without a price event into `PHONE` at an audit timestamp/current price; creates separate rows
+for flags that may have been one email; assigns every new row to the current owner; writes old `createdAt` with
+`historical: false`; and ignores old designs if any newer `OFFER_SENT` mentions that ID. Its per-lead "any migrated
+row" shortcut can hide an incomplete conversion, while `skip` can make `--verify` report success despite unconverted
+data. It has no production-data reconciliation of counts and snapshots. Its endpoint confirmation is **not** a
+production denylist: providing the production endpoint as both arguments would allow `--apply`. It also currently
+depends on test-only `Design.legacySentAt`, which a fresh production clone does not have until that column is added.
+It excludes all leads with `pipelineEnteredAt = NULL` without reporting old send evidence there. Its `OFFER_SENT`
+meta parser validates shape but does not enforce cross-field rules (e.g. `PRICE` must have an amount, `DESIGN` must
+identify the intended design), so the migration must validate those itself. These are implementation blockers, not
+accepted migration assumptions.
+
+`recomputeOffers`, the list/detail and the `got_design` filter must use **only canonical events** after cutover and
+agree for a historical design with no Design row. Do not drop the old `Lead.designSentAt` until its replacement rule
+is implemented and checked (it remains a current summary column). Keep the ability to enter a genuinely backdated
+send manually, or state explicitly why that feature is removed; "historical" is not synonymous with "legacy layer".
+Replace legacy-only concurrency tests with conversion, correction, summary/list/filter parity, history de-duplication,
+idempotent rerun and
+multiple-design tests. The current W3a/W3b code is not yet compatible with the contracted schema.
+Before this feature reaches production, also fix the current idempotency fingerprints: `offerFingerprint` omits the
+price amount/note and follow-up choice/date; `logFollowUpAs` checks CALL replay by outcome only and every planning-only
+replay as `"plan"`. A retry with the same key but changed price or plan can be reported as saved without those
+changes. Add changed-payload/same-key cases to the concurrency checks.
+
+#### Required implementation and rehearsal order
+
+1. Record the final schema and data-safety proposal in the active feature design. Build a read-only inventory/report
+   against a **fresh production duplicate**, not production: old fields and activities, all cenník recipients,
+   same-email groupings, price amounts/dates/channels, undo sequences, designs with/without rows, tracker counts,
+   pre-deal/deleted leads, and existing new `OFFER_SENT` if any. Review an exception file with Michal; **zero
+   unclassified records** before apply. No fabricated amount, date, channel or email contents.
+2. Fix the script and new code on test. Use explicit source/event IDs and a reviewed mapping/overrides file, validate
+   its schema and unique source coverage, and make each event idempotent. Under the `Lead` lock, re-read and check the
+   expected source/revision before writing. Preserve old raw history. A `skip` is an explicit unresolved exception,
+   **not** a passing verification. Make the script refuse the production endpoint independently of CLI arguments.
+3. Rehearse the **entire rollout** on the duplicate from the actual production schema: round 1 schema → create the
+   routing team → round 1 backfill (§1), wave 2 schema (§2), the revised wave 3a additions, conversion,
+   recomputation, then the reviewed
+   non-additive contraction. The old one-time `2026-09-offer-legacy.ts` step is **not** part of the final route.
+   Avoid a `db push` that accepts a data-loss warning; review the explicit SQL and apply contraction only after
+   reconciliation. Test new app code against the contracted clone; do not open it to writes during the cutover.
+4. Reconcile **per lead and in aggregate**: each old real send has exactly one canonical representation (or a signed
+   documented exception); no phantom sends; correct contents/grouping/price snapshots/actors/business dates; Lead
+   `offer*` and `designSentAt`, each `Design.sentAt`, list/detail/filter results agree; tracker token, versions and
+   event counts are unchanged; current prices and unrelated leads/activities are unchanged; no duplicate events on a
+   second run. Verify a sample of every combination in the UI and run §4 checks, including new migration tests.
+5. Only after the duplicate passes: separately approve the production window. Take a backup and restore-point branch,
+   compare the *live* schema with the rehearsed source, freeze writes, run the **same reviewed sequence**, verify the
+   same reconciliation, deploy compatible code, smoke-test, then reopen writes. If any gate fails, keep writes closed
+   and restore/switch back using the rehearsed rollback procedure. Never run this from a routine dev session.
+
+**Target schema, not yet in the current delta:** the following are planned contraction IDs; **none has been applied
+on test** and none belongs in the "Non-additive changes owed" line yet. Add the verified exact delta there by ID only
+after test application. The reviewed SQL must drop these only after conversion and reconciliation:
+
+| Planned ID | Production column | Treatment |
+|---|---|---|
+| P-01 | `Lead.quoteSentAt` | remove after every real/undone CP is classified |
+| P-02 | `Lead.aboutUsSentAt` | remove after email sends are classified |
+| P-03 | `Lead.priceDisclosed` | remove after every true flag is represented or documented as an exception |
+
+`hadLegacySends`, `legacySendsReviewedAt`, and `Design.legacySentAt` exist only on today's test schema; remove them
+from the final test target and do **not** add them to production. Keep `Lead.price`/`priceNote`,
+`Lead.designSentAt`, `Design.sentAt`, Design/versions/trackers/events, and historical raw activities. Old activity
+enum values can remain because raw rows remain. Do not remove unrelated legacy columns such as `Lead.designUrl` in
+this rollout.
+
+**Code/documentation cutover:** remove `legacyUnreviewed`, the "?" state, the "Neoverené" pill/panel, frozen-field
+reads, `confirmLegacyReviewedAs`, legacy design-date baselining and the one-time legacy script; update
+`offers.ts`, `offerMutations.ts`, `commands/offers.ts`, pipeline queries/filters, offer/dialog/list/detail/design UI,
+`database-map.md`, `operations.md`, `app-workflow.md` and the statistics rule together. Preserve correction and
+backdated-entry behaviour that is still useful. The tracker ingest and existing design rows are not rebuilt.
 
 ## 4. Verification before production rollout
 
@@ -208,7 +335,7 @@ system. It only sets values, so it is repeatable.
 | section classification | `npx tsx prisma/backfill/check-client-sections.ts` |
 | concurrency + scope | `npx tsx prisma/backfill/check-concurrency.ts --expect-endpoint <dev endpoint>` |
 | backfill integrity | `npx tsx prisma/backfill/check-backfill-delta.ts …` and the backfill's own `--verify` |
-| wave 3a legacy step | `npx tsx prisma/backfill/2026-09-offer-legacy.ts … --verify` → 0 left |
+| wave 3a legacy step | current test implementation only; replace with the conversion/reconciliation checks in §3.3 before rollout |
 
 Re-check the target endpoint and compare the actual production schema before any production command. A Git schema diff
 alone does not establish the live database state.

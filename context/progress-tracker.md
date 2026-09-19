@@ -282,7 +282,10 @@ call (three CALL rows, not two). The test was corrected, not the code.
 Still open: the human click-through (now also worth checking the desktop dialog and the three-step flow on a phone),
 then wave 3 (notes, S-02) and wave 4 (pricing, S-03).
 
-## Round 2 – wave 3 designed, not implemented (2026-09-18)
+## Round 2 – wave 3 designed, not implemented (2026-09-18) — SUPERSEDED
+
+> **SUPERSEDED on 2026-09-19** by the manager-task design `context/features/01-salesrep/wave-3-task-proposal-final.md`.
+> The ticket / `WAITING_FOR_MANAGER` design below was dropped; this entry is kept only as history.
 
 Using waves 1–2 exposed a modelling mistake: `DealRequest` was doing three jobs at once (ticket, state marker, implied
 handover). Symptom Michal hit: as SALES_REP, four first calls produced **"Požiadavky (4)"** on his own screen, the deal
@@ -397,6 +400,99 @@ Not done / still open:
   price edit, date picker, návrh copy → paste into Gmail shows the clean address), "Povedal/a som cenu", SMS,
   "Opraviť", the legacy panel + "Doplniť starý záznam" + "Hotovo", the new pills and list icons.
 - Production still owes round 1, wave 2 and wave 3a (`context/domain/db-changes.md`); nothing was touched there.
-- Wave 3 (tickets) is next: remove the automatic DESIGN ticket and all automatic ticket closing in one change (§2c §6,
+- Wave 3 (manager tasks — `wave-3-task-proposal-final.md`) is next: remove the automatic DESIGN ticket and all automatic ticket closing in one change (§2c §6,
   §9a); team sanity warnings are listed as a later item in §2c §10.
+
+## Round 2 – wave 3b: deal detail rework (DONE on the test branch, 2026-09-18)
+
+Design: `context/features/01-salesrep/round2-deal-workspace.md` §2d (from Michal's testing of 3a). Backup before any
+change: local commit `1dae205` ("Backup wave 3a … before 3b detail rework", not pushed). No schema change planned.
+
+Log:
+
+- Design and notes recorded in §2d (incl. two later items: a sort choice for the pipeline, and "Pozreli, chcú zmeny"
+  needing a manager path in wave 3). Backup commit `1dae205`.
+- **No redirect:** list rows carry `dialog` (`OfferDialogDeal` in `lib/domain/offers.ts`: price, breakdown, what the
+  client got, designs with the copy link); `DealList` opens `OfferSentDialog` in place. The `?zaznam=ponuka` path is
+  removed.
+- **Follow-up date:** `recordOfferSentAs` accepts `followUpOn` (≥ today, only with `followUp`); the dialog shows a date
+  field (default +7 days).
+- **Detail:** `NextActionEditor` deleted; new "Ďalší krok · Naposledy" card (two tiles, one "Zaznamenať kontakt");
+  "Zmeniť krok" opens the action sheet in a `replan` mode (next-step screen, pre-filled, contact `NONE`). Quick events
+  and the free note field removed. The now-unused actions `setNextAction`, `setDealNextAction`, `addBusinessNote`,
+  `addDealNote` deleted (their commands stay for the check scripts).
+- **"Bez kontaktu" keeps the deal's status** (a snoozed deal stays snoozed when re-planned) — without this, "Zmeniť
+  krok" on a snoozed deal would have woken it.
+- **Price edit popup** replaces the inline edit (3a's inline form kept stale values after a save — the reported bug).
+- Checks (test branch `…nhww8x`): `tsc` clean; `eslint` only the known `MobileNav.tsx` error (unused imports left in
+  `lib/actions/pipeline/index.ts` removed); `next build` OK; business time 33/33 + 33/33 `TZ=UTC`; client sections 19/19;
+  concurrency **83/83** (80 + W3b-A replan keeps SNOOZED and writes no call, W3b-B follow-up day used / past day and
+  day-without-follow-up refused, W3b-C list row carries the dialog data); HTTP role checks **43/43** — the `?zaznam`
+  assertion was replaced by two layout checks. One of them failed on its first run because it looked for the quick-event
+  text, which still exists as an old history note on that test deal; the assertion was changed to look for the removed
+  section's own heading and placeholder, not the code.
+- Docs: `context/domain/operations.md`, `context/app-workflow.md` (§5, §5a, §7), feature status.
+
+Still open: human click-through of the new card, "Zmeniť krok", the price popup, the follow-up date field and the
+in-place dialog from the list.
+
+Follow-up after Michal's testing (2026-09-18, same wave):
+- **The last send stays visible:** after a later call, "Naposledy" no longer hides that we are waiting on a návrh / price.
+  The list row, the detail's "Naposledy" tile and the action sheet header show "Odoslané: návrh smrek1 · 15. 9."
+  (`offerSummary`, `lastOfferOf` in `lib/domain/offers.ts`; list rows get `lastOffer` from one query per page; detail
+  gets `lastOffer`).
+- **No browser popups in the new flows:** the manager's "not your deal" question in "Čo sme poslali" and "Hotovo – toto
+  je všetko" are now in-app confirmations. Older `window.confirm` uses elsewhere (user deactivation, batch release,
+  call revert, contact delete, mark WON) are unchanged.
+- Checks: `tsc` clean; `eslint` only the known `MobileNav.tsx` error; `next build` OK; concurrency **84/84** (+ W3b-D:
+  list and detail keep showing the last send after a later call). HTTP role checks not re-run for this small UI change.
+
+Third external review of 3a/3b (ChatGPT, read-only) — all 8 findings checked against the code, all real, all fixed:
+- R3-1 "Čo sme poslali" offered to replace the step even when the ticked contents did not complete it (e.g. step
+  "Poslať cenu", only the cenník ticked). The default now follows the ticked contents; the user can still choose.
+- R3-2 a design marked sent by old code after the one-time step, then sent again by the new system, lost its old date.
+  `recordOffer` now baselines such a design's date into `legacySentAt` before the first new send.
+- R3-3 the list's page fetch did not re-apply the scope (a deal transferred between the two queries could appear once).
+  One-line fix: the page fetch uses the scope too.
+- R3-4 a legacy lead with `Lead.designSentAt` but no `Design` row showed "návrh" as not sent. The one-time step counts it
+  as legacy evidence, and list/detail fall back to `Lead.designSentAt` when the lead has no design rows (on test the
+  step found no such lead — dry-run 0 new).
+- R3-5 `activityReplay` ignored the content: the same key with different contents returned a false "saved". Now a
+  content fingerprint is compared (send contents/date/designs; SMS text; reply outcome+text) → `IDEMPOTENCY_CONFLICT`.
+  The W3a-A check that accepted the old behaviour was changed to expect the conflict.
+- R3-6 a historical entry showed up as "Odoslané" under "Naposledy"; and "Naposledy" counted any business row (e.g. a
+  ticket). Now "Naposledy" = real client contact only (`LAST_TOUCH_TYPES`), and historical sends are excluded.
+- R3-7 deleting a sent design left `Lead.designSentAt` stale. `removeDesignAs` now recomputes.
+- R3-8 a phone price with a new amount inherited the old breakdown. A new amount without a breakdown clears it, the
+  same amount keeps it, and the sheet has a breakdown field. The phone price row in the history reads "↳ Cena povedaná
+  v hovore" under its call.
+- Checks: `tsc` clean; `eslint` only the known `MobileNav.tsx` error; `next build` OK; concurrency **90/90** (84 + R3-2,
+  R3-4, R3-5, R3-6, R3-7, R3-8; R3-1 is a UI default and R3-3 a query filter, not separately tested);
+  `2026-09-offer-legacy.ts` dry-run 0 new. HTTP role checks not re-run for these changes.
+- Recorded in §2d: the "Naposledy" definition, the read race, and the later decision whether to fully migrate old sends
+  into `OFFER_SENT` instead of keeping a legacy layer (possibly non-additive).
+
+Prepared (not applied): **full migration of old sends instead of the legacy layer** (Michal's proposal after the
+reviews kept finding legacy edge cases):
+- New script `prisma/backfill/2026-09-offer-migrate.ts` (dry-run + review CSV, overrides JSON for anything it cannot
+  decide, `--apply` guarded like the other backfills, `--verify`). `meta.migrated` added to the `OFFER_SENT` meta schema
+  (optional; nothing writes it yet).
+- Dry-run on test (`--pricelist-from 2026-09-01`): 28 deals, 27 events converted automatically, 5 deals need a
+  decision. Nothing written.
+- Rules, production order, the list of legacy code to delete and the schema consequence (additive if the legacy columns
+  are simply not added to production; dropping the old send fields would be non-additive) are in
+  `context/domain/db-changes.md` §3.3; pointers in the feature §2d, `operations.md`, `ai-workflow-rules.md`.
+- `tsc` clean; `eslint` on the script clean. The legacy layer is unchanged until Michal decides.
+
+## Test database reset (2026-09-18)
+
+At Michal's request the test branch was wiped and reseeded before designing wave 3, so old test "požiadavky" do not
+shape the design. New script `prisma/dummySeeds/seedTestWorld.ts`: refuses unless (1) `--confirm` equals the
+`DATABASE_URL` endpoint ending in the test suffix, (2) that endpoint differs from the commented-out production URL in
+`.env` (compared in memory, nothing printed), (3) the schema has test-only objects (`DealRequest`,
+`Lead.hadLegacySends`). Pre-check: current `…nhww8x`, production `…m0xyun`, different. Then `TRUNCATE` of all app tables
+and a fresh world built **through the app's own commands** (claims, first calls, follow-ups, sends, a design, WON):
+48 contacts, 12 deals (t_michal 3, t_rep/Jana 6, sales/Samo 3), 5 sends, 0 tickets; two routing setups (Timea →
+Michal via "Obchod", Tereza → Jana via "Tím Jana"). All accounts: password123. Round-1 backfill `--verify`: clean,
+0 CONFLICT. The concurrency suite creates its own fixtures and is unaffected; the HTTP role script's accounts exist.
 

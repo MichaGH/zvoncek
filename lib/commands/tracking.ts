@@ -4,6 +4,7 @@ import { withLockTx, type Tx } from "@/lib/access/locks";
 import type { AccessUser } from "@/lib/access/user";
 import { createBusinessActivity } from "@/lib/activityLog";
 import { bumpLeadOnce } from "@/lib/domain/revision";
+import { recomputeOffers } from "@/lib/domain/offerMutations";
 import { can } from "@/lib/permissions";
 import { generateToken } from "@/lib/tracking/tokens";
 
@@ -111,5 +112,7 @@ export const updateDesignMetaAs = (
 export const removeDesignAs = (user: AccessUser, designId: string) =>
     withDesign(user, designId, "removeDesign", async (tx, design) => {
         await tx.design.update({ where: { id: design.id }, data: { deletedAt: new Date() } });
+        // Zmazaný návrh už nie je „posledný poslaný" – súhrn obchodu sa prepočíta (a zvýši revíziu raz).
+        await recomputeOffers(tx, design.leadId);
         await bumpLeadOnce(tx, design.leadId);
     });

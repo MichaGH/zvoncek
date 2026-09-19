@@ -3,8 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Check, Copy } from "lucide-react";
-import type { NextActionKind } from "@/app/generated/prisma/enums";
+import { AlertTriangle, Check, Copy } from "lucide-react";
 import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { copyEmailLink } from "@/components/shared/copyEmailLink";
 import { Button } from "@/components/ui/button";
@@ -15,8 +14,7 @@ import { recordOfferSent } from "@/lib/actions/pipeline";
 import { NEXT_ACTION_LABEL } from "@/lib/dictionaries";
 import { addBusinessCalendarDays, businessDate, businessDayMonth, businessDayStart } from "@/lib/domain/businessTime";
 import { displayUrl } from "@/lib/domain/designLinks";
-import { formatMoney, legacyUnreviewed, type OfferContent } from "@/lib/domain/offers";
-import type { DealDetailData } from "@/lib/queries/pipeline";
+import { formatMoney, legacyUnreviewed, type OfferContent, type OfferDialogDeal } from "@/lib/domain/offers";
 
 // „Čo sme poslali" (round 2, wave 3a – §2c 5.2/5.3). Jedno miesto pre každé odoslanie ponukových materiálov.
 // Predvyplnenie je len návrh: „o nás" a „cenník" sa zaškrtnú, len ak ešte nešli (na neoverenom starom obchode nikdy),
@@ -24,18 +22,12 @@ import type { DealDetailData } from "@/lib/queries/pipeline";
 // Režim „historical" = doplnenie starého odoslania s pôvodným dátumom: bez ďalšieho kroku a bez vybavenia požiadaviek.
 
 const REFRESH_CODES = new Set(["NOT_FOUND", "STALE", "DEAL_CLOSED", "IDEMPOTENCY_CONFLICT", "UNAUTHENTICATED"]);
-const SEND_STEPS: NextActionKind[] = ["SEND_EMAIL", "SEND_QUOTE", "SEND_DESIGN"];
 
 function newKey() {
     return typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
-
-export type OfferDialogDeal = Pick<
-    DealDetailData,
-    "id" | "revision" | "owner" | "price" | "priceNote" | "nextActionKind" | "nextActionAt" | "offers" | "designs"
->;
 
 export default function OfferSentDialog({
     deal,
@@ -68,11 +60,14 @@ export default function OfferSentDialog({
     const [editPrice, setEditPrice] = useState(historical || deal.price == null);
     const [amount, setAmount] = useState(historical || deal.price == null ? "" : String(deal.price));
     const [priceNote, setPriceNote] = useState(historical ? "" : (deal.priceNote ?? ""));
-    // Nahradiť krok len vtedy, keď toto odoslanie dokončuje aktuálnu úlohu „poslať…" (alebo žiadny krok nie je).
-    const completesStep = !deal.nextActionKind || SEND_STEPS.includes(deal.nextActionKind);
-    const [followUp, setFollowUp] = useState(completesStep);
+    // Voľba používateľa; kým nevybral, predvolí sa podľa toho, či zaškrtnutý obsah naozaj dokončuje aktuálnu úlohu.
+    const [followUpChoice, setFollowUp] = useState<boolean | null>(null);
+    const [followUpOn, setFollowUpOn] = useState(""); // prázdne = o 7 dní od odoslania
     const [copied, setCopied] = useState<string | null>(null);
     const [idempotencyKey, setIdempotencyKey] = useState(newKey);
+    // Manažér na cudzom obchode: najprv potvrdenie v tom istom okne (nie prehliadačový confirm).
+    const [confirmOwner, setConfirmOwner] = useState(false);
+    const foreignDeal = isManager && deal.owner !== null && deal.owner.id !== viewerId && !historical;
 
     const contents: OfferContent[] = [
         ...(aboutUs ? (["ABOUT_US"] as const) : []),
@@ -80,11 +75,21 @@ export default function OfferSentDialog({
         ...(withPrice ? (["PRICE"] as const) : []),
         ...(designIds.length ? (["DESIGN"] as const) : []),
     ];
+    // „Poslať cenu" dokončí len cena, „Poslať návrh" len návrh, „Poslať úvodný email" o nás / cenník.
+    // Iný krok (napr. naplánovaný hovor) sa predvolene ponecháva; bez kroku sa ponúkne follow-up.
+    const completesStep =
+        !deal.nextActionKind ||
+        (deal.nextActionKind === "SEND_QUOTE" && withPrice) ||
+        (deal.nextActionKind === "SEND_DESIGN" && designIds.length > 0) ||
+        (deal.nextActionKind === "SEND_EMAIL" && (aboutUs || pricelist));
+    const followUp = followUpChoice ?? completesStep;
     const amountNumber = amount.trim() === "" ? null : Number(amount.replace(",", "."));
     const amountValid = amountNumber !== null && Number.isFinite(amountNumber) && amountNumber >= 0;
     const priceMissing = withPrice && editPrice && !amountValid;
     const dateInvalid = !sentOn || sentOn > today || (historical && sentOn >= today);
-    const followUpDate = businessDayMonth(businessDayStart(addBusinessCalendarDays(sentOn || today, 7)));
+    const defaultFollowUp = addBusinessCalendarDays(sentOn || today, 7);
+    const followUpDate = businessDayMonth(businessDayStart(followUpOn || defaultFollowUp));
+    const followUpInvalid = followUp && followUpOn !== "" && followUpOn < today;
     const current = deal.nextActionKind
         ? `${NEXT_ACTION_LABEL[deal.nextActionKind]}${deal.nextActionAt ? ` · ${businessDayMonth(new Date(deal.nextActionAt))}` : ""}`
         : "bez ďalšieho kroku";
@@ -102,13 +107,12 @@ export default function OfferSentDialog({
         } else toast.error("Schránka nie je dostupná");
     }
 
-    function save() {
-        if (isManager && deal.owner && deal.owner.id !== viewerId && !historical) {
-            const ok = window.confirm(
-                `Tento obchod vlastní ${deal.owner.firstName}. Poslal/a si to klientovi naozaj ty?\n\nAk chceš ${deal.owner.firstName} len dať vedieť, že je to hotové, vybav požiadavku.`,
-            );
-            if (!ok) return;
+    function save(confirmed = false) {
+        if (foreignDeal && !confirmed) {
+            setConfirmOwner(true);
+            return;
         }
+        setConfirmOwner(false);
         start(async () => {
             const r = await recordOfferSent({
                 leadId: deal.id,
@@ -120,6 +124,7 @@ export default function OfferSentDialog({
                 price: withPrice && editPrice && amountNumber !== null ? { amount: amountNumber, note: priceNote.trim() || null } : null,
                 designIds: designIds.length ? designIds : undefined,
                 followUp: !historical && followUp,
+                ...(!historical && followUp && followUpOn ? { followUpOn } : {}),
             });
             if (!("error" in r)) {
                 toast.success(historical ? "Starý záznam doplnený" : "Zaznamenané, čo klient dostal");
@@ -247,10 +252,49 @@ export default function OfferSentDialog({
                                 Ponechať: {current}
                             </Button>
                         </div>
+                        {followUp && (
+                            <label className="flex items-center gap-3 text-sm">
+                                <span className="shrink-0 text-muted-foreground">Kedy zavolať</span>
+                                <input
+                                    type="date"
+                                    data-vaul-no-drag
+                                    value={followUpOn || defaultFollowUp}
+                                    min={today}
+                                    onChange={(e) => setFollowUpOn(e.target.value)}
+                                    onClick={(e) => e.currentTarget.showPicker?.()}
+                                    className="h-11 flex-1 rounded-md border px-3 text-[16px] [color-scheme:light_dark]"
+                                />
+                            </label>
+                        )}
                     </div>
                 )}
 
-                <Button className="h-12 w-full" disabled={pending || contents.length === 0 || priceMissing || dateInvalid} onClick={save}>
+                {confirmOwner && deal.owner && (
+                    <div className="space-y-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                        <p className="flex items-start gap-2 font-medium text-amber-700 dark:text-amber-400">
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                            Tento obchod vlastní {deal.owner.firstName}.
+                        </p>
+                        <p className="text-muted-foreground">
+                            Poslal/a si to klientovi naozaj ty? Ak chceš {deal.owner.firstName} len dať vedieť, že je to hotové, vybav
+                            radšej požiadavku.
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                            <Button size="sm" disabled={pending} onClick={() => save(true)}>
+                                Áno, poslal/a som to ja
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setConfirmOwner(false)}>
+                                Späť
+                            </Button>
+                        </div>
+                    </div>
+                )}
+
+                <Button
+                    className="h-12 w-full"
+                    disabled={pending || confirmOwner || contents.length === 0 || priceMissing || dateInvalid || followUpInvalid}
+                    onClick={() => save()}
+                >
                     {contents.length === 0
                         ? "Zaškrtni, čo sme poslali"
                         : priceMissing

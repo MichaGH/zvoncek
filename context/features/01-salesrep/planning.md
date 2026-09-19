@@ -1,8 +1,16 @@
 # Feature plan: caller assignment, SALES_REP role, `/dashboard/clients`, manager oversight
 
-Status: **APPROVED DESIGN (rev. 4, 2026-09-17), NOT IMPLEMENTED.** Nothing in this file exists in code or DB yet.
+Status: **HISTORICAL — approved design rev. 4 (2026-09-17), implemented on the test branch the same day.** The current
+state is described by `context/domain/*` and `context/app-workflow.md`; later changes are in `round2-deal-workspace.md`.
 Audience: coding agents. Read `AGENTS.md` and `context/app-workflow.md` first.
 Decision owner: Michal (account role `ADMIN`, acts as the business manager).
+
+> **Later note (2026-09-19).** This round-1 plan was implemented on the test branch on 2026-09-17 (round 2 builds on
+> it: `round2-deal-workspace.md`). Its **requests to the manager** (`DealRequest`, "Požiadavky", the per-kind resolution
+> rules of the former §7.6, the automatic DESIGN/ORDER requests, the REOPEN request) are **replaced in round 2 wave 3
+> by manager tasks with a step lock** — the only design for that is `wave-3-task-proposal-final.md`. The request
+> passages were removed from this file; the full original is in git (commit `1dae205`). The revision notes below are
+> kept as history.
 
 Rules for the implementing agent:
 
@@ -79,8 +87,8 @@ Self-review fixes:
 | D4 | `pipelineEnteredAt` marks a lead as a deal (opportunity). It stays set after WON/LOST/SNOOZED/UNREACHABLE. Board membership is decided by this marker, not by status alone. |
 | D5 | The deal owner for a positive first call is resolved by **routing through Teams** (§5.1): if the caller can own deals → caller; else the caller's team leader → leader; else unrouted (`ownerId = null`, visible to the manager). Callers do not choose the recipient in v1. The manager moves individual deals afterwards (`changeOwner`, bulk transfer). |
 | D6 | SALES_REP gets a new simple page, **`/dashboard/clients` ("Moji klienti")**. SALES_REP does **not** get `/dashboard/pipeline`. Pipeline stays the manager's full tool. |
-| D7 | SALES_REP may set the price, mark the quote as sent, and mark the about-us email as sent on their own **open** deals. When unsure, they create a **request** to the manager. Design creation/versions/tracking stay manager-only. WON and reopening closed deals are manager-only (the rep sends an `ORDER` / `REOPEN` request). The manager can do everything on any deal. |
-| D8 | Requests to the manager use a new model `DealRequest` (§3). Max **one OPEN request per (deal, kind)**. A request becomes DONE only when someone performs the requested business action (price saved, email marked sent, design marked sent, deal set WON, deal reopened). Only OTHER can be marked done manually. Declining is CANCELLED with a note (§7.6). |
+| D7 | SALES_REP may set the price, mark the quote as sent, and mark the about-us email as sent on their own **open** deals. When unsure, they ask the manager (round 1: a request; from round 2 wave 3: a task — `wave-3-task-proposal-final.md`). Design creation/versions/tracking stay manager-only. WON and reopening closed deals are manager-only. The manager can do everything on any deal. |
+| D8 | *(Superseded.)* Round 1 built requests to the manager as `DealRequest`; wave 3 of round 2 replaces them with tasks — `wave-3-task-proposal-final.md`. |
 | D13 | Business calendar is **Europe/Bratislava**. Everything that means "a day" (today, tomorrow, +7 days, next working day, due today, overdue by day) is computed in that zone on the server, independent of server or browser time zone. Exact-time appointments stay instants (§10.3). |
 | D9 | All historical deals get `ownerId = Michal`. Nikolas (`MANAGER`) keeps global access as an observer. Nothing is built specifically for him. |
 | D10 | Existing call-stage work is assigned to its last caller (Timea for almost all). A new SALES_REP starts with the NEW pool only. Michal may move part of Timea's backlog with the transfer tool. |
@@ -102,13 +110,13 @@ Self-review fixes:
 | closed deal | finished deal | deal with `status IN (WON, LOST, UNREACHABLE)` |
 | owner | person responsible for the deal | `ownerId` |
 | handoff | positive first call turns the lead into a deal | sets `pipelineEnteredAt`, `handedOffById`, `ownerId` |
-| request | rep asks the manager for something on a deal | `DealRequest` |
+| task (round 2 wave 3; replaces "request") | rep asks the manager for something on a deal | `DealTask` — `wave-3-task-proposal-final.md` |
 | follow-up | a call on a deal (not a first call) | `Activity type=CALL`, `source CLIENTS` (rep) or `PIPELINE` (manager, later) |
 | revision | optimistic version of a lead; +1 exactly once per business transaction that changes anything about the lead | `Lead.revision` |
 | business day | calendar date in Europe/Bratislava | `lib/domain/businessTime.ts` (§10.3) |
 
-UI (Slovak): pipeline = "Pipeline" (manager), clients page = "Moji klienti", requests = "Požiadavky",
-waiting on us = "Čaká na nás", manager inbox = "Čaká na mňa", unrouted = "Nepriradené", archive = "Archív".
+UI (Slovak): pipeline = "Pipeline" (manager), clients page = "Moji klienti", waiting on us = "Čaká na nás", manager
+inbox = "Čaká na mňa", unrouted = "Nepriradené", archive = "Archív". (Wave 3 names: "Pre mňa", "Čakám na manažéra".)
 
 ---
 
@@ -129,7 +137,7 @@ enum Role {
 
 enum CallOutcome {
   // ...existing values unchanged...
-  WANTS_TO_ORDER // NEW: follow-up only – client wants to go ahead; creates an ORDER request
+  WANTS_TO_ORDER // NEW: follow-up only – client wants to go ahead (wave 3: an ordinary reply, no request)
 }
 
 enum ActivitySource {
@@ -145,8 +153,8 @@ enum ActivityType {
   CALLER_ASSIGNED   // NEW audit: manual transfer of call work (claims by the caller are NOT logged)
   CALLER_RELEASED   // NEW audit: claim released to pool by manager/deactivation
   CALL_REVERTED     // NEW audit: a call result was reverted (points to the reverted activity in meta)
-  REQUEST_CREATED   // NEW business
-  REQUEST_RESOLVED  // NEW business (DONE or CANCELLED; note says which)
+  REQUEST_CREATED   // NEW business (round-1 requests; retired in wave 3)
+  REQUEST_RESOLVED  // NEW business (round-1 requests; retired in wave 3)
   DEAL_REOPENED     // NEW audit: manager reopened a closed deal
 }
 
@@ -167,8 +175,6 @@ model Lead {
 
   revision Int @default(0) // optimistic version; +1 exactly once per business transaction touching this lead (see notes)
 
-  requests DealRequest[]
-
   @@index([status, assignedCallerId, createdAt])    // pool + claim
   @@index([assignedCallerId, status, callbackKind]) // personal queue
   @@index([ownerId, status])                        // clients page, owner filter
@@ -179,65 +185,29 @@ model User {
   // ...existing...
   assignedCallLeads    Lead[]        @relation("AssignedCaller")
   handedOffLeads       Lead[]        @relation("HandedOffBy")
-  dealRequestsCreated  DealRequest[] @relation("DealRequestCreatedBy")
-  dealRequestsResolved DealRequest[] @relation("DealRequestResolvedBy")
   revertedActivities   Activity[]    @relation("ActivityRevertedBy")
 }
 
 model Activity {
   // ...existing...
-  idempotencyKey String?   @unique // client-generated per outcome submit attempt. Unrelated to DealRequest.
+  idempotencyKey String?   @unique // client-generated per outcome submit attempt.
   leadRevision   Int?      // first-call CALL activities only: Lead.revision after this call's single bump; revert requires equality (§5.4)
   revertedAt     DateTime? // set on a CALL activity whose result was reverted (§5.4)
   revertedBy     User?     @relation("ActivityRevertedBy", fields: [revertedById], references: [id])
   revertedById   String?
 }
 
-enum DealRequestKind {
-  PRICE   // rep unsure about price
-  DESIGN  // client wants a design proposal – manager/technician does the design work
-  EMAIL   // manager should send/help with an email
-  ORDER   // client wants to go ahead – manager confirms WON
-  REOPEN  // rep asks to reopen a closed deal
-  OTHER
-}
-
-enum DealRequestStatus {
-  OPEN
-  DONE
-  CANCELLED
-}
-
-model DealRequest {
-  id             String            @id @default(cuid())
-  lead           Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  leadId         String
-  kind           DealRequestKind
-  status         DealRequestStatus @default(OPEN)
-  note           String?
-  createdBy      User              @relation("DealRequestCreatedBy", fields: [createdById], references: [id])
-  createdById    String
-  resolvedBy     User?             @relation("DealRequestResolvedBy", fields: [resolvedById], references: [id])
-  resolvedById   String?
-  resolutionNote String?           // visible to the rep
-  resolvedAt     DateTime?
-  createdAt      DateTime          @default(now())
-
-  @@index([status, createdAt])
-  @@index([leadId, status, kind])
-}
+// Round 1 also added DealRequest + DealRequestKind + DealRequestStatus (requests to the manager). Replaced in round 2
+// wave 3 by DealTask — see wave-3-task-proposal-final.md §4. Original definition: git commit 1dae205.
 ```
 
 Notes:
 
-- "One OPEN request per (leadId, kind)" is enforced in code under the Lead row lock (§7.6). Prisma schema can't express a
-  partial unique index. Do **not** add raw partial indexes that `db push` would try to drop.
 - `lockedById`/`lockedAt` stay unused. Do not build on them.
 - TypeScript `Record<Enum, …>` types will force updates in `lib/dictionaries.ts` (`ROLE_LABEL`, `OUTCOME_LABEL`,
   `ACTIVITY_LABEL`, source labels) and `ROLE_PERMISSIONS`. Labels: SALES_REP "Obchodník", WANTS_TO_ORDER "Chcú objednať",
-  CLIENTS "Klienti", REQUEST_CREATED "Požiadavka", REQUEST_RESOLVED "Požiadavka vybavená", CALLER_ASSIGNED "Presunuté volanie",
-  CALLER_RELEASED "Uvoľnené do fronty", CALL_REVERTED "Výsledok hovoru vrátený", DEAL_REOPENED "Obchod znovu otvorený",
-  request kinds "Cena" / "Návrh" / "Email" / "Objednávka" / "Znovu otvoriť" / "Iné".
+  CLIENTS "Klienti", CALLER_ASSIGNED "Presunuté volanie", CALLER_RELEASED "Uvoľnené do fronty",
+  CALL_REVERTED "Výsledok hovoru vrátený", DEAL_REOPENED "Obchod znovu otvorený".
 - **Hand-written enum arrays are not type-forced:**
   - `ROLES` in `lib/dictionaries.ts` (the role pickers in `components/admin/NewUserForm.tsx` and
     `components/admin/UserProfileCard.tsx`) must become
@@ -250,9 +220,9 @@ Notes:
   increment `revision`.** That is harmless before the new code is live, because no expected-revision checks exist yet.
 - **Revision rule: exactly one increment per lead per business transaction.**
   - A transaction that changes anything concerning a lead increments that lead's `revision` **once**, however many rows it writes
-    (Lead fields, activities, requests, designs).
+    (Lead fields, activities, tasks, designs).
   - This includes changes that don't otherwise touch Lead columns: Activity inserts (notes, SMS, sent markers), `Design` /
-    `DesignVersion` create/update/remove/sent, and `DealRequest` create/resolve/cancel. For these, the transaction runs a dedicated
+    `DesignVersion` create/update/remove/sent, and task events (wave 3). For these, the transaction runs a dedicated
     `UPDATE "Lead" SET "revision" = "revision" + 1`.
   - The only exception is public tracking ingest (`/api/p` TrackerEvent rows); a client viewing a design is not work on the lead.
   - Bulk statements (claim, transfer, backfill) increment each affected row once.
@@ -267,7 +237,7 @@ Notes:
 - `leadRevision` is written only for **first-call** CALL activities (`source CALL_QUEUE`), the only revertable ones: by `logCall`,
   and by the backfill anchor pass for eligible legacy non-deal calls (§11.3). Follow-up calls and all other historical calls have `null`.
 - Phase gate (§13): grep every `lead.update`, `lead.updateMany`, raw `UPDATE "Lead"`, `activity.create`, `design.*`,
-  `designVersion.*`, `dealRequest.*` mutation. Each business transaction must bump each touched lead **exactly once**.
+  `designVersion.*`, task mutation. Each business transaction must bump each touched lead **exactly once**.
 
 ---
 
@@ -409,7 +379,7 @@ One interactive transaction, in this order:
 6. Compute state with the pure function `leadStateForOutcome(outcome, schedule, now)` + the assignment effect below. Write the
    Lead **once** with `bump` (the transaction's single increment, §3), and update `Lead.note` in that same update if the note changed.
    The update returns the new `revision`.
-7. Write planning/request/audit activities (none of them bump again), then set the CALL activity's `leadRevision` = the revision
+7. Write planning/audit activities (none of them bump again), then set the CALL activity's `leadRevision` = the revision
    returned in step 6 (bookkeeping, no bump).
 8. If the insert hits a unique violation on `idempotencyKey` (P2002), the transaction is aborted. Outside it, re-read that activity
    and apply step 2's comparison.
@@ -554,12 +524,11 @@ nextAction*         = by outcome (today = businessTodayStart(), §10.3):
   WANTS_QUOTE  → SEND_QUOTE,  at today, hasTime false, SCHEDULED,   "Poslať cenovú ponuku"
   WANTS_EMAIL  → SEND_EMAIL,  at today, hasTime false, SCHEDULED,   "Napísať email / poslať informácie o nás"
   WANTS_DESIGN → SEND_DESIGN, at today, hasTime false, IN_PROGRESS, "Vytvoriť a poslať dizajnový návrh"
-revision            = +1 (the transaction's single bump; the DESIGN request below does not bump again)
+revision            = +1 (the transaction's single bump)
 pipelineEnteredAt   = createdAt of the CALL activity created in step 5 of §4.5
                       (so the backfill derivation "earliest non-reverted positive first call" reproduces the exact value)
 Activities: CALL (BUSINESS), NEXT_ACTION_SET (PLANNING),
             OWNER_CHANGED (AUDIT) "Priradené automaticky: <name>" when ownerId != null
-WANTS_DESIGN additionally: DealRequest{ kind DESIGN } via ensureOpenRequest (§7.6) + REQUEST_CREATED
 ```
 
 ### 5.3 Ownership rules
@@ -591,14 +560,12 @@ New action `revertCallResult(activityId, expectedRevision)` in `lib/actions/call
    - owner changes
    - next-action edits
    - notes, sent markers, price
-   - requests created/resolved after the handoff
+   - tasks created after the handoff (wave 3)
    - designs
    - contact edits
    - status changes
    - a later follow-up
 
-   The DESIGN request auto-created by the same handoff doesn't block: it belongs to the same transaction and its single bump, which
-   is the revision stored in `leadRevision`.
    Calls with `leadRevision` null can't be reverted.
    - Pre-feature **non-deal** calls get a revert anchor from the backfill when nothing happened after them (§11.3, anchor pass), so a
      mistaken NOT_INTERESTED / BAD_NUMBER / NO_ANSWER from before the rollout can still be fixed.
@@ -616,7 +583,6 @@ Lead: status = CALLING, callbackKind = RETRY, callbackAt/Note = null, callbackHa
       assignedCallerId = activity.userId, assignedCallerAt = now()
       pipelineEnteredAt = null, handedOffById = null, ownerId = null, closedAt = null
       nextAction* = null, nextActionMode = SCHEDULED, lostReason = null, revision +1 (single bump for the whole revert)
-OPEN DealRequests → CANCELLED, resolutionNote "Výsledok hovoru vrátený"
 Activity CALL_REVERTED (AUDIT, source CALL_QUEUE), meta { revertedActivityId, previousOutcome }
 ```
 
@@ -714,16 +680,15 @@ requireCallLead(tx, user, leadId, expectedRevision?)
 
 // Deal mutation by manager OR owner. Locks the actor's User row FOR SHARE (re-checks deletedAt + role, so a deactivation
 // waits for / blocks it), then the Lead row.
-requireDealWork(tx, user, leadId, { expectedRevision?, closedPolicy?: "reject" | "reopenRequestOnly" | "allow" })
+requireDealWork(tx, user, leadId, { expectedRevision?, closedPolicy?: "reject" | "allow" })
   deletedAt null AND pipelineEnteredAt not null                                                         else NOT_FOUND
   can(user,"pipeline.manage") || (can(user,"clients.work") && ownerId === user.id)                      else NOT_FOUND
   closedPolicy (default "reject"):
     "reject"            → status IN (ACTIVE, SNOOZED)                                                    else DEAL_CLOSED
-    "reopenRequestOnly" → status IN (WON, LOST, UNREACHABLE); used ONLY by createDealRequest(kind REOPEN) else FORBIDDEN
     "allow"             → any deal status; permitted ONLY when can(user,"pipeline.manage") (manager edits of closed deals)
   expectedRevision given and != revision                                                                else STALE
 
-// Manager-only deal mutation (designs, tracking, status select, WON, reopen, owner change, resolving requests). Locks the row.
+// Manager-only deal mutation (designs, tracking, status select, WON, reopen, owner change). Locks the row.
 requireDealManage(tx, user, leadId)   // pipeline.manage + deal marker
 
 // Page loads (no lock).
@@ -741,7 +706,8 @@ Rules:
 
 ### 6.3 Permissions (`lib/permissions.ts`)
 
-New: `calls.claim`, `calls.assign`, `clients.view`, `clients.work`, `deals.receive`, `requests.resolve`.
+New: `calls.claim`, `calls.assign`, `clients.view`, `clients.work`, `deals.receive`, `requests.resolve` (wave 3: "may
+receive and resolve manager tasks").
 Made explicit: `pipeline.view` / `pipeline.manage` = **all deals** (manager scope). `callHistory.viewAll` = every caller's
 history; without it, own calls only.
 
@@ -798,17 +764,17 @@ Remove `canManagePipeline` once the tracking actions use `requireDealManage`.
 3. **Moji klienti**: work through "Na dnes" from top to bottom. Call → log the follow-up outcome in the drawer →
    the next step is set automatically or chosen.
 4. Quotes and emails are sent from the rep's own mailbox, then marked as sent in the app (creates a 7-day follow-up call).
-5. Anything the rep can't do (unsure price, design proposal, order confirmation, reopening) → **Požiadať manažéra**.
-   The deal moves to "Čaká na nás" until the request is resolved.
+5. Anything the rep can't do (unsure price, design proposal, handing the client over) → **Požiadať manažéra** — a task
+   with a locked step since wave 3 (`wave-3-task-proposal-final.md`). Reopening a closed deal is the manager's; the rep tells him.
 
 ### 7.2 Business workflow per interest type
 
 | Client wants | Rep does | App |
 |---|---|---|
-| Quote | Knows the price → sets it, sends the email, marks sent. Unsure → PRICE request. | SEND_QUOTE → after sent: CALL +7 days. A price saved by anyone auto-resolves an open PRICE request. |
-| About-us email | Sends the email, marks sent. Can't → EMAIL request. | SEND_EMAIL → after sent: CALL +7 days. Marking sent by anyone resolves EMAIL. |
-| Design proposal | Nothing technical. Michal contacts the client, builds the design, marks it sent. | DESIGN request (auto) → Michal's inbox. Rep sees "Čaká na nás". Design marked sent → DESIGN done, CALL +7 days for the **owner**. |
-| To go ahead / order | ORDER request with a note. | Deal in "Čaká na nás". Michal sets WON → closes the deal, requests resolved (§7.6). |
+| Quote | Knows the price → sets it, sends the email, marks sent. Unsure → asks the manager (wave 3 task). | SEND_QUOTE → after sent: CALL +7 days. |
+| About-us email | Sends the email, marks sent. | SEND_EMAIL → after sent: CALL +7 days. |
+| Design proposal | Nothing technical; the manager builds the design. The rep asks for it (wave 3 task). | SEND_DESIGN; after sent: CALL +7 days for the **owner**. |
+| To go ahead / order | Hands the client to the manager (wave 3 handover). | The manager continues and sets WON. |
 | Not now | Snooze to a date. | SNOOZED. Returns to "Na dnes" when due. |
 | No | Not interested. | LOST (closed; read-only for the rep) |
 
@@ -837,7 +803,7 @@ flat result list with section badges. This is the path to old closed deals.
 A pure function that returns exactly one value for every deal. Rules are evaluated **top to bottom, first match wins**:
 
 ```text
-input: status, nextActionKind, nextActionAt, nextActionHasTime, nextActionMode, closedAt, openRequestCount, now
+input: status, nextActionKind, nextActionAt, nextActionHasTime, nextActionMode, closedAt, open task (wave 3; round 1: openRequestCount), now
 "due today" = isDueByBusinessDay(nextActionAt, nextActionHasTime, now)   (§10.3)
    hasTime false → businessDate(nextActionAt) <= businessDate(now)
    hasTime true  → nextActionAt <= businessDayEnd(now)   (exact appointments later today still count as today)
@@ -848,7 +814,7 @@ recentLimit = businessDayStart(now) - 90 business-calendar days
      else                                             → ARCHIVED      (not on board; archive + search only)
      (closedAt is always set for closed deals after the backfill; a null here is treated as ARCHIVED, never as recent)
    -- below: status IN (ACTIVE, SNOOZED)
-2. openRequestCount > 0                             → WAITING_ON_US
+2. open manager task (wave 3; round 1: open request) → WAITING_ON_US
 3. status = SNOOZED:
      nextActionAt IS NULL                           → TODAY           badge "chýba dátum"
      due today                                      → TODAY           badge "zobudený"
@@ -866,7 +832,7 @@ recentLimit = businessDayStart(now) - 90 business-calendar days
 
 - Status values outside ACTIVE/SNOOZED/WON/LOST/UNREACHABLE on a deal are impossible (§8.2 restricts them). The function throws in
   development and returns TODAY with badge "neplatný stav" in production.
-- Sort inside sections: TODAY by `nextActionSort` (overdue first, undated last); WAITING_ON_US by the oldest open request;
+- Sort inside sections: TODAY by `nextActionSort` (overdue first, undated last); WAITING_ON_US by the oldest open task;
   PLANNED/SNOOZED by `nextActionAt`; CLOSED_RECENT by `closedAt` desc.
 - "Overdue" (chip "po termíne", red urgency) uses the same business-day rule: day-only is overdue when its business date is before
   today's business date; exact-time is overdue when the instant is past.
@@ -878,7 +844,7 @@ Row card:
 ```text
 #123 Firma s.r.o.                                       [Phone icon-button → tel:]
 Ďalší krok: Zavolať, či CP prišla · <UrgencyLabel>      [badge from classification]
-Posledný krok: CP odoslaná 3. 9. · 1 290 €   [Návrh otvorený 2×] [Požiadavka: Cena]
+Posledný krok: CP odoslaná 3. 9. · 1 290 €   [Návrh otvorený 2×] [⏳ čaká na Michala]
 ```
 
 Query `getClientsBoard(user, { q?, archive? })` in `lib/queries/clients/index.ts` with base where
@@ -886,16 +852,17 @@ Query `getClientsBoard(user, { q?, archive? })` in `lib/queries/clients/index.ts
 URL params. The board query excludes archived deals in SQL
 (`OR: [{ status: { in: [ACTIVE, SNOOZED] } }, { status: { in: [WON, LOST, UNREACHABLE] }, closedAt: { gte: recentLimit } }]`), then
 classifies in JS. The archive query is the complement for closed deals (`closedAt < recentLimit OR closedAt IS NULL`).
-Select: pipeline row fields, `revision`, latest BUSINESS activity, OPEN requests (kind, createdAt), and the design tracking
+Select: pipeline row fields, `revision`, latest BUSINESS activity, the open task (wave 3), and the design tracking
 confidence summary (no tokens, no IPs).
 
 ### 7.5 Drawer: `components/clients/ClientDrawer.tsx`
 
-Opens on row click. **Closed deals open a read-only drawer**: last step, history link, and a single action
-"Požiadať o znovuotvorenie" (REOPEN request). The full drawer below is for open deals only. Built like `CallDrawer`.
+Opens on row click. **Closed deals open a read-only drawer**: last step and history link (round 1 also had a reopen
+request; removed in wave 3 — reopen is the manager's, backlog BL-01). The full drawer below is for open deals only.
+Built like `CallDrawer`.
 
 ```text
-Header: company · phone link · "Posledný krok: …" · open requests
+Header: company · phone link · "Posledný krok: …" · the open task
 
 main
   ✅ Dovolal/a som sa – posun…   → step "progress"
@@ -921,7 +888,7 @@ Action `logFollowUp({ leadId, outcome, expectedRevision, idempotencyKey, schedul
 1. Idempotency lookup first, with a full match on user, lead, `type CALL`, `source CLIENTS`, outcome (same as §4.5).
 2. `requireDealWork(tx, user, leadId, { expectedRevision, closedPolicy: "reject" })`.
 3. Apply `dealStateForFollowUp` with the single `bump`. Write Activity `type CALL, source CLIENTS, outcome, idempotencyKey`
-   (`leadRevision` stays null), plus the PLANNING activity (`describeNextAction`) and any request (§7.6). None of these bump again.
+   (`leadRevision` stays null), plus the PLANNING activity (`describeNextAction`). None of these bump again.
 
 Transitions are a pure function `dealStateForFollowUp(outcome, input, current, now)` in `lib/domain/leadFlow.ts`.
 "Today" means `businessTodayStart(now)` and "next working day" means `nextBusinessWorkingDayStart(now)` (§10.3).
@@ -933,80 +900,48 @@ Transitions are a pure function `dealStateForFollowUp(outcome, input, current, n
 | NO_ANSWER | status unchanged; nextAction CALL at next working day start (Mon–Fri in Europe/Bratislava), hasTime false, note "Nezdvihli – skúsiť znova" |
 | CALL_AGAIN | status ACTIVE; nextAction CALL from schedule (required), hasTime per schedule kind |
 | WANTS_QUOTE | status ACTIVE; nextAction SEND_QUOTE today |
-| WANTS_DESIGN | status ACTIVE; nextAction SEND_DESIGN today IN_PROGRESS + `ensureOpenRequest(DESIGN)` |
-| WANTS_TO_ORDER | status ACTIVE; nextAction WAITING_FOR_CLIENT, note "Čaká na potvrdenie manažéra" + `ensureOpenRequest(ORDER)` |
+| WANTS_DESIGN | status ACTIVE; nextAction SEND_DESIGN today IN_PROGRESS (no automatic request since wave 3) |
+| WANTS_TO_ORDER | wave 3: an ordinary reply with a chosen next step; handing over is a separate task |
 | SNOOZE | status SNOOZED; nextAction CALL at the business-day start of the schedule (`day` or `monthsFromToday`, required), hasTime false |
-| NOT_INTERESTED | status LOST, `closedAt = now`, lostReason, nextAction cleared, **close requests** (§7.6) |
-| BAD_NUMBER | status UNREACHABLE, `closedAt = now`, nextAction cleared, **close requests** |
+| NOT_INTERESTED | status LOST, `closedAt = now`, lostReason, nextAction cleared (an open task is cancelled in the same save, wave 3) |
+| BAD_NUMBER | status UNREACHABLE, `closedAt = now`, nextAction cleared (likewise) |
 
 Follow-ups use `source CLIENTS`, so first-call statistics (`source CALL_QUEUE`) stay unchanged.
 
-### 7.6 Request rules: `lib/domain/dealRequests.ts` (all called inside a transaction holding the Lead row lock)
+### 7.6 Requests to the manager — replaced
 
-- `ensureOpenRequest(tx, leadId, kind, userId, note)`: if an OPEN request of that kind exists, append the note to its `note`
-  (`\n— <date> <name>: <note>`) and return it with `created: false` (no REQUEST_CREATED). Otherwise create it and log REQUEST_CREATED.
-  The UI "Požiadať manažéra" uses the same function and tells the user "Požiadavka už existuje – doplnená poznámka".
-- `resolveOpenRequests(tx, leadId, kinds, status, actorId, note)`: internal only, called **inside a business mutation** in
-  `lib/domain/dealMutations.ts`. Sets `resolvedById = actor` (a rep can complete their own work), `resolvedAt`, `resolutionNote`;
-  logs REQUEST_RESOLVED per request.
-
-**Principle: DONE means the deal actually changed.** A request of kind PRICE / DESIGN / EMAIL / ORDER / REOPEN becomes DONE
-**only** as a side effect of the business action that performs the work, in the same transaction:
-
-| Kind | Meaning | Becomes DONE when (by anyone with access) | Resolution note |
-|---|---|---|---|
-| PRICE | set the price | a non-null price is saved (`saveQuote` / `saveClientQuote`), or the quote is marked sent | "Cena doplnená: X €" / "Cenová ponuka odoslaná" |
-| DESIGN | build and send a design proposal | a design is marked sent (`setDesignSent(true)`) | "Návrh odoslaný" |
-| EMAIL | send the about-us / information email | the about-us email is marked sent (`logSent("EMAIL_SENT")` / `logClientEmailSent`) | "Email odoslaný" |
-| ORDER | confirm the client goes ahead | the deal is set WON | "Obchod vyhraný" |
-| REOPEN | reopen a closed deal | the manager reopens the deal (§8.2) | "Obchod znovu otvorený" |
-| OTHER | anything else | manually by the manager ("Vybavené", optional note) | manager's note |
-
-Other resolutions:
-
-- **Declining** (any kind): manager `resolveDealRequest(requestId, "CANCELLED", note)`. The note is **required** and shown to
-  the rep as the reason.
-- **Manual DONE** via `resolveDealRequest(requestId, "DONE", note)` is accepted **only for kind OTHER**. Any other kind returns
-  FORBIDDEN "Vybav cez príslušnú akciu (cena / návrh / email / výhra / znovuotvorenie)".
-- **The rep cancels their own** OPEN request: `cancelOwnDealRequest` → CANCELLED (optional note).
-- **Closing a deal** (WON / LOST / UNREACHABLE, via `changeStatus`, `markLost`, or follow-up NOT_INTERESTED / BAD_NUMBER), inside
-  the closing transaction:
-  - WON: ORDER → DONE ("Obchod vyhraný"); every other OPEN → CANCELLED ("Obchod uzavretý")
-  - LOST / UNREACHABLE: all OPEN → CANCELLED ("Obchod uzavretý")
-  - set `closedAt = now`
-  - afterwards no OPEN request exists on a closed deal, except a REOPEN created later by the rep
-- **Revert** of a handoff: all OPEN → CANCELLED (§5.4).
-- **REOPEN** is the only request a rep can create on a closed deal (`requireDealWork(…, { closedPolicy: "reopenRequestOnly" })`).
-  REOPEN on an open deal is rejected.
-- All of the above run under the Lead row lock and count toward the transaction's single revision bump (§3).
+Round 1 specified requests here (`lib/domain/dealRequests.ts`: one open per deal and kind, DONE only through the
+business action, automatic closing on price / send / WON / reopen / close / revert, the REOPEN exception for closed
+deals). All of it is replaced in round 2 wave 3 by manager tasks with a server-side step lock and no automatic creation
+or closing — `wave-3-task-proposal-final.md`. Original text: git commit `1dae205`.
 
 ### 7.7 Detail: `app/dashboard/clients/[id]/page.tsx`
 
-`requireDealView(prisma, user, id)`, `notFound()` on failure. Closed deals render read-only (history + reopen request).
+`requireDealView(prisma, user, id)`, `notFound()` on failure. Closed deals render read-only (history).
 For open deals, in this order:
 
 1. **Ďalší krok**: next-action editor. Extract the form from `PipelineDetail` into a shared component; do not copy it.
-2. **Požiadavky**: open + resolved requests with resolutionNote. "Nová požiadavka" (kind + note). The rep can cancel their own open ones.
+2. **Asking the manager**: round 1 had a requests card here; wave 3 has a task card (`wave-3-task-proposal-final.md` §7).
 3. **Údaje**: company / web / phone / email / note, with an audit diff like `updateLead`.
 4. **Cena**: price + priceNote editable (D7), "Cenová ponuka odoslaná" toggle, "Klient pozná cenu".
 5. **Email „O nás"**: mark as sent.
 6. **Návrh**: read-only. Label, sent state, tracking confidence ("otvorené 2×, naposledy včera"). No URLs, tokens, versions or IPs.
-7. **História**: BUSINESS activities only (calls, notes, sent, requests), newest first.
+7. **História**: BUSINESS activities only (calls, notes, sent, tasks), newest first.
 
 Not on this page: status dropdown, owner picker, WON, reopen, design management.
 
 Client actions (`lib/actions/clients/index.ts`; all use `requireDealWork(tx, user, leadId, { closedPolicy: "reject" })` unless
 noted, `source CLIENTS`, one bump per transaction):
 `logFollowUp` (+ expectedRevision), `setClientNextAction`, `updateClientContact`, `saveClientQuote`, `setClientQuoteSent`,
-`setClientPriceDisclosed`, `logClientEmailSent`, `addClientNote`, `createDealRequest` (`closedPolicy: "reject"` for all kinds
-except REOPEN, which uses `"reopenRequestOnly"`), `cancelOwnDealRequest`.
+`setClientPriceDisclosed`, `logClientEmailSent`, `addClientNote` (round 1 also had the request actions; replaced in
+wave 3).
 All date-only computations inside them, such as the +7-day follow-up after quote/email sent, use §10.3.
 
 Implementation rule: move the transaction bodies of the existing pipeline actions (`updateLead`, `saveQuote`, `setQuoteSent`,
 `setPriceDisclosed`, `setNextAction`, `logSent`, `addBusinessNote`, `markLost`, `changeStatus`) into internal functions in
 `lib/domain/dealMutations.ts` with signature `(tx, actor, lead, input, source)`. `lead` is the already-locked row returned by the
 guard. Pipeline actions (manager guard) and client actions (owner guard) both call them. **Do not** make one action accept both
-roles. The request rules (§7.6) live inside these shared functions, so both entry points behave the same.
+roles. Shared rules live inside these functions, so both entry points behave the same.
 
 ---
 
@@ -1018,45 +953,30 @@ roles. The request rules (§7.6) live inside these shared functions, so both ent
   and its "Nové"/"Všetky" tabs show raw contacts.
 - Status tabs: Aktívne, Spiace, Vyhraté, Stratené, Nedostupné, Všetky. **Remove "Nové".**
 - New search param `owner`: `all` (default) | `me` | `unassigned` | `<userId>`, as a select "Rieši".
-- New view `requests` ("Požiadavky", first view tab, with a count): deals with OPEN requests, oldest request first.
 - Banner when any open deal has `ownerId = null`: "N obchodov nemá vlastníka" with a link to `?owner=unassigned`.
-- Row: owner first name + request badge.
+- Row: owner first name (+ the task badge from wave 3).
 - "Presunúť obchody" button (§5.5).
 
 ### 8.2 Pipeline detail
 
 - The page uses `requireDealView` with `pipeline.view`. Non-deals → `notFound()`.
 - Status select limited to ACTIVE / SNOOZED / WON / LOST / UNREACHABLE. `changeStatus` (via `dealMutations`) validates the set and the
-  deal marker, and applies the close rules (§7.6: `closedAt`, requests).
+  deal marker, and applies the close rules (`closedAt`).
 - **Reopen** a closed deal ("Znovu otvoriť", `pipeline.manage`):
   - status ACTIVE, `closedAt = null`, `lostReason = null`
   - nextAction CALL at `businessTodayStart()` (hasTime false) unless the manager sets another
   - uses `requireDealManage`; manager edits of other fields on closed deals use `requireDealWork(…, { closedPolicy: "allow" })`
-  - DEAL_REOPENED audit, resolves REOPEN requests
+  - DEAL_REOPENED audit
   - the owner is unchanged (the manager may change it separately)
   - returning a deal to calls is only possible via §5.4
 - Owner select uses `getDealOwnerOptions()` and `changeOwner` locking (§5.3).
-- **Požiadavky card** at the top when OPEN requests exist: kind, requester, note, age. Each request shows the **business action
-  that completes it** (§7.6) plus "Zamietnuť":
-
-| Kind | Primary button | Effect |
-|---|---|---|
-| PRICE | inline price + note field, "Uložiť cenu" | `saveQuote` (non-null) → request DONE |
-| DESIGN | "Prejsť na Dizajn & Tracking" (scroll) | DONE when a design is marked sent there |
-| EMAIL | "Označiť email ako odoslaný" | `logSent("EMAIL_SENT")` → DONE |
-| ORDER | "Označiť ako vyhraté" (confirm dialog) | `changeStatus(WON)` → DONE |
-| REOPEN | "Znovu otvoriť" | reopen (above) → DONE |
-| OTHER | "Vybavené" (optional note) | `resolveDealRequest(DONE)` |
-| any | "Zamietnuť" (note required) | `resolveDealRequest(CANCELLED, note)` |
-
-  `resolveDealRequest` locks the Lead row, requires `requests.resolve` and enforces the kind rules of §7.6. There is no generic
-  "Vybavené" for kinds other than OTHER, so a request can't leave the inbox while the deal stays unchanged.
+- The round-1 requests card with per-kind resolving buttons is replaced by the wave-3 task card (`wave-3-task-proposal-final.md` §6.3–§6.9).
 - Everything else stays. The manager can perform every rep action on any deal, including closed ones.
 
 ### 8.3 Manager blocks on `/dashboard` (users with `pipeline.view`)
 
 ```text
-"Čaká na mňa"   all OPEN DealRequests, oldest first: kind badge, requester, company (link to pipeline detail), note, age.
+"Čaká na mňa"   (wave 3) the manager's open tasks, oldest first: contents, requester, company (link to pipeline detail), text, age.
                 Count in title; red when the oldest is > 2 days.
 
 "Obchodníci"    one row per active user with deals.receive, excluding the viewer:
@@ -1386,9 +1306,9 @@ Each phase ends with `npx tsc --noEmit`, lint, and a manual check on the Neon de
    idempotency, routing, handoff), `CallDrawer` / `CallQueue` changes, `revertCallResult` + reverted markers, remove `getMoreNew` /
    `correctOutcome` / `editActivityNote` / `resetLeadToCalls` / `updateLeadNote`, scoped `updateLeadContact`, history scope, scout
    lock, team action locking, contacts/new route (§4, §5.1–5.4, §6.3).
-5. **Pipeline hardening**: `dealMutations` extraction with close/request rules, marker filters, status restriction, reopen, owner
-   options, `changeOwner` locking, tracking guards, requests card with per-kind actions + `resolveDealRequest` kind rules, owner
-   filter, requests view, unassigned banner, bulk deal transfer, +7-day follow-ups via the business calendar (§5.5, §7.6, §8.1–8.2).
+5. **Pipeline hardening**: `dealMutations` extraction with close rules, marker filters, status restriction, reopen, owner
+   options, `changeOwner` locking, tracking guards, owner filter, unassigned banner, bulk deal transfer, +7-day follow-ups
+   via the business calendar (§5.5, §8.1–8.2). (Round 1 also built the requests card and view — replaced in wave 3.)
 6. **Clients**: client actions, `clientSection`, `/dashboard/clients` + archive + search + drawer + detail, nav (§7).
 7. **Dashboards and other paths** (§8.3, §9 incl. time zone fixes), assignments tool (§4.6), deactivation/role-change serialization.
 8. **Gate:**
@@ -1396,7 +1316,6 @@ Each phase ends with `npx tsc --noEmit`, lint, and a manual check on the Neon de
      `Activity.leadRevision` / `revertedAt` never bumps (§3)
    - grep that no `setHours(0` / `getDate()` / `toLocale*` without `timeZone` remains in server-side day logic (§10.3)
    - `ROLES` contains every `Role` value (a one-line runtime assertion in `lib/dictionaries.ts` is fine)
-   - grep that `resolveDealRequest` rejects manual DONE for every kind except OTHER (§7.6)
    - grep that `session.user` / `session?.user` is passed to `can` / `canAny` / `roleOf` **nowhere** except `lib/access/user.ts` (D11, §6.1)
    - grep that no Lead mutation skips a §6.2 helper, and every mutation of an assigned lead takes the assignee lock (§10.1 rule 3)
    - grep that `SKIP LOCKED` appears only in `claimBatch` and the bulk deal transfer
@@ -1501,15 +1420,10 @@ Each phase ends with `npx tsc --noEmit`, lint, and a manual check on the Neon de
 - [ ] SALES_REP gets redirected from `/dashboard/pipeline`, gets 404 on `/dashboard/pipeline/<id>` and on other people's
       `/dashboard/clients/<id>`. Direct server-action calls with foreign ids fail.
 - [ ] Manager transfers a deal while the rep has its drawer open → the rep's submit fails and refreshes; no activity by the rep after the transfer.
-- [ ] SALES_REP can't log follow-ups or edit a WON/LOST/UNREACHABLE deal; can only request REOPEN; the manager reopens.
+- [ ] SALES_REP can't log follow-ups or edit a WON/LOST/UNREACHABLE deal; the manager reopens.
 - [ ] Every deal appears in exactly one section; old closed deals are reachable via Archív and search.
-- [ ] SALES_REP sets price + marks quote sent → CALL +7 days in Naplánované; their own open PRICE request is resolved.
-- [ ] Repeated "Chcú návrh" → still one open DESIGN request (note appended).
-- [ ] SALES_REP "Chcú návrh" → request in Michal's "Čaká na mňa", deal in the rep's "Čaká na nás". Michal marks the design sent →
-      request DONE, the rep gets the follow-up call.
-- [ ] Closing a deal leaves no OPEN requests.
-- [ ] Michal can't mark an ORDER / REOPEN / PRICE / DESIGN / EMAIL request "done" without the matching change (WON, reopened, price
-      saved, design sent, email sent). Declining needs a note that the rep sees. Only OTHER has a manual "Vybavené".
+- [ ] SALES_REP sets price + marks quote sent → CALL +7 days in Naplánované.
+- [ ] (Round-1 request checks are replaced by the wave-3 task tests — `wave-3-task-proposal-final.md` §9.)
 - [ ] Michal can create a user with role "Obchodník" (SALES_REP) in the admin form and change an existing user to it.
 - [ ] With the server process in UTC: a callback / next action for "zajtra" (day-only) created at 23:30 Bratislava time appears in
       "Na dnes" only on the next Bratislava day. "O týždeň" and the +7-day follow-up land on the correct Bratislava date across a DST
@@ -1521,7 +1435,7 @@ Each phase ends with `npx tsc --noEmit`, lint, and a manual check on the Neon de
 - [ ] Pipeline never lists NEW/CALLING/deleted contacts. Timea's "Spiace" no longer shows pipeline deals.
 - [ ] SCOUT cannot edit a claimed NEW contact.
 - [ ] Revert works only on the latest non-reverted call and only if nothing changed on the lead since that call: no transfer,
-      owner change, next-action edit, note, request or design. A second revert is rejected. The lead returns to the original caller
+      owner change, next-action edit, note, task or design. A second revert is rejected. The lead returns to the original caller
       as RETRY. A later backfill run classifies it as call work, not a deal.
 - [ ] First-call statistics don't change when follow-ups are logged.
 
@@ -1530,7 +1444,7 @@ Each phase ends with `npx tsc --noEmit`, lint, and a manual check on the Neon de
 1. May SALES_REP mark a design as sent? (No, the manager does it.)
 2. Should a SALES_REP see Timea's call history? (No.)
 3. Follow-up NO_ANSWER delay: next working day or configurable? (Next working day.)
-4. May SALES_REP mark small deals WON directly? (No, ORDER request.)
+4. May SALES_REP mark small deals WON directly? (No — WON is the manager's; wave 3: the rep hands the client over.)
 5. Should `CLAIM_BATCH_SIZE` be admin-editable? (No, code constant for v1.)
 6. Per-client recipient choice or distributing one caller's handoffs across several reps? (No in v1; the manager reassigns.
    Revisit with an explicit routing list if needed.)

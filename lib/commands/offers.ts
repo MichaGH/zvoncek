@@ -5,11 +5,11 @@ import { withLockTx } from "@/lib/access/locks";
 import type { AccessUser } from "@/lib/access/user";
 import { createAuditActivity } from "@/lib/activityLog";
 import { sourceFor } from "@/lib/commands/dealWork";
-import { businessDate } from "@/lib/domain/businessTime";
+import { businessDate, isValidBusinessDate } from "@/lib/domain/businessTime";
 import { updateLead } from "@/lib/domain/dealMutations";
 import { activityReplay } from "@/lib/domain/idempotency";
 import { CORRECTABLE_TYPES, correctRecord, recordOffer } from "@/lib/domain/offerMutations";
-import { isValidSentOn, OFFER_CONTENTS } from "@/lib/domain/offers";
+import { isValidSentOn, OFFER_CONTENTS, offerFingerprint, offerFingerprintOfMeta } from "@/lib/domain/offers";
 import { can } from "@/lib/permissions";
 
 // „Čo sme poslali" + opravy + potvrdenie starých záznamov (round 2, wave 3a – §2c).
@@ -31,6 +31,7 @@ const recordSchema = z
             .nullish(),
         designIds: z.array(z.string().min(1)).max(10).optional(),
         followUp: z.boolean(),
+        followUpOn: z.string().optional(),
     })
     .strict();
 
@@ -43,8 +44,17 @@ export async function recordOfferSentAs(user: AccessUser, raw: RecordOfferSentIn
     const input = parsed.data;
     if (!isValidSentOn(input.sentOn, businessDate(new Date()))) return { error: "Neplatný dátum odoslania." };
     if (input.historical && (!can(user, "deals.manage") || input.followUp)) return { error: "Neplatné údaje." };
+    if (input.followUpOn && (!input.followUp || !isValidBusinessDate(input.followUpOn) || input.followUpOn < businessDate(new Date()))) {
+        return { error: "Neplatný dátum hovoru." };
+    }
 
-    const replayKey = { userId: user.id, leadId: input.leadId, types: ["OFFER_SENT"] as const };
+    const replayKey = {
+        userId: user.id,
+        leadId: input.leadId,
+        types: ["OFFER_SENT"] as const,
+        fingerprint: (row: { meta: unknown }) => offerFingerprintOfMeta(row.meta),
+        want: offerFingerprint({ channel: "EMAIL", contents: input.contents, sentOn: input.sentOn, historical: input.historical, designIds: input.designIds }),
+    };
     const first = await activityReplay(input.idempotencyKey, replayKey);
     if (first) return first;
 
@@ -70,6 +80,7 @@ export async function recordOfferSentAs(user: AccessUser, raw: RecordOfferSentIn
                     price: input.price ?? null,
                     designIds: input.designIds,
                     followUp: input.followUp,
+                    followUpOn: input.followUpOn,
                     idempotencyKey: input.idempotencyKey,
                 },
                 sourceFor(user),

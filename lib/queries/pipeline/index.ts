@@ -16,7 +16,7 @@ import { isDealView, viewIgnoresStatus } from "@/lib/domain/dealFilters";
 import { ROLE_PERMISSIONS } from "@/lib/permissions";
 import { summarizeEvents, type Confidence } from "@/lib/tracking/confidence";
 import { trackedUrl } from "@/lib/domain/designLinks";
-import { parseOfferMeta, summarizeOffers, type OfferRow } from "@/lib/domain/offers";
+import { LAST_TOUCH_TYPES, lastOfferOf, parseOfferMeta, summarizeOffers, type OfferDialogDeal, type OfferRow } from "@/lib/domain/offers";
 import type {
     ActivityType,
     CallOutcome,
@@ -152,11 +152,18 @@ type DealLead = {
     nextActionNote: string | null;
     closedAt: Date | null;
     price: { toString(): string } | null;
+    priceNote: string | null;
+    offerAboutUsAt: Date | null;
     offerPricelistAt: Date | null;
     offerPriceAt: Date | null;
     hadLegacySends: boolean;
     legacySendsReviewedAt: Date | null;
-    designs: { id: string }[];
+    quoteSentAt: Date | null;
+    aboutUsSentAt: Date | null;
+    priceDisclosed: boolean;
+    designs: { id: string; label: string | null; targetUrl: string | null; sentAt: Date | null; tracker: { token: string } | null }[];
+    designSentAt: Date | null;
+    _count: { designs: number };
     owner: { id: string; firstName: string } | null;
     handedOffBy: { firstName: string; lastName: string } | null;
     requests: { id: string; kind: DealRequestKind; createdAt: Date }[];
@@ -166,7 +173,7 @@ type DealLead = {
 // „Naposledy" = posledný skutočný kontakt: bez prečiarknutých záznamov, bez ceny povedanej v hovore (tá je súčasťou
 // toho hovoru) a bez spätne doplnených starých odoslaní (round 2 §2c 5.3, 5.7).
 const LAST_TOUCH_WHERE = {
-    category: "BUSINESS" as const,
+    type: { in: [...LAST_TOUCH_TYPES] },
     revertedAt: null,
     NOT: [
         { type: "OFFER_SENT" as const, meta: { path: ["channel"], equals: "PHONE" } },
@@ -190,11 +197,23 @@ const LIST_SELECT = {
     nextActionNote: true,
     closedAt: true,
     price: true,
+    priceNote: true,
+    offerAboutUsAt: true,
     offerPricelistAt: true,
     offerPriceAt: true,
     hadLegacySends: true,
     legacySendsReviewedAt: true,
-    designs: { where: { deletedAt: null, sentAt: { not: null } }, select: { id: true }, take: 1 },
+    quoteSentAt: true,
+    aboutUsSentAt: true,
+    priceDisclosed: true,
+    designSentAt: true,
+    _count: { select: { designs: true } }, // aj zmazané – obchod bez jediného návrhu = starý údaj z Lead.designSentAt
+    // Návrhy pre dialóg „Čo sme poslali" otváraný priamo zo zoznamu (round 2 §2d) + ikonka „dostali návrh".
+    designs: {
+        where: { deletedAt: null },
+        orderBy: { createdAt: "asc" as const },
+        select: { id: true, label: true, targetUrl: true, sentAt: true, tracker: { select: { token: true } } },
+    },
     owner: { select: { id: true, firstName: true } },
     handedOffBy: { select: { firstName: true, lastName: true } },
     requests: { where: { status: "OPEN" as const }, select: { id: true, kind: true, createdAt: true }, orderBy: { createdAt: "asc" as const } },
@@ -225,7 +244,30 @@ async function noAnswerStreaks(ids: string[]): Promise<Map<string, number>> {
     return new Map(rows.map((r) => [r.leadId, Number(r.streak)]));
 }
 
-function toDealRow(lead: DealLead, now: Date, noAnswerStreak = 0) {
+// Posledné odoslanie pre každý obchod na strane (jeden dotaz).
+async function lastOffers(ids: string[]): Promise<Map<string, { text: string; at: string }>> {
+    if (ids.length === 0) return new Map();
+    const rows = await prisma.activity.findMany({
+        where: { leadId: { in: ids }, type: "OFFER_SENT", revertedAt: null },
+        select: { id: true, leadId: true, createdAt: true, revertedAt: true, meta: true },
+    });
+    const byLead = new Map<string, OfferRow[]>();
+    for (const r of rows) {
+        const meta = parseOfferMeta(r.meta);
+        if (!meta) continue;
+        const list = byLead.get(r.leadId) ?? [];
+        list.push({ id: r.id, createdAt: r.createdAt, revertedAt: r.revertedAt, meta });
+        byLead.set(r.leadId, list);
+    }
+    const out = new Map<string, { text: string; at: string }>();
+    for (const [leadId, list] of byLead) {
+        const last = lastOfferOf(list);
+        if (last) out.set(leadId, last);
+    }
+    return out;
+}
+
+function toDealRow(lead: DealLead, now: Date, noAnswerStreak = 0, lastOffer: { text: string; at: string } | null = null) {
     const cls = clientSection(
         {
             status: lead.status,
@@ -259,7 +301,7 @@ function toDealRow(lead: DealLead, now: Date, noAnswerStreak = 0) {
         price: lead.price ? Number(lead.price) : null,
         gotPricelist: lead.offerPricelistAt !== null,
         gotPrice: lead.offerPriceAt !== null,
-        hasDesignSent: lead.designs.length > 0,
+        hasDesignSent: legacyAwareDesignSentAt(lead) !== null,
         legacyUnreviewed: lead.hadLegacySends && lead.legacySendsReviewedAt === null,
         ownerId: lead.owner?.id ?? null,
         owner: lead.owner?.firstName ?? null,
@@ -269,10 +311,53 @@ function toDealRow(lead: DealLead, now: Date, noAnswerStreak = 0) {
             ? { type: last.type, outcome: last.outcome, note: last.note, at: last.createdAt.toISOString() }
             : null,
         noAnswerStreak,
+        lastOffer,
+        dialog: offerDialogOf(lead),
     };
 }
 
 export type DealRow = ReturnType<typeof toDealRow>;
+
+// Posledný poslaný návrh; obchod, ktorý nemá ani jeden Design riadok (návrhy spred modelu Design), berie starý
+// Lead.designSentAt – inak by sa odoslaný návrh tváril ako „neposlaný".
+function legacyAwareDesignSentAt(lead: {
+    designs: { sentAt: Date | null }[];
+    designSentAt: Date | null;
+    _count: { designs: number };
+}): Date | null {
+    const fromRows = lead.designs.reduce<Date | null>((max, d) => (d.sentAt && (!max || d.sentAt > max) ? d.sentAt : max), null);
+    return fromRows ?? (lead._count.designs === 0 ? lead.designSentAt : null);
+}
+
+function offerDialogOf(lead: DealLead): OfferDialogDeal {
+    const iso = (d: Date | null) => d?.toISOString() ?? null;
+    const designSentAt = legacyAwareDesignSentAt(lead);
+    return {
+        id: lead.id,
+        revision: lead.revision,
+        owner: lead.owner,
+        price: lead.price != null ? Number(lead.price) : null,
+        priceNote: lead.priceNote,
+        nextActionKind: lead.nextActionKind,
+        nextActionAt: iso(lead.nextActionAt),
+        offers: {
+            offerAboutUsAt: iso(lead.offerAboutUsAt),
+            offerPricelistAt: iso(lead.offerPricelistAt),
+            offerPriceAt: iso(lead.offerPriceAt),
+            designSentAt: iso(designSentAt),
+            hadLegacySends: lead.hadLegacySends,
+            legacySendsReviewedAt: iso(lead.legacySendsReviewedAt),
+            legacy: { quoteSentAt: iso(lead.quoteSentAt), aboutUsSentAt: iso(lead.aboutUsSentAt), priceDisclosed: lead.priceDisclosed },
+        },
+        designs: lead.designs.map((d) => ({
+            id: d.id,
+            label: d.label,
+            url: d.targetUrl,
+            trackedUrl: d.targetUrl && d.tracker?.token ? trackedUrl(d.targetUrl, d.tracker.token) : null,
+            sentAt: iso(d.sentAt),
+        })),
+    };
+}
 
 export type DealListParams = {
     scope: DealScope;
@@ -331,16 +416,18 @@ export async function getDealList(params: DealListParams): Promise<{ rows: DealR
     const pageIds = ordered.slice(0, take).map((o) => o.id);
     if (pageIds.length === 0) return { rows: [], hasMore: false };
 
-    const [leads, streaks] = await Promise.all([
-        prisma.lead.findMany({ where: { id: { in: pageIds } }, select: LIST_SELECT }),
+    const [leads, streaks, offers] = await Promise.all([
+        // Rozsah znova aj tu: obchod presunutý medzi prvým a druhým dotazom sa nezobrazí.
+        prisma.lead.findMany({ where: { id: { in: pageIds }, ...DEAL_WHERE, ...scopeWhere(params.scope) }, select: LIST_SELECT }),
         noAnswerStreaks(pageIds),
+        lastOffers(pageIds),
     ]);
     const byId = new Map(leads.map((l) => [l.id, l]));
     const now = new Date();
     const rows = pageIds
         .map((id) => byId.get(id))
         .filter((l): l is (typeof leads)[number] => Boolean(l))
-        .map((l) => toDealRow(l, now, streaks.get(l.id) ?? 0));
+        .map((l) => toDealRow(l, now, streaks.get(l.id) ?? 0, offers.get(l.id) ?? null));
     return { rows, hasMore };
 }
 
@@ -378,6 +465,7 @@ export async function getDealDetail(
         include: {
             owner: { select: { id: true, firstName: true, lastName: true } },
             handedOffBy: { select: { firstName: true, lastName: true } },
+            _count: { select: { designs: true } },
             activities: {
                 // Obchodník vidí obchodné kroky; audit (zmeny vlastníka, priradenia) je manažérska vec.
                 where: caps.manage ? {} : { category: "BUSINESS" },
@@ -433,7 +521,7 @@ export async function getDealDetail(
     const offers = summarizeOffers(offerRows);
     // Rovnaké pravidlo ako LAST_TOUCH_WHERE v zozname.
     const lastTouch = lead.activities.find((a) => {
-        if (a.category !== "BUSINESS" || a.revertedAt) return false;
+        if (!(LAST_TOUCH_TYPES as readonly string[]).includes(a.type) || a.revertedAt) return false;
         const offer = a.type === "OFFER_SENT" ? parseOfferMeta(a.meta) : null;
         return !offer || (offer.channel !== "PHONE" && !offer.historical);
     });
@@ -464,10 +552,7 @@ export async function getDealDetail(
             offerAboutUsAt: lead.offerAboutUsAt?.toISOString() ?? null,
             offerPricelistAt: lead.offerPricelistAt?.toISOString() ?? null,
             offerPriceAt: lead.offerPriceAt?.toISOString() ?? null,
-            designSentAt: lead.designs.reduce<string | null>((max, d) => {
-                const at = d.sentAt?.toISOString() ?? null;
-                return at && (!max || at > max) ? at : max;
-            }, null),
+            designSentAt: legacyAwareDesignSentAt(lead)?.toISOString() ?? null,
             hadLegacySends: lead.hadLegacySends,
             legacySendsReviewedAt: lead.legacySendsReviewedAt?.toISOString() ?? null,
             lastPrice: offers.lastPrice,
@@ -496,6 +581,7 @@ export async function getDealDetail(
             createdBy: `${r.createdBy.firstName} ${r.createdBy.lastName}`.trim(),
             resolvedBy: r.resolvedBy ? `${r.resolvedBy.firstName} ${r.resolvedBy.lastName}`.trim() : null,
         })),
+        lastOffer: lastOfferOf(offerRows),
         lastTouch: lastTouch
             ? { type: lastTouch.type, outcome: lastTouch.outcome, note: lastTouch.note, at: lastTouch.createdAt.toISOString() }
             : null,

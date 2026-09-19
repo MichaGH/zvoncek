@@ -1285,7 +1285,7 @@ tests.w3aRecordIdempotent = async () => {
         `r=${codeOf(r1)},${codeOf(r2)},${codeOf(r3)} rows=${rows} rev+${l.revision - before} next=${l.nextActionKind}`,
     );
     const other = await offers.recordOfferSentAs(rep, { ...input, contents: ["PRICELIST"] });
-    check("W3a-A: a reused key with different content is not a second write", codeOf(other) === "OK" && (await prisma.activity.count({ where: { leadId: id, type: "OFFER_SENT" } })) === 1, codeOf(other));
+    check("W3a-A: a reused key with different content is a conflict, not a second write", codeOf(other) === "ERR:IDEMPOTENCY_CONFLICT" && (await prisma.activity.count({ where: { leadId: id, type: "OFFER_SENT" } })) === 1, codeOf(other));
 
     // Dve rôzne kľúče s tou istou revíziou súčasne → presne jeden prejde, druhý STALE.
     const rev = await leadRev(id);
@@ -1543,6 +1543,246 @@ tests.w3aOrdering = async () => {
         "W3a-H: a backdated entry never overtakes a normal one on the same day; the latest price is the anchor",
         normalFirst.lastPrice?.amount === "1100" && later.lastPrice?.amount === "1300",
         `sameDay=${normalFirst.lastPrice?.amount} later=${later.lastPrice?.amount}`,
+    );
+};
+
+// ── Round 2, wave 3b: detail rework (§2d) ────────────────────────────────────────
+
+// W3b-A: „Zmeniť krok" = bez kontaktu, len plán – stav obchodu sa nemení (spiaci ostane spiaci), žiadny hovor.
+tests.w3bReplanKeepsStatus = async () => {
+    const work = await import("../../lib/commands/dealWork");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    await work.logFollowUpAs(rep, { leadId: id, outcome: "SNOOZE", schedule: { kind: "monthsFromToday", months: 2 }, expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const calls = await prisma.activity.count({ where: { leadId: id, type: "CALL" } });
+    const r = await work.logFollowUpAs(rep, {
+        leadId: id,
+        contact: "NONE",
+        outcome: "POSITIVE",
+        nextKind: "CALL",
+        schedule: { kind: "daysFromToday", days: 30 },
+        note: "presunuté",
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+    });
+    const l = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { status: true, nextActionKind: true, nextActionNote: true } });
+    const callsAfter = await prisma.activity.count({ where: { leadId: id, type: "CALL" } });
+    check(
+        "W3b-A: replanning a snoozed deal keeps it SNOOZED, writes no call, updates the step",
+        codeOf(r) === "OK" && l.status === "SNOOZED" && l.nextActionKind === "CALL" && l.nextActionNote === "presunuté" && callsAfter === calls,
+        `r=${codeOf(r)} status=${l.status} kind=${l.nextActionKind} calls ${calls}→${callsAfter}`,
+    );
+};
+
+// W3b-B: vlastný deň follow-up hovoru v „Čo sme poslali"; minulý deň alebo deň bez follow-upu sa odmietne.
+tests.w3bFollowUpDate = async () => {
+    const offers = await import("../../lib/commands/offers");
+    const bt = await import("../../lib/domain/businessTime");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep, "WANTS_EMAIL");
+    const today = bt.businessDate(new Date());
+    const day = bt.addBusinessCalendarDays(today, 3);
+    const base = { leadId: id, contents: ["ABOUT_US"] as "ABOUT_US"[], sentOn: today };
+    const past = await offers.recordOfferSentAs(rep, { ...base, expectedRevision: await leadRev(id), idempotencyKey: key(), followUp: true, followUpOn: bt.addBusinessCalendarDays(today, -1) });
+    const noFollow = await offers.recordOfferSentAs(rep, { ...base, expectedRevision: await leadRev(id), idempotencyKey: key(), followUp: false, followUpOn: day });
+    const ok = await offers.recordOfferSentAs(rep, { ...base, expectedRevision: await leadRev(id), idempotencyKey: key(), followUp: true, followUpOn: day });
+    const l = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { nextActionKind: true, nextActionAt: true } });
+    check(
+        "W3b-B: chosen follow-up day is used; a past day or a day without follow-up is refused",
+        codeOf(past) !== "OK" && codeOf(noFollow) !== "OK" && codeOf(ok) === "OK" && l.nextActionKind === "CALL" && l.nextActionAt !== null && bt.businessDate(l.nextActionAt) === day,
+        `past=${codeOf(past)} noFollow=${codeOf(noFollow)} ok=${codeOf(ok)} at=${l.nextActionAt && bt.businessDate(l.nextActionAt)}`,
+    );
+};
+
+// W3b-C: riadok zoznamu nesie údaje pre dialóg (cena, rozpis, návrhy so sledovaným odkazom) – bez presmerovania.
+tests.w3bListDialogData = async () => {
+    const pipeline = await import("../../lib/commands/pipeline");
+    const { createDesignAs } = await import("../../lib/commands/tracking");
+    const { getDealList } = await import("../../lib/queries/pipeline");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    await pipeline.saveQuoteAs(manager, id, { price: 990, priceNote: "Web 550 · SEO 440" });
+    await createDesignAs(manager, { leadId: id, label: "smrek1", url: "smrek1.thegrandpoints.com" });
+    const row = (await getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "all", take: 500 })).rows.find((r) => r.id === id);
+    const d = row?.dialog;
+    check(
+        "W3b-C: list row carries price, breakdown and designs (with the copy link) for the in-place dialog",
+        d?.price === 990 && d.priceNote === "Web 550 · SEO 440" && d.designs.length === 1 && (d.designs[0].trackedUrl ?? "").includes("?p=") &&
+            d.owner?.id === rep.id && row?.hasDesignSent === false,
+        JSON.stringify({ price: d?.price, note: d?.priceNote, designs: d?.designs.map((x) => ({ url: x.url, tracked: Boolean(x.trackedUrl) })), sent: row?.hasDesignSent }),
+    );
+};
+
+// W3b-D: po ďalšom hovore zoznam aj detail stále ukazujú, čo sme poslali naposledy („čakáme, kým si pozrú návrh").
+tests.w3bLastOfferStays = async () => {
+    const offers = await import("../../lib/commands/offers");
+    const work = await import("../../lib/commands/dealWork");
+    const { createDesignAs } = await import("../../lib/commands/tracking");
+    const { getDealList, getDealDetail } = await import("../../lib/queries/pipeline");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const { dealCapabilities } = await import("../../lib/domain/dealCapabilities");
+    const bt = await import("../../lib/domain/businessTime");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    await createDesignAs(manager, { leadId: id, label: "smrek1", url: "smrek1.thegrandpoints.com" });
+    const design = await prisma.design.findFirstOrThrow({ where: { leadId: id } });
+    await offers.recordOfferSentAs(rep, { leadId: id, expectedRevision: await leadRev(id), idempotencyKey: key(), contents: ["DESIGN"], designIds: [design.id], sentOn: bt.businessDate(new Date()), followUp: true });
+    await work.logFollowUpAs(rep, { leadId: id, outcome: "POSITIVE", reply: "NOT_LOOKED_YET", nextKind: "CALL", schedule: { kind: "daysFromToday", days: 2 }, expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const row = (await getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "all", take: 500 })).rows.find((r) => r.id === id);
+    const detail = await getDealDetail(id, dealScope(rep), dealCapabilities(rep));
+    check(
+        "W3b-D: after a later call, list and detail still show the last send (návrh smrek1)",
+        row?.lastActivity?.type === "CALL" && row.lastOffer?.text === "návrh smrek1" && detail?.lastTouch?.type === "CALL" && detail.lastOffer?.text === "návrh smrek1",
+        `row=${row?.lastActivity?.type}/${row?.lastOffer?.text} detail=${detail?.lastTouch?.type}/${detail?.lastOffer?.text}`,
+    );
+};
+
+// ── Round 2, wave 3b follow-up: fixes from the external review ─────────────────────
+
+// R3-2: návrh označený starým kódom (bez baseline) a potom poslaný novým systémom si zachová starý dátum.
+tests.w3cOldDesignWindow = async () => {
+    const offers = await import("../../lib/commands/offers");
+    const { createDesignAs } = await import("../../lib/commands/tracking");
+    const bt = await import("../../lib/domain/businessTime");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    await createDesignAs(manager, { leadId: id, label: "stary" });
+    const d = await prisma.design.findFirstOrThrow({ where: { leadId: id } });
+    const oldAt = bt.businessDayStart(bt.addBusinessCalendarDays(bt.businessDate(new Date()), -10));
+    await prisma.design.update({ where: { id: d.id }, data: { sentAt: oldAt } }); // zápis „starého kódu", legacySentAt ostal prázdny
+    const r = await offers.recordOfferSentAs(rep, { leadId: id, expectedRevision: await leadRev(id), idempotencyKey: key(), contents: ["DESIGN"], designIds: [d.id], sentOn: bt.businessDate(new Date()), followUp: false });
+    const after = await prisma.design.findUniqueOrThrow({ where: { id: d.id } });
+    check(
+        "R3-2: a design sent by old code keeps its old date when the new system sends it again",
+        codeOf(r) === "OK" && after.sentAt?.getTime() === oldAt.getTime() && after.legacySentAt?.getTime() === oldAt.getTime(),
+        `sentAt=${after.sentAt?.toISOString()} legacy=${after.legacySentAt?.toISOString()}`,
+    );
+};
+
+// R3-4: starý obchod s Lead.designSentAt, ale bez jediného Design riadku, sa nezobrazí ako „návrh neposlaný".
+tests.w3cLegacyNoDesignRow = async () => {
+    const { getDealList, getDealDetail } = await import("../../lib/queries/pipeline");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const { dealCapabilities } = await import("../../lib/domain/dealCapabilities");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const at = new Date(Date.now() - 20 * 86_400_000);
+    await prisma.lead.update({ where: { id }, data: { designSentAt: at, hadLegacySends: true } });
+    const row = (await getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "all", take: 500 })).rows.find((r) => r.id === id);
+    const detail = await getDealDetail(id, dealScope(rep), dealCapabilities(rep));
+    check(
+        "R3-4: legacy designSentAt without Design rows still shows as sent (list + detail)",
+        row?.hasDesignSent === true && row.dialog.offers.designSentAt === at.toISOString() && detail?.offers.designSentAt === at.toISOString(),
+        `row=${row?.hasDesignSent} detail=${detail?.offers.designSentAt}`,
+    );
+};
+
+// R3-5: ten istý kľúč s iným obsahom je konflikt, nie falošné „uložené" (odoslanie aj SMS).
+tests.w3cReplayPayload = async () => {
+    const offers = await import("../../lib/commands/offers");
+    const work = await import("../../lib/commands/dealWork");
+    const bt = await import("../../lib/domain/businessTime");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep, "WANTS_EMAIL");
+    const k = key();
+    const base = { leadId: id, idempotencyKey: k, sentOn: bt.businessDate(new Date()), followUp: false };
+    const rev = await leadRev(id);
+    const first = await offers.recordOfferSentAs(rep, { ...base, expectedRevision: rev, contents: ["ABOUT_US"] });
+    const same = await offers.recordOfferSentAs(rep, { ...base, expectedRevision: rev, contents: ["ABOUT_US"] });
+    const changed = await offers.recordOfferSentAs(rep, { ...base, expectedRevision: rev, contents: ["ABOUT_US", "PRICELIST"] });
+    const sk = key();
+    const srev = await leadRev(id);
+    const sms1 = await work.logFollowUpAs(rep, { leadId: id, contact: "SMS", outcome: "POSITIVE", nextKind: "WAITING_FOR_CLIENT", note: "web", expectedRevision: srev, idempotencyKey: sk });
+    const sms2 = await work.logFollowUpAs(rep, { leadId: id, contact: "SMS", outcome: "POSITIVE", nextKind: "WAITING_FOR_CLIENT", note: "web", expectedRevision: srev, idempotencyKey: sk });
+    const sms3 = await work.logFollowUpAs(rep, { leadId: id, contact: "SMS", outcome: "POSITIVE", nextKind: "WAITING_FOR_CLIENT", note: "iný text", expectedRevision: srev, idempotencyKey: sk });
+    check(
+        "R3-5: same key + same content = replay OK; same key + different content = IDEMPOTENCY_CONFLICT",
+        codeOf(first) === "OK" && codeOf(same) === "OK" && codeOf(changed) === "ERR:IDEMPOTENCY_CONFLICT" &&
+            codeOf(sms1) === "OK" && codeOf(sms2) === "OK" && codeOf(sms3) === "ERR:IDEMPOTENCY_CONFLICT",
+        `offer=${codeOf(first)},${codeOf(same)},${codeOf(changed)} sms=${codeOf(sms1)},${codeOf(sms2)},${codeOf(sms3)}`,
+    );
+};
+
+// R3-6: „Naposledy" je len skutočný kontakt – spätný záznam ani požiadavka ho nemenia; spätné odoslanie nie je „Odoslané".
+tests.w3cLastTouchRules = async () => {
+    const offers = await import("../../lib/commands/offers");
+    const work = await import("../../lib/commands/dealWork");
+    const { getDealDetail, getDealList } = await import("../../lib/queries/pipeline");
+    const { dealScope } = await import("../../lib/domain/dealScope");
+    const { dealCapabilities } = await import("../../lib/domain/dealCapabilities");
+    const bt = await import("../../lib/domain/businessTime");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    await prisma.lead.update({ where: { id }, data: { hadLegacySends: true } });
+    await work.logFollowUpAs(rep, { leadId: id, outcome: "POSITIVE", nextKind: "WAITING_FOR_CLIENT", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    await offers.recordOfferSentAs(manager, { leadId: id, expectedRevision: await leadRev(id), idempotencyKey: key(), contents: ["ABOUT_US"], sentOn: bt.addBusinessCalendarDays(bt.businessDate(new Date()), -40), historical: true, followUp: false });
+    await work.createDealRequestAs(rep, id, "OTHER", "otázka na manažéra");
+    const detail = await getDealDetail(id, dealScope(rep), dealCapabilities(rep));
+    const row = (await getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "all", take: 500 })).rows.find((r) => r.id === id);
+    check(
+        "R3-6: a ticket and a historical entry change neither 'Naposledy' nor the 'Odoslané' line",
+        detail?.lastTouch?.type === "CALL" && row?.lastActivity?.type === "CALL" && detail.lastOffer === null && row.lastOffer === null,
+        `detail=${detail?.lastTouch?.type}/${detail?.lastOffer?.text ?? "null"} row=${row?.lastActivity?.type}/${row?.lastOffer?.text ?? "null"}`,
+    );
+};
+
+// R3-7: zmazanie jediného poslaného návrhu prepočíta súhrn obchodu (a zvýši revíziu raz).
+tests.w3cDeleteDesign = async () => {
+    const offers = await import("../../lib/commands/offers");
+    const tracking = await import("../../lib/commands/tracking");
+    const bt = await import("../../lib/domain/businessTime");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    await tracking.createDesignAs(manager, { leadId: id, label: "omyl" });
+    const d = await prisma.design.findFirstOrThrow({ where: { leadId: id } });
+    await offers.recordOfferSentAs(rep, { leadId: id, expectedRevision: await leadRev(id), idempotencyKey: key(), contents: ["DESIGN"], designIds: [d.id], sentOn: bt.businessDate(new Date()), followUp: false });
+    const sentBefore = (await prisma.lead.findUniqueOrThrow({ where: { id } })).designSentAt;
+    const before = await leadRev(id);
+    const r = await tracking.removeDesignAs(manager, d.id);
+    const l = await prisma.lead.findUniqueOrThrow({ where: { id } });
+    check(
+        "R3-7: deleting the only sent design clears Lead.designSentAt, one revision bump",
+        codeOf(r) === "OK" && sentBefore !== null && l.designSentAt === null && l.revision === before + 1,
+        `before=${sentBefore?.toISOString()} after=${l.designSentAt} rev+${l.revision - before}`,
+    );
+};
+
+// R3-8: cena povedaná telefonicky – iná suma nezdedí starý rozpis; tá istá suma ho ponechá; rozpis sa dá zadať.
+tests.w3cPhoneBreakdown = async () => {
+    const work = await import("../../lib/commands/dealWork");
+    const pipeline = await import("../../lib/commands/pipeline");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const snapshotNote = async (id: string) => {
+        const a = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "OFFER_SENT" }, orderBy: { createdAt: "desc" } });
+        return (a.meta as { price?: { note?: string | null } } | null)?.price?.note ?? null;
+    };
+    const call = (id: string, rev: number, phonePrice: { amount: number; note?: string | null }) =>
+        work.logFollowUpAs(rep, { leadId: id, outcome: "POSITIVE", nextKind: "SEND_QUOTE", phonePrice, expectedRevision: rev, idempotencyKey: key() });
+
+    const a = await makeDeal(rep);
+    await pipeline.saveQuoteAs(manager, a, { price: 1000, priceNote: "Web 600 · SEO 400" });
+    await call(a, await leadRev(a), { amount: 900 });
+    const diff = { snap: await snapshotNote(a), lead: (await prisma.lead.findUniqueOrThrow({ where: { id: a } })).priceNote };
+
+    const b = await makeDeal(rep);
+    await pipeline.saveQuoteAs(manager, b, { price: 1000, priceNote: "Web 600 · SEO 400" });
+    await call(b, await leadRev(b), { amount: 1000 });
+    const same = await snapshotNote(b);
+
+    const c = await makeDeal(rep);
+    await call(c, await leadRev(c), { amount: 800, note: "Web 500 · admin 300" });
+    const given = await snapshotNote(c);
+    check(
+        "R3-8: phone price — new amount drops the old breakdown, same amount keeps it, a given breakdown is stored",
+        diff.snap === null && diff.lead === null && same === "Web 600 · SEO 400" && given === "Web 500 · admin 300",
+        JSON.stringify({ diff, same, given }),
     );
 };
 

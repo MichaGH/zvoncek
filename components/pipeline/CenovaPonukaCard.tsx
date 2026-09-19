@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Pencil, Send } from "lucide-react";
+import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -66,8 +67,7 @@ export default function CenovaPonukaCard({
     const router = useRouter();
     const [editing, setEditing] = useState(false);
     const [busy, setBusy] = useState(false);
-    const [priceInput, setPriceInput] = useState(price != null ? String(price) : "");
-    const [noteInput, setNoteInput] = useState(priceNote ?? "");
+    const [confirmingReview, setConfirmingReview] = useState(false);
 
     const knows = clientKnowledge(offers);
     const unreviewed = legacyUnreviewed(offers);
@@ -78,26 +78,11 @@ export default function CenovaPonukaCard({
         if ("error" in r) toast.error(r.error);
     }
 
-    async function save() {
-        setBusy(true);
-        const trimmed = priceInput.trim();
-        const parsed = trimmed === "" ? null : Number(trimmed.replace(",", "."));
-        report(
-            await SAVE[mode](leadId, {
-                price: parsed != null && Number.isFinite(parsed) ? parsed : null,
-                priceNote: noteInput,
-            }),
-        );
-        setBusy(false);
-        setEditing(false);
-        router.refresh();
-    }
-
     async function confirmReviewed() {
-        if (!window.confirm("Potvrdiť, že je doplnené všetko, čo klient zo starého systému dostal? Prázdne potom znamená „nie“.")) return;
         setBusy(true);
         report(await confirmLegacyReviewed(leadId));
         setBusy(false);
+        setConfirmingReview(false);
         router.refresh();
     }
 
@@ -112,37 +97,12 @@ export default function CenovaPonukaCard({
                 )}
             </CardHeader>
             <CardContent className="space-y-4">
-                {!editing ? (
-                    <div className="space-y-1">
-                        <p className={`text-2xl font-medium tabular-nums${price == null ? " text-muted-foreground" : ""}`}>
-                            {price != null ? formatMoney(price) : "— €"}
-                        </p>
-                        {priceNote && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{priceNote}</p>}
-                    </div>
-                ) : (
-                    <div className="space-y-2">
-                        <div className="grid gap-1.5">
-                            <Label className="text-xs text-muted-foreground">Aktuálna cena (€) — nepovinné</Label>
-                            <Input type="number" value={priceInput} onChange={(e) => setPriceInput(e.target.value)} placeholder="napr. 1285" />
-                        </div>
-                        <div className="grid gap-1.5">
-                            <Label className="text-xs text-muted-foreground">Rozpis</Label>
-                            <Textarea
-                                value={noteInput}
-                                onChange={(e) => setNoteInput(e.target.value)}
-                                placeholder="Web 550 € · admin 250 € · jazyk 100 € · SEO 350 € · správa 35 €/mes."
-                            />
-                        </div>
-                        <div className="flex gap-2">
-                            <Button size="sm" onClick={save} disabled={busy}>
-                                {busy ? "Ukladám…" : "Uložiť"}
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
-                                Zrušiť
-                            </Button>
-                        </div>
-                    </div>
-                )}
+                <div className="space-y-1">
+                    <p className={`text-2xl font-medium tabular-nums${price == null ? " text-muted-foreground" : ""}`}>
+                        {price != null ? formatMoney(price) : "— €"}
+                    </p>
+                    {priceNote && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{priceNote}</p>}
+                </div>
 
                 <div className="space-y-1 text-sm">
                     <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Klient dostal</p>
@@ -180,14 +140,29 @@ export default function CenovaPonukaCard({
                                 .filter(Boolean)
                                 .join(" · ") || "odoslaný návrh"}
                         </p>
-                        {isManager && (
+                        {isManager && !confirmingReview && (
                             <div className="flex flex-wrap gap-2">
                                 <Button size="sm" variant="outline" disabled={busy} onClick={onHistorical}>
                                     Doplniť starý záznam
                                 </Button>
-                                <Button size="sm" variant="ghost" disabled={busy} onClick={confirmReviewed}>
+                                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirmingReview(true)}>
                                     Hotovo – toto je všetko
                                 </Button>
+                            </div>
+                        )}
+                        {isManager && confirmingReview && (
+                            <div className="space-y-2 border-t border-amber-500/30 pt-2">
+                                <p className="text-xs">
+                                    Je doplnené všetko, čo klient zo starého systému dostal? Prázdne potom znamená „nie“.
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                    <Button size="sm" disabled={busy} onClick={confirmReviewed}>
+                                        Áno, potvrdiť
+                                    </Button>
+                                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirmingReview(false)}>
+                                        Späť
+                                    </Button>
+                                </div>
                             </div>
                         )}
                     </div>
@@ -200,6 +175,82 @@ export default function CenovaPonukaCard({
                     </Button>
                 )}
             </CardContent>
+            {editing && (
+                <PriceEditSheet
+                    price={price}
+                    priceNote={priceNote}
+                    onClose={() => setEditing(false)}
+                    onSave={async (input) => {
+                        const r = await SAVE[mode](leadId, input);
+                        report(r);
+                        if (!("error" in r)) {
+                            toast.success("Cena uložená");
+                            setEditing(false);
+                        }
+                        router.refresh();
+                    }}
+                />
+            )}
         </Card>
+    );
+}
+
+// Úprava aktuálnej ceny obchodu – len cena a rozpis, nič sa tým neposiela ani neplánuje (round 2 §2d).
+// Hodnoty sa berú z aktuálnych údajov pri každom otvorení.
+function PriceEditSheet({
+    price,
+    priceNote,
+    onClose,
+    onSave,
+}: {
+    price: number | null;
+    priceNote: string | null;
+    onClose: () => void;
+    onSave: (input: { price: number | null; priceNote: string | null }) => Promise<void>;
+}) {
+    const [priceInput, setPriceInput] = useState(price != null ? String(price) : "");
+    const [noteInput, setNoteInput] = useState(priceNote ?? "");
+    const [saving, setSaving] = useState(false);
+    const trimmed = priceInput.trim();
+    const parsed = trimmed === "" ? null : Number(trimmed.replace(",", "."));
+    const invalid = parsed !== null && (!Number.isFinite(parsed) || parsed < 0);
+
+    return (
+        <ResponsiveSheet open onOpenChange={(o) => !o && onClose()} title="Upraviť cenu" description="Aktuálna cena obchodu. Neposiela sa tým nič klientovi.">
+            <div className="mx-auto w-full max-w-md space-y-3 px-4 pb-6 md:max-w-none md:px-0 md:pb-0">
+                <div className="grid gap-1.5">
+                    <Label className="text-xs text-muted-foreground">Cena (€) — prázdne = bez ceny</Label>
+                    <Input
+                        data-vaul-no-drag
+                        inputMode="decimal"
+                        value={priceInput}
+                        onChange={(e) => setPriceInput(e.target.value)}
+                        placeholder="napr. 1285"
+                        className="text-[16px]"
+                    />
+                </div>
+                <div className="grid gap-1.5">
+                    <Label className="text-xs text-muted-foreground">Rozpis</Label>
+                    <Textarea
+                        data-vaul-no-drag
+                        value={noteInput}
+                        onChange={(e) => setNoteInput(e.target.value)}
+                        placeholder="Web 550 € · admin 250 € · jazyk 100 € · SEO 350 € · správa 35 €/mes."
+                        className="min-h-[88px] text-[16px]"
+                    />
+                </div>
+                <Button
+                    className="h-12 w-full"
+                    disabled={saving || invalid}
+                    onClick={async () => {
+                        setSaving(true);
+                        await onSave({ price: parsed, priceNote: noteInput });
+                        setSaving(false);
+                    }}
+                >
+                    {invalid ? "Neplatná suma" : saving ? "Ukladám…" : "Uložiť cenu"}
+                </Button>
+            </div>
+        </ResponsiveSheet>
     );
 }

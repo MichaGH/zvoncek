@@ -15,6 +15,7 @@ How to work in this repo. Read this first, then the file the task points at.
 | Which reusable operation already does this | `context/domain/operations.md` |
 | What the production database still lacks | `context/domain/db-changes.md` |
 | What we decided and why, for the feature being built | `context/features/<feature>/…` |
+| Ideas and unfinished business not scheduled in any wave | `context/features/backlog.md` (not requirements) |
 | What has been done so far | `context/progress-tracker.md` |
 
 ## 2. What each file is allowed to contain
@@ -30,6 +31,12 @@ How to work in this repo. Read this first, then the file the task points at.
 - `context/domain/db-changes.md` — the **net** difference between the test branch and live production (what a rollout
   still owes), plus the rollout procedure. Only changes already applied on test. Clear the applied entries after a
   rollout, not the procedure.
+
+**Old send data (decision, not implemented).** Michal chose a full conversion of old email/price/návrh sends into
+`OFFER_SENT`, followed by a separately reviewed non-additive removal of obsolete send columns. The current test code
+and schema still use the frozen "?" legacy layer; do not treat the target as shipped or build new work on that layer.
+The required live-data mapping, production-duplicate rehearsal and blockers in the prototype script are in
+`context/domain/db-changes.md` §3.3. Never apply that prototype to production or its duplicate as-is.
 
 **Older text.** The feature documents and the progress tracker are records written over time. They mention things that
 no longer exist: `/dashboard/clients`, `components/clients|deals`, `lib/queries/clients|deals`, `lib/actions/deals`,

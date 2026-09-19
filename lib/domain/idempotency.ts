@@ -40,16 +40,23 @@ export async function idempotentReplay(
 }
 
 // Všeobecná obdoba pre záznamy obchodu (odoslanie, SMS, odpoveď klienta, plán bez kontaktu – round 2 §2c):
-// kľúč patrí tej istej osobe, obchodu a niektorému z očakávaných typov → úspech bez ďalšieho zápisu; inak konflikt.
+// kľúč patrí tej istej osobe, obchodu, niektorému z očakávaných typov A TOMU ISTÉMU OBSAHU (`fingerprint`) →
+// úspech bez ďalšieho zápisu. Iný obsah pod tým istým kľúčom = konflikt, nie falošné „uložené".
+export type ReplayRow = { type: ActivityType; outcome: CallOutcome | null; note: string | null; meta: unknown };
+
 export async function activityReplay(
     key: string,
-    expected: { userId: string; leadId: string; types: readonly ActivityType[] },
+    expected: { userId: string; leadId: string; types: readonly ActivityType[]; fingerprint?: (row: ReplayRow) => string; want?: string },
 ): Promise<{ success: true } | ActionError | null> {
     const existing = await prisma.activity.findUnique({
         where: { idempotencyKey: key },
-        select: { userId: true, leadId: true, type: true },
+        select: { userId: true, leadId: true, type: true, outcome: true, note: true, meta: true },
     });
     if (!existing) return null;
-    const matches = existing.userId === expected.userId && existing.leadId === expected.leadId && expected.types.includes(existing.type);
+    const matches =
+        existing.userId === expected.userId &&
+        existing.leadId === expected.leadId &&
+        expected.types.includes(existing.type) &&
+        (!expected.fingerprint || expected.fingerprint(existing) === expected.want);
     return matches ? { success: true } : { error: "Obchod sa medzitým zmenil – obnovujem.", code: "IDEMPOTENCY_CONFLICT" };
 }

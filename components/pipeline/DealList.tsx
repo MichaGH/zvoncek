@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import UrgencyLabel from "@/components/shared/UrgencyLabel";
 import InteractionSheet from "@/components/pipeline/InteractionSheet";
+import OfferSentDialog from "@/components/pipeline/OfferSentDialog";
 import {
     ACTIVITY_LABEL,
     NEXT_ACTION_LABEL,
@@ -123,6 +124,11 @@ function LastActivityContent({ row, dense }: { row: DealRow; dense?: boolean }) 
                 {formatDate(row.lastActivity.at)}
                 {row.noAnswerStreak > 1 ? ` · ${row.noAnswerStreak}. pokus` : ""}
             </span>
+            {row.lastOffer && row.lastActivity.type !== "OFFER_SENT" && (
+                <span className={cn("text-xs text-muted-foreground", dense && "truncate")}>
+                    Odoslané: {row.lastOffer.text} · {formatDate(row.lastOffer.at)}
+                </span>
+            )}
         </div>
     );
 }
@@ -190,14 +196,18 @@ export default function DealList({
     caps,
     showStatus = false,
     showOwner = false,
+    viewerId,
 }: {
     rows: DealRow[];
     caps: DealCapabilities;
     showStatus?: boolean;
     showOwner?: boolean;
+    viewerId: string;
 }) {
     const router = useRouter();
     const [open, setOpen] = useState<DealRow | null>(null);
+    // „Poslali sme ponuku" otvára dialóg priamo tu – bez presmerovania do detailu (round 2 §2d).
+    const [offerFor, setOfferFor] = useState<DealRow | null>(null);
 
     // Zoznam sa sám obnoví – termíny („dnes", „po termíne") starnú v reálnom čase.
     useEffect(() => {
@@ -206,12 +216,27 @@ export default function DealList({
     }, [router]);
 
     const sheet = (
-        <InteractionSheet
-            key={open ? `${open.id}-${open.revision}` : "closed"}
-            target={open}
-            caps={caps}
-            onClose={() => setOpen(null)}
-        />
+        <>
+            <InteractionSheet
+                key={open ? `${open.id}-${open.revision}` : "closed"}
+                target={open}
+                caps={caps}
+                onClose={() => setOpen(null)}
+                onRecordOffer={() => {
+                    setOfferFor(open);
+                    setOpen(null);
+                }}
+            />
+            {offerFor && (
+                <OfferSentDialog
+                    key={`offer-${offerFor.id}-${offerFor.revision}`}
+                    deal={offerFor.dialog}
+                    viewerId={viewerId}
+                    isManager={caps.manage}
+                    onClose={() => setOfferFor(null)}
+                />
+            )}
+        </>
     );
 
     if (rows.length === 0) {

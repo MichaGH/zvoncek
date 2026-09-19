@@ -10,19 +10,11 @@ import { getDesignsForLead } from "@/lib/queries/tracking";
 // Detail obchodu – rovnaká stránka pre vlastníka aj manažéra. Rozsah je v dotaze (getDealDetail),
 // takže presun obchodu medzi kontrolou a načítaním nemôže vrátiť detail bývalému vlastníkovi.
 
-export default async function DealDetailPage({
-    params,
-    searchParams,
-}: {
-    params: Promise<{ id: string }>;
-    searchParams: Promise<{ zaznam?: string }>;
-}) {
+export default async function DealDetailPage({ params }: { params: Promise<{ id: string }> }) {
     const viewer = await requireUser();
     if (!viewer) redirect("/login?deactivated=1");
     if (!can(viewer, "deals.view")) redirect("/dashboard");
     const { id } = await params;
-    // Akčné okno v zozname posiela „Poslali sme ponuku" sem – dialóg potrebuje návrhy a cenu, ktoré zoznam nenačítava.
-    const openOffer = (await searchParams).zaznam === "ponuka";
 
     const caps = dealCapabilities(viewer);
     const scope = await getDealScope(viewer);
@@ -36,7 +28,7 @@ export default async function DealDetailPage({
 
     return (
         <DashboardPage>
-            <DealDetail lead={lead} caps={caps} viewerId={viewer.id} users={users} designs={designs} openOffer={openOffer && caps.work} />
+            <DealDetail lead={lead} caps={caps} viewerId={viewer.id} users={users} designs={designs} />
         </DashboardPage>
     );
 }

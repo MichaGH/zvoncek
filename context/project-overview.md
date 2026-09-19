@@ -37,13 +37,13 @@ Invariant: `status NEW` ⇒ the lead has no CALL activity.
 - **TELESALES** — first calls in `/dashboard/calls` (claims batches of 10 from the pool, own retries/callbacks/snoozes),
   own call history, may add contacts. Positive calls are routed to their team leader, or stay unassigned.
 - **SALES_REP** — TELESALES plus follow-ups on **own** deals in `/dashboard/pipeline` (scope `own`): price,
-  quote/email sent, tickets to the manager. Their own positive first call becomes their own deal. No WON, no reopen,
+  quote/email sent, requests to the manager (`[WAVE 3]` tasks). Their own positive first call becomes their own deal. No WON, no reopen,
   no design management, no other people's deals.
-- **MANAGER** — everything on all deals, the assignment tool, resolving tickets, global read access.
+- **MANAGER** — everything on all deals, the assignment tool, resolving requests, global read access.
 - **ADMIN** — all permissions plus the admin pages.
 
 Today there is exactly one manager (Michal, account role `ADMIN`). `deals.viewTeam` is a permission prepared for a
-possible sales-team leader; no role holds it. A developer role and addressed tickets are future design, not current
+possible sales-team leader; no role holds it. A developer role is future design (its own project feature, `context/features/backlog.md` BL-04), not current
 schema or behaviour.
 
 ## 3. Permissions
@@ -57,10 +57,10 @@ Deal permissions (round 2 naming; `clients.*` and `pipeline.*` no longer exist):
 | Permission | Meaning |
 |---|---|
 | `deals.view` | may open the deals screen |
-| `deals.work` | may act on deals in scope (next step, interaction, price, contact data, tickets) |
+| `deals.work` | may act on deals in scope (next step, interaction, price, contact data, requests to the manager) |
 | `deals.viewAll` | scope = every deal |
 | `deals.viewTeam` | scope = own + team (no role holds it yet) |
-| `deals.manage` | status, owner, project type, WON, reopen, designs, resolving tickets, bulk transfer |
+| `deals.manage` | status, owner, project type, WON, reopen, designs, resolving requests, bulk transfer |
 | `deals.receive` | may own deals (handoff targets, owner selects) |
 
 Others: `today.view`, `calls.*`, `callHistory.*`, `contacts.*`, `requests.resolve`, `stats.*`, `teams.manage`,
@@ -129,7 +129,8 @@ product truth. For a redesign: first calls = `Activity.source CALL_QUEUE`; deal 
 `deals.manage`) or `PIPELINE` (manager) — the source follows the actor, not the screen; exclude reverted / crossed-out
 activities (`revertedAt`). Calls are `CALL` only — written replies (`CLIENT_REPLIED`), SMS and "bez kontaktu" are not
 calls. The cenník-vs-price experiment groups each deal by its **first verified offer email** and excludes
-`hadLegacySends` deals and historical entries — rule in `context/features/01-salesrep/round2-deal-workspace.md` §2c 4.4.
+`hadLegacySends` deals and historical entries in the **current test implementation**. **[ROLLOUT]** After the chosen
+old-send conversion, exclude migrated deals by `meta.migrated` instead; see `context/domain/db-changes.md` §3.3.
 
 ## 8. Environments
 

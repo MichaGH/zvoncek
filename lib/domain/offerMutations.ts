@@ -17,6 +17,7 @@ import {
     type OfferRow,
 } from "@/lib/domain/offers";
 import { bumpLeadOnce } from "@/lib/domain/revision";
+import { businessDayStart } from "@/lib/domain/businessTime";
 
 // Telá zápisov „čo klient dostal" (round 2 §2c). Volajú ich príkazy pod zámkom Lead riadku; revízia sa zvýši raz.
 // Pravidlo: súhrnné stĺpce sa NIKDY nezapisujú ručne – vždy recomputeOffers() z platných OFFER_SENT záznamov.
@@ -59,6 +60,21 @@ export async function recomputeOffers(tx: Tx, leadId: string) {
     return summary;
 }
 
+// Návrh, ktorý starý kód označil ako poslaný a nový systém ho ešte nikdy nezapísal, si pred prvým novým odoslaním
+// uloží starý dátum do legacySentAt – inak by ho prepočet prepísal (okno medzi jednorazovým krokom a nasadením).
+async function baselineOldDesignDates(tx: Tx, leadId: string, designIds: string[]) {
+    const candidates = await tx.design.findMany({
+        where: { id: { in: designIds }, sentAt: { not: null }, legacySentAt: null },
+        select: { id: true, sentAt: true },
+    });
+    for (const d of candidates) {
+        const seen = await tx.activity.count({
+            where: { leadId, type: "OFFER_SENT", meta: { path: ["designs"], array_contains: [{ id: d.id }] } },
+        });
+        if (seen === 0) await tx.design.update({ where: { id: d.id }, data: { legacySentAt: d.sentAt } });
+    }
+}
+
 export type RecordOfferInput = {
     channel: OfferChannel;
     contents: OfferContent[];
@@ -66,7 +82,8 @@ export type RecordOfferInput = {
     historical: boolean;
     price?: { amount: number; note?: string | null } | null; // note undefined = ponechať uložený rozpis
     designIds?: string[];
-    followUp: boolean; // true = nahradiť ďalší krok „Zavolať, či prišlo · o 7 dní"
+    followUp: boolean; // true = nahradiť ďalší krok „Zavolať, či prišlo" (predvolene o 7 dní)
+    followUpOn?: string; // iný deň pre ten hovor (YYYY-MM-DD, overený volajúcim)
     callActivityId?: string;
     idempotencyKey?: string;
 };
@@ -95,7 +112,13 @@ export async function recordOffer(
         } else {
             if (input.price) {
                 const current = lead.price != null ? Number(lead.price) : null;
-                const note = input.price.note === undefined ? (lead.priceNote ?? null) : input.price.note?.trim() || null;
+                // Bez rozpisu: pri tej istej sume ostáva uložený rozpis; iná suma starý rozpis nezdedí.
+                const note =
+                    input.price.note !== undefined
+                        ? input.price.note?.trim() || null
+                        : current === input.price.amount
+                          ? (lead.priceNote ?? null)
+                          : null;
                 if (current !== input.price.amount || (lead.priceNote ?? null) !== note) {
                     await saveQuote(tx, actor, lead, { price: input.price.amount, priceNote: note }, source);
                 }
@@ -116,6 +139,7 @@ export async function recordOffer(
         });
         if (found.length !== ids.length) throw new AccessError("NOT_FOUND", "Návrh sa nenašiel.");
         designs = found.map((d) => ({ id: d.id, label: d.label, url: d.targetUrl, version: d.currentVersion }));
+        await baselineOldDesignDates(tx, lead.id, ids);
     }
 
     const meta: OfferMeta = {
@@ -147,7 +171,8 @@ export async function recordOffer(
     if (input.historical) return { activityId: activity.id };
 
     if (input.followUp) {
-        const next = nextActionData("CALL", followUpInSevenDays(offerInstant(meta, activity.createdAt)), followUpNote(contents), false);
+        const at = input.followUpOn ? businessDayStart(input.followUpOn) : followUpInSevenDays(offerInstant(meta, activity.createdAt));
+        const next = nextActionData("CALL", at, followUpNote(contents), false);
         await updateLead(tx, lead.id, next);
         await tx.activity.create({
             data: createPlanningActivity({

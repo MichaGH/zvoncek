@@ -9,7 +9,7 @@ import { DashboardContent, DashboardPageHeader } from "@/components/dashboard/Da
 import CenovaPonukaCard from "@/components/pipeline/CenovaPonukaCard";
 import DesignTrackingCard from "@/components/pipeline/DesignTrackingCard";
 import RequestsCard from "@/components/pipeline/RequestsCard";
-import NextActionEditor from "@/components/pipeline/NextActionEditor";
+import UrgencyLabel from "@/components/shared/UrgencyLabel";
 import InteractionSheet, { type InteractionTarget } from "@/components/pipeline/InteractionSheet";
 import OfferSentDialog from "@/components/pipeline/OfferSentDialog";
 import { copyEmailLink } from "@/components/shared/copyEmailLink";
@@ -24,38 +24,29 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import type { ActionError } from "@/lib/access/errors";
 import {
-    addDealNote,
     cancelOwnDealRequest,
     correctRecord,
     createDealRequest,
-    setDealNextAction,
     updateDealContact,
 } from "@/lib/actions/pipeline";
-import {
-    addBusinessNote,
-    changeOwner,
-    changeStatus,
-    markLost,
-    reopenDeal,
-    setNextAction,
-    setProjectType,
-    updateLead,
-} from "@/lib/actions/pipeline";
+import { changeOwner, changeStatus, markLost, reopenDeal, setProjectType, updateLead } from "@/lib/actions/pipeline";
 import {
     ACTIVITY_CATEGORY_LABEL,
     ACTIVITY_LABEL,
     ACTIVITY_SOURCE_LABEL,
     CONFIDENCE_LABEL,
     CONFIDENCE_VARIANT,
+    NEXT_ACTION_LABEL,
     OUTCOME_LABEL,
     PROJECT_TYPE_LABEL,
     REQUEST_KIND_LABEL,
     REQUEST_STATUS_LABEL,
     STATUS_LABEL,
 } from "@/lib/dictionaries";
-import { BUSINESS_TZ, businessDate, businessDayMonth, businessDayStart } from "@/lib/domain/businessTime";
+import { BUSINESS_TZ, businessDate, businessDayMonth, businessDayStart, businessInputParts } from "@/lib/domain/businessTime";
 import { CLIENT_SECTION_LABEL } from "@/lib/domain/clientSections";
 import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
+import { FOLLOW_UP_NEXT_KINDS, type FollowUpNextKind } from "@/lib/domain/leadFlow";
 import type { DealDetailData, DealUserOption } from "@/lib/queries/pipeline";
 import type { DesignView } from "@/lib/queries/tracking";
 import { fmtAgo } from "@/lib/utils";
@@ -67,7 +58,6 @@ import { fmtAgo } from "@/lib/utils";
 // Záznamy, ktoré sa dajú prečiarknuť (round 2 §2c 5.4) – autor alebo manažér, s dôvodom.
 const CORRECTABLE = new Set(["OFFER_SENT", "SMS_SENT", "CLIENT_REPLIED"]);
 
-const QUICK_EVENTS = ["Klient sľúbil poslať podklady", "Podklady neprišli", "Návrh si ešte nepozreli", "Máme sa ozvať po porade"];
 const DEAL_STATUS_OPTIONS: LeadStatus[] = ["ACTIVE", "SNOOZED", "WON", "LOST", "UNREACHABLE"];
 const CLOSED: LeadStatus[] = ["WON", "LOST", "UNREACHABLE"];
 const REP_REQUEST_KINDS: DealRequestKind[] = ["PRICE", "DESIGN", "EMAIL", "ORDER", "OTHER"];
@@ -108,14 +98,12 @@ export default function DealDetail({
     viewerId,
     users,
     designs,
-    openOffer = false,
 }: {
     lead: DealDetailData;
     caps: DealCapabilities;
     viewerId: string;
     users: DealUserOption[];
     designs: DesignView[];
-    openOffer?: boolean;
 }) {
     const router = useRouter();
     const [pending, startTransition] = useTransition();
@@ -130,17 +118,15 @@ export default function DealDetail({
     });
     const [savingData, setSavingData] = useState(false);
     const [busy, setBusy] = useState(false);
-    const [businessNote, setBusinessNote] = useState("");
     const [showAllHistory, setShowAllHistory] = useState(caps.manage);
     const [lostReason, setLostReason] = useState(lead.lostReason ?? "");
     const [savingLost, setSavingLost] = useState(false);
-    const [interaction, setInteraction] = useState(false);
+    // Akčné okno: „contact" = Zaznamenať kontakt, „replan" = Zmeniť krok (rovno obrazovka ďalšieho kroku).
+    const [interaction, setInteraction] = useState<null | "contact" | "replan">(null);
     const [requestKind, setRequestKind] = useState<DealRequestKind>("PRICE");
     const [requestNote, setRequestNote] = useState("");
     // Z akčného okna v zozname sa „Poslali sme ponuku" otvára tu (?zaznam=ponuka), lebo dialóg potrebuje návrhy a cenu.
-    const [offerDialog, setOfferDialog] = useState<null | { historical: boolean; designId?: string }>(() =>
-        openOffer ? { historical: false } : null,
-    );
+    const [offerDialog, setOfferDialog] = useState<null | { historical: boolean; designId?: string }>(null);
     const [correcting, setCorrecting] = useState<string | null>(null);
     const [correctionReason, setCorrectionReason] = useState("");
     const [copiedDesign, setCopiedDesign] = useState<string | null>(null);
@@ -155,18 +141,8 @@ export default function DealDetail({
 
     // Manažér smie meniť aj uzavretý obchod (requireDealManage), vlastník len otvorený (requireDealWork).
     const api = caps.manage
-        ? {
-              setNextAction: (input: Parameters<typeof setNextAction>[1], rev: number) => setNextAction(lead.id, input, rev),
-              updateContact: (data: typeof form) => updateLead(lead.id, data),
-              addNote: (note: string) => addBusinessNote(lead.id, note),
-              quoteMode: "pipeline" as const,
-          }
-        : {
-              setNextAction: (input: Parameters<typeof setDealNextAction>[1], rev: number) => setDealNextAction(lead.id, input, rev),
-              updateContact: (data: typeof form) => updateDealContact(lead.id, data),
-              addNote: (note: string) => addDealNote(lead.id, note),
-              quoteMode: "clients" as const,
-          };
+        ? { updateContact: (data: typeof form) => updateLead(lead.id, data), quoteMode: "pipeline" as const }
+        : { updateContact: (data: typeof form) => updateDealContact(lead.id, data), quoteMode: "clients" as const };
 
     function report(r: { success: true } | ActionError | { success: true; created: boolean }) {
         if ("error" in r) toast.error(r.error);
@@ -209,11 +185,6 @@ export default function DealDetail({
         router.refresh();
     }
 
-    async function saveBusinessNote() {
-        if (report(await api.addNote(businessNote))) setBusinessNote("");
-        router.refresh();
-    }
-
     const requestNoteMissing = REQUEST_NOTE_REQUIRED.includes(requestKind) && !requestNote.trim();
 
     const interactionTarget: InteractionTarget = {
@@ -225,9 +196,21 @@ export default function DealDetail({
         revision: lead.revision,
         noAnswerStreak: lead.noAnswerStreak,
         price: lead.price,
+        priceNote: lead.priceNote,
+        lastOffer: lead.lastOffer,
         lastActivity: lead.lastTouch,
         openRequests: openRequests.map((r) => ({ id: r.id, kind: r.kind })),
     };
+
+    // Predvyplnenie „Zmeniť krok" z aktuálneho kroku (ORDER a iné mimo ponuky akčného okna → „Zavolať").
+    const replan = (() => {
+        const kind = (FOLLOW_UP_NEXT_KINDS as readonly string[]).includes(lead.nextActionKind ?? "")
+            ? (lead.nextActionKind as FollowUpNextKind)
+            : "CALL";
+        const parts =
+            lead.nextActionAt && lead.nextActionMode === "SCHEDULED" ? businessInputParts(new Date(lead.nextActionAt)) : { date: "", time: "" };
+        return { kind, date: parts.date, time: lead.nextActionHasTime ? parts.time : "", note: lead.nextActionNote ?? "" };
+    })();
 
     function saveCorrection(activityId: string) {
         startTransition(async () => {
@@ -360,83 +343,69 @@ export default function DealDetail({
                     <div className="order-2 space-y-6 lg:order-none lg:col-span-2">
                         {caps.resolveRequests && <RequestsCard leadId={lead.id} requests={openRequests} />}
 
-                        {editable && <NextActionEditor lead={lead} onSave={(input, revision) => api.setNextAction(input, revision)} />}
-
-                        {/* Posledný krok & zaznamenať udalosť */}
+                        {/* Ďalší krok · Naposledy – jedna karta, jedno tlačidlo na záznam kontaktu (round 2 §2d) */}
                         <Card>
                             <CardHeader className="flex items-center justify-between">
-                                <CardTitle className="text-base">Naposledy</CardTitle>
+                                <CardTitle className="text-base">Ďalší krok · Naposledy</CardTitle>
                                 {editable && (
-                                    <Button size="sm" variant="outline" onClick={() => setInteraction(true)}>
+                                    <Button size="sm" onClick={() => setInteraction("contact")}>
                                         <PhoneCall className="mr-1.5 h-3.5 w-3.5" />
                                         Zaznamenať kontakt
                                     </Button>
                                 )}
                             </CardHeader>
-                            <CardContent className="space-y-4">
-                                {lead.lastTouch ? (
-                                    <div className="space-y-1 text-sm">
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <span className="font-medium">{ACTIVITY_LABEL[lead.lastTouch.type]}</span>
-                                            {lead.noAnswerStreak > 1 && (
-                                                <Badge variant="outline" className="font-normal">
-                                                    {lead.noAnswerStreak}. pokus
-                                                </Badge>
+                            <CardContent className="grid gap-3 sm:grid-cols-2">
+                                <div className="space-y-1.5 rounded-lg border p-3 text-sm">
+                                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Ďalší krok</p>
+                                    {lead.nextActionKind ? (
+                                        <>
+                                            <p className="font-medium">{NEXT_ACTION_LABEL[lead.nextActionKind]}</p>
+                                            <UrgencyLabel at={lead.nextActionAt} hasTime={lead.nextActionHasTime} mode={lead.nextActionMode} />
+                                            {lead.nextActionNote && (
+                                                <p className="whitespace-pre-wrap text-muted-foreground">{lead.nextActionNote}</p>
                                             )}
-                                            {lead.lastTouch.outcome && (
-                                                <span className="text-xs text-muted-foreground">
-                                                    {OUTCOME_LABEL[lead.lastTouch.outcome]}
-                                                </span>
+                                        </>
+                                    ) : (
+                                        <p className="text-muted-foreground">Bez ďalšieho kroku.</p>
+                                    )}
+                                    {editable && (
+                                        <Button size="sm" variant="ghost" className="-ml-2 h-7" onClick={() => setInteraction("replan")}>
+                                            <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                                            Zmeniť krok
+                                        </Button>
+                                    )}
+                                </div>
+                                <div className="space-y-1.5 rounded-lg border p-3 text-sm">
+                                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Naposledy</p>
+                                    {lead.lastTouch ? (
+                                        <>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <span className="font-medium">{ACTIVITY_LABEL[lead.lastTouch.type]}</span>
+                                                {lead.lastTouch.outcome && (
+                                                    <span className="text-xs text-muted-foreground">{OUTCOME_LABEL[lead.lastTouch.outcome]}</span>
+                                                )}
+                                                {lead.noAnswerStreak > 1 && (
+                                                    <Badge variant="outline" className="font-normal">
+                                                        {lead.noAnswerStreak}. pokus
+                                                    </Badge>
+                                                )}
+                                            </div>
+                                            <p className="text-xs text-muted-foreground tabular-nums">{formatDateTime(lead.lastTouch.at)}</p>
+                                            {lead.lastTouch.note && (
+                                                <p className="whitespace-pre-wrap text-muted-foreground">{lead.lastTouch.note}</p>
                                             )}
-                                            <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-                                                {formatDateTime(lead.lastTouch.at)}
-                                            </span>
-                                        </div>
-                                        {lead.lastTouch.note && (
-                                            <p className="whitespace-pre-wrap text-muted-foreground">{lead.lastTouch.note}</p>
-                                        )}
-                                    </div>
-                                ) : (
-                                    <p className="text-sm text-muted-foreground">Zatiaľ žiadny krok.</p>
-                                )}
-
-                                {editable && (
-                                    <div className="space-y-2">
-                                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                            Zaznamenať udalosť
+                                        </>
+                                    ) : (
+                                        <p className="text-muted-foreground">Zatiaľ žiadny kontakt.</p>
+                                    )}
+                                    {/* Čo sme poslali naposledy ostáva viditeľné aj po ďalšom hovore (round 2 §2d). */}
+                                    {lead.lastOffer && lead.lastTouch?.type !== "OFFER_SENT" && (
+                                        <p className="border-t pt-1.5 text-xs text-muted-foreground">
+                                            Odoslané: <span className="text-foreground">{lead.lastOffer.text}</span> ·{" "}
+                                            {formatDate(lead.lastOffer.at)}
                                         </p>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            {QUICK_EVENTS.map((text) => (
-                                                <Button
-                                                    key={text}
-                                                    size="sm"
-                                                    variant="outline"
-                                                    disabled={busy}
-                                                    onClick={() => runBusiness(() => api.addNote(text))}
-                                                    className="h-auto min-h-8 justify-start whitespace-normal py-1.5 text-left leading-snug"
-                                                >
-                                                    {text}
-                                                </Button>
-                                            ))}
-                                        </div>
-                                        <div className="flex flex-col gap-2 sm:flex-row">
-                                            <Input
-                                                value={businessNote}
-                                                onChange={(event) => setBusinessNote(event.target.value)}
-                                                placeholder="Vlastná udalosť / poznámka…"
-                                                onKeyDown={(event) => {
-                                                    if (event.key === "Enter" && businessNote.trim()) {
-                                                        event.preventDefault();
-                                                        saveBusinessNote();
-                                                    }
-                                                }}
-                                            />
-                                            <Button size="sm" className="shrink-0" disabled={!businessNote.trim()} onClick={saveBusinessNote}>
-                                                Pridať
-                                            </Button>
-                                        </div>
-                                    </div>
-                                )}
+                                    )}
+                                </div>
                             </CardContent>
                         </Card>
 
@@ -678,7 +647,7 @@ export default function DealDetail({
                                                 <div className={`space-y-1 py-3 text-sm${activity.revertedAt ? " opacity-60" : ""}`}>
                                                     <div className="flex flex-wrap items-center gap-2">
                                                         <span className={`font-medium${activity.revertedAt ? " line-through" : ""}`}>
-                                                            {ACTIVITY_LABEL[activity.type]}
+                                                            {activity.offer?.channel === "PHONE" ? "↳ Cena povedaná v hovore" : ACTIVITY_LABEL[activity.type]}
                                                         </span>
                                                         {activity.offer?.historical && (
                                                             <Badge variant="outline" className="font-normal">
@@ -811,12 +780,13 @@ export default function DealDetail({
 
             {interaction && (
                 <InteractionSheet
-                    key={`interaction-${lead.revision}`}
+                    key={`interaction-${lead.revision}-${interaction}`}
                     target={interactionTarget}
                     caps={caps}
-                    onClose={() => setInteraction(false)}
+                    replan={interaction === "replan" ? replan : undefined}
+                    onClose={() => setInteraction(null)}
                     onRecordOffer={() => {
-                        setInteraction(false);
+                        setInteraction(null);
                         setOfferDialog({ historical: false });
                     }}
                 />
@@ -829,10 +799,7 @@ export default function DealDetail({
                     isManager={caps.manage}
                     historical={offerDialog.historical}
                     preselectDesignId={offerDialog.designId}
-                    onClose={() => {
-                        setOfferDialog(null);
-                        if (openOffer) router.replace(`/dashboard/pipeline/${lead.id}`, { scroll: false });
-                    }}
+                    onClose={() => setOfferDialog(null)}
                 />
             )}
         </>

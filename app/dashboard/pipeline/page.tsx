@@ -112,7 +112,7 @@ export default async function DealsPage({
                 {rows.length} {hasMore ? "+ záznamov" : "záznamov"}
             </div>
 
-            <DealList rows={rows} caps={caps} showStatus={params.filter === "all"} showOwner={showOwner} />
+            <DealList rows={rows} caps={caps} showStatus={params.filter === "all"} showOwner={showOwner} viewerId={viewer.id} />
 
             {hasMore && (
                 <div className="mt-4 flex justify-center">

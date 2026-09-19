@@ -35,7 +35,7 @@ One row per contact, and the same row later as a deal. **Never renamed.** Soft-d
 | `nextActionKind?`, `nextActionAt?`, `nextActionHasTime`, `nextActionMode`, `nextActionNote?` | **deal phase only** — what happens next |
 | `callbackKind?`, `callbackAt?`, `callbackHasTime`, `callbackNote?` | **call phase only** — why this is in a caller's queue |
 | `offerAboutUsAt?`, `offerPricelistAt?`, `offerPriceAt?` | **what the client received**: first "about us", first cenník, **last** calculated price (email or phone). A summary of the valid `OFFER_SENT` activities, always recomputed by `recomputeOffers` — never written directly |
-| `designSentAt?` | latest sent date among the lead's designs; recomputed with the above (a lead without any `Design` row keeps its old value) |
+| `designSentAt?` | latest sent date among the lead's designs; recomputed with the above, also when a design is deleted. A lead without any `Design` row keeps its old value, and the screens show that value as "návrh sent" |
 | `hadLegacySends` | `true` = the lead had sends under the old system (set once by `prisma/backfill/2026-09-offer-legacy.ts`, never changed after). Default `false` for every new lead |
 | `legacySendsReviewedAt?` | the manager confirmed what such a lead really received; until then empty contents show as "?" |
 | `quoteSentAt?`, `aboutUsSentAt?`, `priceDisclosed` | **frozen legacy**: "CP marked sent" (possibly without a price), "email o nás marked sent", "client knows a price". No code writes them any more; they are only shown as what the old record claimed, never as "yes" |
@@ -113,7 +113,7 @@ client knows); "bez kontaktu" = no contact row, only the planning row. `QUOTE_SE
 `{ channel: "EMAIL" | "PHONE", contents: ["ABOUT_US" | "PRICELIST" | "PRICE" | "DESIGN"…], price?: { amount: "1285.00"
 (decimal string), note }, designs?: [{ id, label, url, version }], sentOn: "YYYY-MM-DD", historical: bool,
 callActivityId? (phone price → the CALL it belongs to), correction? }`. `createdAt` = when it was recorded, `sentOn` =
-when the client got it. `historical: true` = a legacy send entered later by the manager (no next step, no ticket
+when the client got it. `historical: true` = a legacy send entered later by the manager (no next step, no request
 change). Order of sends: `sentOn`, then a historical entry before a normal one on the same day, then `createdAt`; the
 latest price is what the client knows (`lib/domain/offers.ts`).
 

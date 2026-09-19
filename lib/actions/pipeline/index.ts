@@ -1,14 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import type { DealRequestStatus, LeadStatus, NextActionKind, NextActionMode, ProjectType } from "@/app/generated/prisma/enums";
+import type { DealRequestStatus, LeadStatus, ProjectType } from "@/app/generated/prisma/enums";
 import { UNAUTHENTICATED } from "@/lib/access/errors";
 import { requireUser } from "@/lib/access/user";
 import * as cmd from "@/lib/commands/pipeline";
 import * as work from "@/lib/commands/dealWork";
 import * as offers from "@/lib/commands/offers";
-import type { DealContactInput, NextActionInput } from "@/lib/domain/dealMutations";
-import type { Schedule } from "@/lib/domain/schedule";
+import type { DealContactInput } from "@/lib/domain/dealMutations";
 import type { DealRequestKind } from "@/app/generated/prisma/enums";
 
 // Tenké server akcie obrazovky obchodov (/dashboard/pipeline): aktuálny používateľ z DB + príkaz
@@ -57,20 +56,8 @@ export async function changeOwner(leadId: string, ownerId: string | null) {
     return run(leadId, (u) => cmd.changeOwnerAs(u, leadId, ownerId));
 }
 
-export async function setNextAction(
-    leadId: string,
-    input: { kind: NextActionKind | null; schedule?: Schedule | null; note?: string | null; mode?: NextActionMode },
-    expectedRevision: number,
-) {
-    return run(leadId, (u) => cmd.setNextActionAs(u, leadId, input, expectedRevision));
-}
-
 export async function markLost(leadId: string, reason: string | null) {
     return run(leadId, (u) => cmd.markLostAs(u, leadId, reason));
-}
-
-export async function addBusinessNote(leadId: string, note: string) {
-    return run(leadId, (u) => cmd.addBusinessNoteAs(u, leadId, note));
 }
 
 export async function resolveDealRequest(requestId: string, status: Exclude<DealRequestStatus, "OPEN">, note: string | null) {
@@ -91,20 +78,12 @@ export async function logFollowUp(input: work.FollowUpInput) {
     return run(input?.leadId, (u) => work.logFollowUpAs(u, input));
 }
 
-export async function setDealNextAction(leadId: string, input: NextActionInput, expectedRevision: number) {
-    return run(leadId, (u) => work.setDealNextActionAs(u, leadId, input, expectedRevision));
-}
-
 export async function updateDealContact(leadId: string, data: DealContactInput) {
     return run(leadId, (u) => work.updateDealContactAs(u, leadId, data));
 }
 
 export async function saveDealQuote(leadId: string, input: { price: number | null; priceNote: string | null }) {
     return run(leadId, (u) => work.saveDealQuoteAs(u, leadId, input));
-}
-
-export async function addDealNote(leadId: string, note: string) {
-    return run(leadId, (u) => work.addDealNoteAs(u, leadId, note));
 }
 
 export async function createDealRequest(leadId: string, kind: DealRequestKind, note: string | null) {

@@ -40,8 +40,8 @@ Database procedure: §6 below — it is the part that gets forgotten and it is t
 - UI hiding is not access control. Every command re-checks its own permission under the row lock.
 - Scope (`own | team | all`) comes from `dealScope()`; never from the URL, the path or a client-sent value.
 - **Never spread a client object into a Prisma `update`/`create`.** Build the write from named fields, using a strict
-  schema for new structured inputs except the existing contact-entry exception above. (This was a real P1 finding — see
-  `context/features/01-salesrep/revision.md` R-01.)
+  schema for new structured inputs except the existing contact-entry exception above. (This was a real P1 finding in the round-1
+  review of 2026-09-17: a crafted contact edit could set status or owner; regression test `r01CraftedInput`.)
 - Out-of-scope reads return `NOT_FOUND`.
 - Never log connection strings, tokens or passwords. Scripts print sanitized identity only.
 
@@ -63,7 +63,7 @@ SQL (so the database can filter, sort and page the whole list):
 | TypeScript | SQL copy in `lib/queries/pipeline/index.ts` | Test that they agree (`check-concurrency.ts`) |
 |---|---|---|
 | `clientSection()` — is a deal "Na dnes" | `TODAY_SQL` | `w1TodayParity` |
-| `nextActionSort()` — list order | `DEAL_RANK_SQL` | `R-02` ordering test |
+| `nextActionSort()` — list order | `DEAL_RANK_SQL` | `r02PipelineOrder` ordering test (round-1 review R-02) |
 
 Change both copies in the same change and run that test. A new SQL copy of a TS rule gets the same kind of test.
 

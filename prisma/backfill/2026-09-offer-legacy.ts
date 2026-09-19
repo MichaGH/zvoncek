@@ -1,6 +1,7 @@
 // Jednorazový krok wave 3a (round 2 §2c, „Schema delta"): označí, čo pochádza zo starého systému odosielania.
 //
 // - Lead.hadLegacySends = true  pre leady so starými dôkazmi odoslania (quoteSentAt, aboutUsSentAt, priceDisclosed,
+//   designSentAt bez jediného Design riadku,
 //   staré aktivity QUOTE_SENT / EMAIL_SENT / DESIGN_SENT, alebo návrh označený ako poslaný bez akéhokoľvek OFFER_SENT).
 // - Design.legacySentAt = Design.sentAt  pre návrhy poslané starým spôsobom (žiadny OFFER_SENT ich neobsahuje).
 //
@@ -62,6 +63,7 @@ const LEGACY_LEAD_WHERE = `l."hadLegacySends" = false AND (
         l."quoteSentAt" IS NOT NULL
      OR l."aboutUsSentAt" IS NOT NULL
      OR l."priceDisclosed" = true
+     OR (l."designSentAt" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Design" d WHERE d."leadId" = l.id))
      OR EXISTS (SELECT 1 FROM "Activity" a WHERE a."leadId" = l.id AND a.type IN ('QUOTE_SENT', 'EMAIL_SENT', 'DESIGN_SENT'))
      OR EXISTS (SELECT 1 FROM "Design" d WHERE d."leadId" = l.id AND d."sentAt" IS NOT NULL AND NOT ${IN_NEW_SEND}))`;
 
