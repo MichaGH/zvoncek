@@ -8,7 +8,8 @@ branch `backup/wave5-built-pre-ui-fix-2026-09-20` (not pushed).
 |---|---|---|
 | F1 | `/calls` handoff toast says "Odovzdané: Jana Obchodníková" when Jana **is** the caller and the new owner | **open** |
 | F2 | "Poslať návrh" does not land in "Na dnes", so asking the manager today is invisible today | **open — needs a decision** |
-| F3 | The `/pipeline` interaction sheet repeats the same options and has no way to confirm the ticks | **fixed 2026-09-20**, branch `feature/wave5-interaction-ui` |
+| F3 | The `/pipeline` interaction sheet repeats the same options and has no way to confirm the ticks | repetition **fixed 2026-09-20**, branch `feature/wave5-interaction-ui` |
+| F4 | The rebuilt sheet still has **selection-state bugs**, nonsense subtitles, a dead end on "Povedal/a som cenu" and a design that is not the "Požiadať manažéra" style | **open — do this first** |
 
 ---
 
