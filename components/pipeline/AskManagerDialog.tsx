@@ -42,6 +42,14 @@ const REFRESH_CODES = new Set(["NOT_FOUND", "STALE", "DEAL_CLOSED", "IDEMPOTENCY
 const HANDOVER_CHIPS = ["stránka", "eshop", "katalóg", "admin systém", "EN jazyk", "technické detaily"];
 
 // [WAVE 4] cena aj návrh naraz (bez poradia), „Iné" – otvorená otázka (wave-4-proposal.md §2.3).
+// Rovnaký farebný jazyk ako v akčnom okne (components/pipeline/InteractionSheet.tsx): zelená = peniaze,
+// fialová = návrh, sivá = neutrálne. Farbu nesie len ikona, nie celá karta.
+const CONTENT_TONE: Record<DealTaskContent, string> = {
+    PRICE: "bg-emerald-500/12 text-emerald-600 dark:bg-emerald-400/15 dark:text-emerald-300",
+    DESIGN: "bg-violet-500/12 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300",
+    OTHER: "bg-muted text-muted-foreground",
+};
+
 const CONTENT_OPTIONS: { value: DealTaskContent; icon: typeof Euro; hint: string; placeholder: string }[] = [
     { value: "PRICE", icon: Euro, hint: "nacenenie", placeholder: "napr. e-shop, cca 200 produktov, SK + EN, termín do konca mesiaca" },
     { value: "DESIGN", icon: Palette, hint: "grafický návrh", placeholder: "napr. štýl ako ich súčasný web, logo pošlú mailom, 3 podstránky" },
@@ -182,12 +190,14 @@ export default function AskManagerDialog({
                                             setStepNote(null);
                                         }}
                                         className={cn(
-                                            "flex min-h-[72px] flex-col items-center justify-center gap-1 rounded-lg border px-2 py-3 text-sm transition-colors",
+                                            "flex min-h-[92px] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-sm transition-colors",
                                             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                                             on ? "border-primary bg-primary/5 font-medium text-foreground ring-1 ring-primary" : "hover:bg-muted/60",
                                         )}
                                     >
-                                        <Icon className={cn("h-5 w-5", on ? "text-primary" : "text-muted-foreground")} />
+                                        <span className={cn("flex h-9 w-9 items-center justify-center rounded-lg", CONTENT_TONE[o.value])}>
+                                            <Icon className="h-[18px] w-[18px]" />
+                                        </span>
                                         {TASK_CONTENT_LABEL[o.value]}
                                         <span className="text-[11px] font-normal text-muted-foreground">{o.hint}</span>
                                     </button>

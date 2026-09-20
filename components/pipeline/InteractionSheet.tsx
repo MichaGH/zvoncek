@@ -101,14 +101,30 @@ type ReplyChoice = "WANTS" | "OTHER" | string;
 // Karta výberu – rovnaký vizuálny jazyk ako „Požiadať manažéra": ikona, jeden jasný názov, krátke vysvetlenie a
 // viditeľný stav výberu. Na telefóne je karta horizontálna a ľahko trafiteľná palcom; na PC sa skladajú po dve.
 const CARD =
-    "group flex min-h-[72px] w-full items-start gap-3 rounded-xl border bg-background px-3.5 py-3 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+    "group flex min-h-[64px] w-full items-center gap-3 rounded-xl border bg-background px-3.5 py-3 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 const CARD_ON = "border-primary/70 bg-primary/[0.06] text-foreground shadow-sm ring-1 ring-primary/20";
 const CARD_OFF = "hover:border-primary/30 hover:bg-muted/50";
+
+// Farba ikony nesie význam a je jediné miesto, kde je karta farebná – text a rámik ostávajú neutrálne, takže sa
+// obrazovka nerozpadne na dúhu. Jeden odtieň na jeden zmysel: modrá = kontakt / informácia, zelená = peniaze,
+// fialová = návrh, jantárová = pozor / čaká sa, červená = koniec, sivá = neutrálne.
+type Tone = "sky" | "teal" | "emerald" | "violet" | "amber" | "rose" | "neutral";
+
+const TONE: Record<Tone, string> = {
+    sky: "bg-sky-500/12 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300",
+    teal: "bg-teal-500/12 text-teal-600 dark:bg-teal-400/15 dark:text-teal-300",
+    emerald: "bg-emerald-500/12 text-emerald-600 dark:bg-emerald-400/15 dark:text-emerald-300",
+    violet: "bg-violet-500/12 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300",
+    amber: "bg-amber-500/15 text-amber-600 dark:bg-amber-400/15 dark:text-amber-300",
+    rose: "bg-rose-500/12 text-rose-600 dark:bg-rose-400/15 dark:text-rose-300",
+    neutral: "bg-muted text-muted-foreground",
+};
 
 function OptionCard({
     label,
     hint,
     icon: Icon,
+    tone = "neutral",
     on = false,
     disabled,
     onClick,
@@ -117,6 +133,7 @@ function OptionCard({
     label: string;
     hint?: string | null;
     icon?: LucideIcon;
+    tone?: Tone;
     on?: boolean;
     disabled?: boolean;
     onClick: () => void;
@@ -132,19 +149,19 @@ function OptionCard({
             className={cn(CARD, on ? CARD_ON : CARD_OFF, disabled && "pointer-events-none opacity-50")}
         >
             {Icon && (
-                <span className={cn("mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", on ? "bg-primary/12 text-primary" : "bg-muted text-muted-foreground")}>
-                    <Icon className="h-4.5 w-4.5" />
+                <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", TONE[tone])}>
+                    <Icon className="h-[18px] w-[18px]" />
                 </span>
             )}
-            <span className="min-w-0 flex-1">
+            <span className="min-w-0 flex-1 space-y-0.5">
                 <span className="block text-sm font-medium leading-5">{label}</span>
-                {hint && <span className="mt-0.5 block text-xs font-normal leading-4 text-muted-foreground">{hint}</span>}
+                {hint && <span className="block text-xs font-normal leading-4 text-muted-foreground">{hint}</span>}
             </span>
             {role && (
                 <span
                     aria-hidden
                     className={cn(
-                        "mt-1 flex h-5 w-5 shrink-0 items-center justify-center border transition-colors",
+                        "flex h-5 w-5 shrink-0 items-center justify-center border transition-colors",
                         role === "radio" ? "rounded-full" : "rounded-md",
                         on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/30 bg-background",
                     )}
@@ -174,31 +191,31 @@ function InfoPanel({ icon: Icon = Info, children, tone = "neutral" }: { icon?: L
     );
 }
 
-const REQUEST_CARD: Record<RequestContent, { icon: LucideIcon; hint: string }> = {
-    INFO: { icon: PanelsTopLeft, hint: "Kto sme a ukážky našej práce" },
-    PRICELIST: { icon: ReceiptText, hint: "Všeobecný prehľad cien" },
-    PRICE: { icon: BadgeEuro, hint: "Cena pripravená pre tohto klienta" },
-    DESIGN: { icon: Palette, hint: "Grafický návrh webu" },
-    REVIEW: { icon: ScanSearch, hint: "Čo sa dá zlepšiť na ich webe" },
+const REQUEST_CARD: Record<RequestContent, { icon: LucideIcon; hint: string; tone: Tone }> = {
+    INFO: { icon: PanelsTopLeft, hint: "Kto sme a ukážky našej práce", tone: "sky" },
+    PRICELIST: { icon: ReceiptText, hint: "Všeobecný prehľad cien", tone: "teal" },
+    PRICE: { icon: BadgeEuro, hint: "Cena pripravená pre tohto klienta", tone: "emerald" },
+    DESIGN: { icon: Palette, hint: "Grafický návrh webu", tone: "violet" },
+    REVIEW: { icon: ScanSearch, hint: "Čo sa dá zlepšiť na ich webe", tone: "amber" },
 };
 
-const REPLY_ICON: Record<string, LucideIcon> = {
-    NOT_LOOKED_YET: EyeOff,
-    WANTS_CHANGES: RefreshCw,
-    RESEND: MailWarning,
-    WILL_CONTACT_US: Clock3,
-    DECIDING: CalendarClock,
-    PRICE_HIGH: BadgeEuro,
-    WANTS_TO_ORDER: Handshake,
+const REPLY_CARD: Record<string, { icon: LucideIcon; tone: Tone }> = {
+    NOT_LOOKED_YET: { icon: EyeOff, tone: "neutral" },
+    WANTS_CHANGES: { icon: RefreshCw, tone: "violet" },
+    RESEND: { icon: MailWarning, tone: "amber" },
+    WILL_CONTACT_US: { icon: Clock3, tone: "teal" },
+    DECIDING: { icon: CalendarClock, tone: "sky" },
+    PRICE_HIGH: { icon: BadgeEuro, tone: "amber" },
+    WANTS_TO_ORDER: { icon: Handshake, tone: "emerald" },
 };
 
-const NEXT_ICON: Record<FollowUpNextKind, LucideIcon> = {
-    CALL: Phone,
-    WAITING_FOR_CLIENT: Clock3,
-    SEND_QUOTE: BadgeEuro,
-    SEND_DESIGN: Palette,
-    SEND_EMAIL: Mail,
-    CUSTOM: CircleEllipsis,
+const NEXT_CARD: Record<FollowUpNextKind, { icon: LucideIcon; tone: Tone }> = {
+    CALL: { icon: Phone, tone: "sky" },
+    WAITING_FOR_CLIENT: { icon: Clock3, tone: "teal" },
+    SEND_QUOTE: { icon: BadgeEuro, tone: "emerald" },
+    SEND_DESIGN: { icon: Palette, tone: "violet" },
+    SEND_EMAIL: { icon: Mail, tone: "sky" },
+    CUSTOM: { icon: CircleEllipsis, tone: "neutral" },
 };
 
 function nextStepCopy(kind: FollowUpNextKind, reply: string | null): { label: string; hint: string } {
@@ -694,6 +711,7 @@ export default function InteractionSheet({
                                             label="Dovolal/a som sa"
                                             hint="Hovor prebehol – zapíš, čo povedali"
                                             icon={Phone}
+                                            tone="sky"
                                             disabled={pending || !canWork}
                                             onClick={() => startContact("ANSWERED", locked ? "reply" : "price")}
                                         />
@@ -701,6 +719,7 @@ export default function InteractionSheet({
                                             label="Nezdvihli"
                                             hint="Zaznamenať pokus a naplánovať ďalší"
                                             icon={PhoneMissed}
+                                            tone="neutral"
                                             disabled={pending || !canWork}
                                             onClick={() => {
                                                 startContact("NO_ANSWER", locked ? "sms" : "next");
@@ -716,6 +735,7 @@ export default function InteractionSheet({
                                             label="Odpísali / ozvali sa"
                                             hint="Správa, email alebo spätný kontakt"
                                             icon={MessageCircle}
+                                            tone="sky"
                                             disabled={pending || !canWork}
                                             onClick={() => startContact("REPLIED", "reply")}
                                         />
@@ -723,6 +743,7 @@ export default function InteractionSheet({
                                             label="Poslali sme SMS"
                                             hint="Uložiť text správy a ďalší krok"
                                             icon={MessageSquare}
+                                            tone="teal"
                                             disabled={pending || !canWork}
                                             onClick={() => startContact("SMS", locked ? "sms" : "next")}
                                         />
@@ -737,6 +758,7 @@ export default function InteractionSheet({
                                                 label="Poslali sme ponuku"
                                                 hint="Zaznamenať, čo klient dostal"
                                                 icon={Send}
+                                                tone="emerald"
                                                 disabled={pending || !canWork}
                                                 onClick={onRecordOffer}
                                             />
@@ -746,6 +768,7 @@ export default function InteractionSheet({
                                                 label="Iba zmeniť ďalší krok"
                                                 hint={locked ? "Bez kontaktu – zruší otvorenú úlohu" : "Bez nového kontaktu s klientom"}
                                                 icon={CalendarClock}
+                                                tone="neutral"
                                                 disabled={pending || !canWork}
                                                 onClick={() => startContact("NONE", "next")}
                                             />
@@ -755,6 +778,7 @@ export default function InteractionSheet({
                                                 label="Ozvať sa o pár mesiacov"
                                                 hint={locked ? "Odloží obchod a zruší otvorenú úlohu" : "Odložiť obchod na neskôr"}
                                                 icon={Moon}
+                                                tone="violet"
                                                 disabled={pending || !canWork}
                                                 onClick={() => startContact("ANSWERED", "snooze")}
                                             />
@@ -804,6 +828,7 @@ export default function InteractionSheet({
                                                     : "Info, cenník, cenu, návrh alebo rozbor"
                                             }
                                             icon={PackageCheck}
+                                            tone="sky"
                                             role="radio"
                                             on={replyChoice === "WANTS"}
                                             disabled={pending || blockedHere}
@@ -813,7 +838,8 @@ export default function InteractionSheet({
                                             <OptionCard
                                                 key={r.key}
                                                 label={r.label}
-                                                icon={REPLY_ICON[r.key] ?? MessageCircle}
+                                                icon={REPLY_CARD[r.key]?.icon ?? MessageCircle}
+                                                tone={REPLY_CARD[r.key]?.tone ?? "neutral"}
                                                 role="radio"
                                                 on={replyChoice === r.key}
                                                 disabled={pending || blockedHere}
@@ -869,6 +895,7 @@ export default function InteractionSheet({
                                             label="Povedal/a som konkrétnu cenu"
                                             hint="Zapíše sa, že klient túto sumu už pozná"
                                             icon={BadgeEuro}
+                                            tone="emerald"
                                             role="checkbox"
                                             on={toldPrice}
                                             disabled={pending}
@@ -956,6 +983,7 @@ export default function InteractionSheet({
                                                 label={REQUEST_CONTENT_LABEL[content]}
                                                 hint={REQUEST_CARD[content].hint}
                                                 icon={REQUEST_CARD[content].icon}
+                                                tone={REQUEST_CARD[content].tone}
                                                 role="checkbox"
                                                 on={askedDraft.includes(content)}
                                                 disabled={pending}
@@ -1099,7 +1127,8 @@ export default function InteractionSheet({
                                                     role="radio"
                                                     label={copy.label}
                                                     hint={copy.hint}
-                                                    icon={NEXT_ICON[o.kind as FollowUpNextKind]}
+                                                    icon={NEXT_CARD[o.kind as FollowUpNextKind].icon}
+                                                    tone={NEXT_CARD[o.kind as FollowUpNextKind].tone}
                                                     on={kind === o.kind}
                                                     disabled={pending}
                                                     onClick={() => {

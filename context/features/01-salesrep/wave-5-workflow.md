@@ -184,7 +184,7 @@ their date, so nothing is lost.
 
 | # | What | Decision |
 |---|---|---|
-| P0 | Card content is not vertically centred | fix the card class |
+| P0 | Card content is not vertically centred | **done** — see §10 |
 | P1 | "Poslali sme ponuku" has no "Späť" | add it |
 | P2 | Q1 (cena v hovore) forced the answers to be tick-boxes | Q1 is its own screen (§2) |
 | — | "Naposledy" says *Majú záujem* from `/calls` but *Pozitívny posun* in pipeline | Michal: *"this kinda makes sense"* — left alone |
@@ -196,3 +196,28 @@ their date, so nothing is lost.
 The data model. `LeadRequest`, the reconciliation, `OFFER_SENT`, the step lock, the manager tasks — all stay exactly
 as wave 5 built and tested them. Everything above is the **question order and the choices offered**, plus two small
 server rules (§6 withdraw-on-snooze, §4 resend writes no receipt).
+
+---
+
+## 10. Card rhythm and colour (Michal, 2026-09-21)
+
+**Vertical rhythm.** The cards were `items-start` with ad-hoc `mt-0.5` / `mt-1` nudges, so a one-line card sat
+differently from a two-line one. Now the card is `items-center` with symmetric `py-3`: the icon tile, the title +
+subtitle block and the radio/checkbox are one horizontal row, centred as a group, evenly spaced from the top and
+bottom edge. **Nothing is centred horizontally** — the text stays left-aligned, as Michal asked.
+
+**Colour carries meaning, and only the icon is coloured.** Card text and borders stay neutral, so a screen full of
+cards does not turn into a rainbow; the selected state is still the primary border + ring. One tone per meaning:
+
+| Tone | Means | Used by |
+|---|---|---|
+| sky | contact / information | Dovolal/a som sa, Odpísali, Zavolať, Info / ukážky, Chcú niečo poslať, Majú poradu |
+| teal | waiting, general price list | Čakáme na klienta, Cenník, Poslali sme SMS, Ozvú sa sami |
+| emerald | money, a win | Konkrétna cena, Cena v hovore, Poslali sme ponuku, Chcú objednať, Cena (úloha) |
+| violet | návrh / design | Návrh, Pozreli chcú zmeny, Ozvať sa o pár mesiacov, Návrh (úloha) |
+| amber | attention, something is off | Rozbor webu, Neprišlo im to, Cena je vysoká |
+| rose | the end | reserved for Nemajú záujem / zlé číslo |
+| neutral | no signal | Nezdvihli, Iná odpoveď, Vlastný krok, Iné (úloha) |
+
+The same tones are used in **"Požiadať manažéra"**, so the two dialogs agree: Cena is emerald, Návrh is violet, Iné
+is neutral. Every tone has a dark-mode pair.
