@@ -86,3 +86,49 @@ the one to follow, with horizontal cards on a phone.
 
 Still open from Michal's message and **not** decided here: what "Pozreli, chcú zmeny" should really do once wave 4
 lets a rep hand a change request to the manager in one move, and whether "Cena je vysoká" deserves its own path.
+
+---
+
+## F4 — the rebuilt interaction sheet is still wrong (Michal, 2026-09-20, second click-through)
+
+The chain no longer repeats itself, but the **state handling is buggy and the design is not good enough**. Michal's
+words, kept as given — **fix these before anything else in wave 5 continues**.
+
+### Bugs (these are real defects, not taste)
+
+1. **Selection leaks between screens.** Open "Chcú niečo…", select two contents, press "Späť" — after that
+   "everything is so buggy, selectable etc". Going back must not leave the sheet in a half-selected state.
+2. **A picked answer stays selected after "Späť"** — and then a second one can be selected on top of it, so
+   "Chcú niečo…" and e.g. "Pozreli, chcú zmeny" are **both** highlighted at once. Michal: *"is this intentional? if
+   yes keep it, but I don't think so"*. Decide one rule: either going back clears the choice, or the choice is a
+   real single-select that replaces the previous one. Today it is neither.
+3. **"Povedal/a som cenu" has no next step.** Tick it, fill the amount — and then there is nothing to press. It must
+   lead somewhere on its own, not only as a side-effect of picking some other answer.
+
+### Wording / content
+
+4. **Remove the subtitles.** They are noise and some are nonsense — "Ešte sa na to nepozreli" with
+   *"pošlem im to pripomenúť neskôr"*. Michal: *"are you having a stroke? remove those."* (The `hint` field added to
+   `CLIENT_REPLIES` for the follow-up answers should go; the hints on the **content** cards may stay if they help.)
+5. **"Poslať návrh – rozpracované, počíta dni" after "Pozreli, chcú zmeny" is confusing.** Michal had to guess it
+   means *send the reworked version*. Say that, or drop the hint.
+6. **"Rieši to niekto iný" does not make sense** as an answer here — rethink or remove it.
+7. **"Chcú niečo…" may need a better name.**
+
+### Design — copy "Požiadať manažéra" properly
+
+Michal, twice now: **that** dialog is the reference, and this one has "weird button sizes".
+
+- the selectable cards there: title + one simple subtitle, even sizes, clear selected state;
+- the manager selection block;
+- the explanatory messages on the **greyish background**, with the right sizes and colours;
+- consider **icons / emojis** on the cards (the manager dialog uses lucide icons per content).
+
+Apply that style to **both** "Dovolala som sa" and "Odpísali", on desktop first and then check the phone.
+
+### Where to work
+
+`components/pipeline/InteractionSheet.tsx` (steps `reply`, `wants`, `next`, and the "Povedal/a som cenu" block),
+`lib/domain/clientReplies.ts` (`hint`, `nextKinds`, which answers survive). Reference for the style:
+`components/pipeline/AskManagerDialog.tsx`. State before the first UI attempt:
+branch `backup/wave5-built-pre-ui-fix-2026-09-20`.
