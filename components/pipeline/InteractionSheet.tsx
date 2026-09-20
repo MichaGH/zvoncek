@@ -47,7 +47,7 @@ import { CLIENT_REPLIES, FOLLOW_UP_REPLIES } from "@/lib/domain/clientReplies";
 import { REQUEST_CONTENT_LABEL, REQUEST_CONTENTS, stepKindForOutstanding } from "@/lib/domain/clientRequests";
 import { cn } from "@/lib/utils";
 import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
-import { FOLLOW_UP_NEXT_KINDS, type FollowUpNextKind, type FollowUpOutcome } from "@/lib/domain/leadFlow";
+import { type FollowUpNextKind, type FollowUpOutcome } from "@/lib/domain/leadFlow";
 import { defaultStepNote, NEXT_STEP_OPTIONS } from "@/lib/domain/nextStepOptions";
 import { formatMoney, moneyToString } from "@/lib/domain/offers";
 import type { Schedule } from "@/lib/domain/schedule";
@@ -94,7 +94,8 @@ export type InteractionTarget = {
     gotPricelist?: boolean;
 };
 
-type Step = "contact" | "reply" | "wants" | "next" | "snooze" | "lost" | "sms";
+// wave-5-workflow.md §2: „price" je vlastná otázka (Q1), nie zaškrtávacie políčko vopchané medzi odpovede.
+type Step = "contact" | "price" | "reply" | "wants" | "next" | "snooze" | "lost" | "sms";
 type ReplyChoice = "WANTS" | "OTHER" | string;
 
 // Karta výberu – rovnaký vizuálny jazyk ako „Požiadať manažéra": ikona, jeden jasný názov, krátke vysvetlenie a
@@ -243,7 +244,10 @@ const REFRESH_CODES = new Set([
     "FORBIDDEN",
     "STEP_LOCKED",
 ]);
-const NEXT_STEPS = NEXT_STEP_OPTIONS.filter((o) => (FOLLOW_UP_NEXT_KINDS as readonly string[]).includes(o.kind));
+// „Poslať …" sa NEVYBERÁ – vyplýva z toho, čo klient ešte nedostal (wave-5-workflow.md §1). Naplánovať sa dá len
+// hovor, čakanie na klienta alebo vlastný krok.
+const PLANNABLE_KINDS: FollowUpNextKind[] = ["CALL", "WAITING_FOR_CLIENT", "CUSTOM"];
+const NEXT_STEPS = NEXT_STEP_OPTIONS.filter((o) => PLANNABLE_KINDS.includes(o.kind as FollowUpNextKind));
 
 function newKey() {
     return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -356,16 +360,11 @@ export default function InteractionSheet({
             ? [{ taskId: priceItem.taskId, kind: "PRICE" as const }]
             : undefined;
     const dateMissing = stepOption?.date === "required" && !date;
-    // Čo bude nevybavené po tejto odpovedi → z toho vyplýva predvolený krok (§6.8); „Poslať …" sa už nevyberá ručne.
-    const wantedKind = stepKindForOutstanding([...(D.outstanding ?? []), ...asked]) as FollowUpNextKind | null;
     const replyOption = CLIENT_REPLIES.find((r) => r.key === reply);
-    const allowedKinds: FollowUpNextKind[] = allSteps
-        ? [...FOLLOW_UP_NEXT_KINDS]
-        : asked.length
-          ? ([...new Set([wantedKind, "CALL", "WAITING_FOR_CLIENT", "CUSTOM"])].filter(Boolean) as FollowUpNextKind[])
-          : phonePrice
-            ? ["SEND_QUOTE", "CALL", "WAITING_FOR_CLIENT", "CUSTOM"]
-          : (replyOption?.nextKinds ?? [...FOLLOW_UP_NEXT_KINDS]);
+    // Nikdy tu nie je „Poslať …" – to určuje nevybavená práca, nie výber (wave-5-workflow.md §1, §3).
+    const allowedKinds: FollowUpNextKind[] = (
+        allSteps ? PLANNABLE_KINDS : (replyOption?.nextKinds ?? PLANNABLE_KINDS)
+    ).filter((k) => PLANNABLE_KINDS.includes(k));
     const shownSteps = allowedKinds
         .map((k) => NEXT_STEPS.find((o) => o.kind === k))
         .filter((o): o is (typeof NEXT_STEPS)[number] => Boolean(o));
@@ -495,41 +494,36 @@ export default function InteractionSheet({
             saveFact(option.outcome, option.label, key);
             return;
         }
-        if (option.terminal) {
-            send(option.outcome, option.label, { reply: key });
+        // Odpoveď, ktorá si krok určí sama (chcú zmeny = prepracovaný návrh), sa uloží hneď – žiadna druhá otázka.
+        if (option.terminal || option.decidesStep) {
+            const wanted = stepKindForOutstanding([...(D.outstanding ?? []), ...(option.asks ?? [])]);
+            send(option.outcome, option.label, { reply: key, nextKind: (wanted as FollowUpNextKind | null) ?? "CALL" }, option.asks ?? asked);
             return;
         }
-        // Povedaná cena sa zvyčajne potvrdzuje emailom – predvolený krok „Poslať cenu" dnes.
-        if (phonePrice) setKind("SEND_QUOTE");
-        else if (option.nextKind) setKind(option.nextKind);
+        if (option.nextKind) setKind(option.nextKind);
         setStepNote(null);
         setDate(!phonePrice && option.days ? addBusinessCalendarDays(businessDate(new Date()), option.days) : "");
         setTime("");
         setStep("next");
     }
 
+    // Jedna otázka, jedna odpoveď, jeden klik (wave-5-workflow.md §2). Žiadne medzistavy, ktoré sa dali kombinovať.
     function chooseReply(choice: ReplyChoice) {
         setReplyChoice(choice);
         setAllSteps(false);
         if (choice === "WANTS") {
             setReply(null);
+            setAskedDraft(asked);
+            setStep("wants");
             return;
         }
         setAsked([]);
         setAskedDraft([]);
         setReply(choice === "OTHER" ? null : choice);
-    }
-
-    function continueReply() {
-        if (replyChoice === "WANTS") {
-            setAskedDraft(asked);
-            setStep("wants");
-            return;
-        }
-        if (replyChoice === "OTHER") {
+        if (choice === "OTHER") {
             if (factOnly) saveFact("POSITIVE", CONTACT_LABEL[contact]);
             else {
-                if (phonePrice) setKind("SEND_QUOTE");
+                setKind("CALL");
                 setStepNote(null);
                 setDate("");
                 setTime("");
@@ -537,22 +531,7 @@ export default function InteractionSheet({
             }
             return;
         }
-        if (replyChoice) {
-            continueWithReply(replyChoice);
-            return;
-        }
-        // Cena môže byť jediný výsledok hovoru. Predtým po jej vyplnení nebolo kam pokračovať (F4).
-        if (phonePrice) {
-            setReply(null);
-            if (factOnly) saveFact("POSITIVE", "Povedaná cena");
-            else {
-                setKind("SEND_QUOTE");
-                setStepNote(null);
-                setDate("");
-                setTime("");
-                setStep("next");
-            }
-        }
+        continueWithReply(choice);
     }
 
     function backToContact() {
@@ -716,7 +695,7 @@ export default function InteractionSheet({
                                             hint="Hovor prebehol – zapíš, čo povedali"
                                             icon={Phone}
                                             disabled={pending || !canWork}
-                                            onClick={() => startContact("ANSWERED", "reply")}
+                                            onClick={() => startContact("ANSWERED", locked ? "reply" : "price")}
                                         />
                                         <OptionCard
                                             label="Nezdvihli"
@@ -853,9 +832,39 @@ export default function InteractionSheet({
                                     </div>
                                 </div>
 
-                                {contact === "ANSWERED" && (
-                                    <div className="space-y-3 rounded-xl bg-muted/55 p-3">
-                                        <SectionLabel>Cena v hovore</SectionLabel>
+                                {cancelBox}
+
+                                <div className="space-y-2">
+                                    <SectionLabel>Poznámka z kontaktu</SectionLabel>
+                                    <Textarea
+                                        data-vaul-no-drag
+                                        placeholder="Dôležité detaily z rozhovoru (nepovinné)"
+                                        value={note}
+                                        onChange={(e) => setNote(e.target.value)}
+                                        className="min-h-[72px] text-[16px] md:text-sm"
+                                    />
+                                </div>
+
+                                {factOnly && ackBox}
+
+                                <Button
+                                    variant="ghost"
+                                    className="w-full"
+                                    onClick={() => (contact === "ANSWERED" ? setStep("price") : backToContact())}
+                                >
+                                    <ArrowLeft className="mr-2 h-4 w-4" /> Späť
+                                </Button>
+                            </div>
+                        )}
+
+                        {/* Wave 5: čo klient chce – prepínateľné karty a jedno „Pokračovať". Predtým to boli
+                            zaškrtávacie políčka bez potvrdenia, takže sa nedalo pokračovať (Michal, 2026-09-20). */}
+                        {/* Q1 – povedali sme cenu? Vlastná obrazovka, jedným klikom sa dá preskočiť. */}
+                        {step === "price" && (
+                            <div className="space-y-5">
+                                <div className="space-y-2">
+                                    <SectionLabel>Povedali ste cenu?</SectionLabel>
+                                <div className="space-y-3 rounded-xl bg-muted/55 p-3">
                                         <OptionCard
                                             label="Povedal/a som konkrétnu cenu"
                                             hint="Zapíše sa, že klient túto sumu už pozná"
@@ -917,41 +926,17 @@ export default function InteractionSheet({
                                             </div>
                                         )}
                                     </div>
-                                )}
-
-                                {cancelBox}
-
-                                <div className="space-y-2">
-                                    <SectionLabel>Poznámka z kontaktu</SectionLabel>
-                                    <Textarea
-                                        data-vaul-no-drag
-                                        placeholder="Dôležité detaily z rozhovoru (nepovinné)"
-                                        value={note}
-                                        onChange={(e) => setNote(e.target.value)}
-                                        className="min-h-[72px] text-[16px] md:text-sm"
-                                    />
                                 </div>
-
-                                {factOnly && ackBox}
 
                                 <div className="space-y-2">
                                     <Button
                                         className="h-12 w-full text-base"
-                                        disabled={pending || blockedHere || (!replyChoice && !phonePrice)}
-                                        onClick={continueReply}
+                                        disabled={pending || (toldPrice && !toldValid) || Boolean(overlapMissing)}
+                                        onClick={() => setStep("reply")}
                                     >
-                                        {pending
-                                            ? "Ukladám…"
-                                            : replyChoice === "WANTS"
-                                              ? "Vybrať, čo chcú"
-                                              : factOnly
-                                                ? "Uložiť kontakt"
-                                                : "Pokračovať"}
-                                        {!pending && <ChevronRight className="ml-1 h-4 w-4" />}
+                                        {toldPrice ? "Pokračovať s cenou" : "Cenu sme nepovedali – pokračovať"}
+                                        <ChevronRight className="ml-1 h-4 w-4" />
                                     </Button>
-                                    {!replyChoice && !phonePrice && (
-                                        <p className="text-center text-xs text-muted-foreground">Vyber odpoveď alebo zapíš povedanú cenu.</p>
-                                    )}
                                     <Button variant="ghost" className="w-full" onClick={backToContact}>
                                         <ArrowLeft className="mr-2 h-4 w-4" /> Späť
                                     </Button>
@@ -959,13 +944,11 @@ export default function InteractionSheet({
                             </div>
                         )}
 
-                        {/* Wave 5: čo klient chce – prepínateľné karty a jedno „Pokračovať". Predtým to boli
-                            zaškrtávacie políčka bez potvrdenia, takže sa nedalo pokračovať (Michal, 2026-09-20). */}
                         {step === "wants" && (
                             <div className="space-y-5">
                                 <div className="space-y-2">
                                     <SectionLabel>Čo chcú poslať</SectionLabel>
-                                    <InfoPanel icon={PackageCheck}>Môžeš vybrať viac možností. Ďalší krok sa z nich predvyplní automaticky.</InfoPanel>
+                                    <InfoPanel icon={PackageCheck}>Môžeš vybrať viac možností. Ďalší krok je poslať ich – nič iné sa už nevyberá.</InfoPanel>
                                     <div className="grid gap-2 md:grid-cols-2">
                                         {REQUEST_CONTENTS.map((content) => (
                                             <OptionCard
@@ -1016,15 +999,17 @@ export default function InteractionSheet({
                                                 );
                                                 return;
                                             }
+                                            // wave-5-workflow.md §2b: povedať ČO chcú už krok určilo. Žiadna ďalšia otázka.
                                             const nextWanted = stepKindForOutstanding([...(D.outstanding ?? []), ...confirmed]);
-                                            setKind((nextWanted as FollowUpNextKind | null) ?? "CALL");
-                                            setStepNote(null);
-                                            setDate("");
-                                            setTime("");
-                                            setStep("next");
+                                            send(
+                                                "POSITIVE",
+                                                `Chcú ${confirmed.map((c) => REQUEST_CONTENT_LABEL[c].toLowerCase()).join(" + ")}`,
+                                                { nextKind: (nextWanted as FollowUpNextKind | null) ?? "CALL", reply: null },
+                                                confirmed,
+                                            );
                                         }}
                                     >
-                                        {askedDraft.length === 0 ? "Vyber, čo chcú" : factOnly ? "Pokračovať k uloženiu" : "Pokračovať"}
+                                        {askedDraft.length === 0 ? "Vyber, čo chcú" : pending ? "Ukladám…" : "Uložiť"}
                                         <ChevronRight className="ml-1 h-4 w-4" />
                                     </Button>
                                     <Button

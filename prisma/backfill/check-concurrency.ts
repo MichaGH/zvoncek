@@ -2992,7 +2992,7 @@ tests.w3SheetNotes = async () => {
     check(
         "W3-15 (F1): 'Čo povedali' only in the contact row, 'Poznámka ku kroku' only in the step; empty = default text; misplaced fields refused",
         codeOf(r) === "OK" && call.note === "Majú poradu / rozhodujú sa – porada v piatok" && l.nextActionNote === "zavolať po porade" &&
-            codeOf(empty) === "OK" && l2.nextActionNote === "Poslať úvodný email (o nás + cenník)" &&
+            codeOf(empty) === "OK" && l2.nextActionNote === "Poslať info / cenník" &&
             codeOf(quote) === "OK" && l3.nextActionNote === "Poslať cenu" &&
             codeOf(noneWithNote) !== "OK" && codeOf(lostWithStep) !== "OK",
         `${codeOf(r)} call="${call.note}" step="${l.nextActionNote}" empty="${l2.nextActionNote}" quote="${l3.nextActionNote}" ${codeOf(noneWithNote)} ${codeOf(lostWithStep)}`,

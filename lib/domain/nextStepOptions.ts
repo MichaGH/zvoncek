@@ -40,7 +40,7 @@ export function requiresDate(kind: NextActionKind): boolean {
 const DEFAULT_STEP_NOTE: Partial<Record<NextActionKind, string>> = {
     SEND_QUOTE: "Poslať cenu",
     SEND_DESIGN: "Poslať návrh",
-    SEND_EMAIL: "Poslať úvodný email (o nás + cenník)",
+    SEND_EMAIL: "Poslať info / cenník",
 };
 
 export function defaultStepNote(kind: NextActionKind | null | undefined): string | null {

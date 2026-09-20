@@ -158,7 +158,7 @@ export const NEXT_ACTION_LABEL: Record<NextActionKind, string> = {
     CALL: "Zavolať",
     SEND_QUOTE: "Poslať cenu",
     SEND_DESIGN: "Poslať návrh",
-    SEND_EMAIL: "Poslať úvodný email",
+    SEND_EMAIL: "Poslať email",
     WAITING_FOR_CLIENT: "Čakáme na klienta",
     CUSTOM: "Vlastný krok",
 };

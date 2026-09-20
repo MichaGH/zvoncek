@@ -144,7 +144,7 @@ export function leadStateForOutcome(
                 nextActionAt: businessTodayStart(now),
                 nextActionHasTime: false,
                 nextActionMode: "SCHEDULED",
-                nextActionNote: "Poslať úvodný email (o nás + cenník)",
+                nextActionNote: "Poslať info / cenník",
             };
         case "WANTS_DESIGN":
             return {

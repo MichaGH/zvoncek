@@ -322,10 +322,6 @@ export default function OfferSentDialog({
                     <Checkbox data-vaul-no-drag checked={pricelist} onCheckedChange={(v) => setPricelist(v === true)} />
                     <span className="text-sm">Cenník</span>
                 </label>
-                <label className={row}>
-                    <Checkbox data-vaul-no-drag checked={review} onCheckedChange={(v) => setReview(v === true)} />
-                    <span className="text-sm">Rozbor webu</span>
-                </label>
 
                 <div className={row}>
                     <Checkbox data-vaul-no-drag checked={withPrice} onCheckedChange={(v) => setWithPrice(v === true)} aria-label="Cena" />
@@ -435,6 +431,12 @@ export default function OfferSentDialog({
                             {i.label} od {i.by?.firstName ?? "manažéra"} sa nedá poslať – návrh bol zmazaný alebo nemá odkaz.
                         </p>
                     ))}
+
+                {/* Poradie všade rovnaké: Info · Cenník · Cena · Návrh · Rozbor webu (Michal, 2026-09-21). */}
+                <label className={row}>
+                    <Checkbox data-vaul-no-drag checked={review} onCheckedChange={(v) => setReview(v === true)} />
+                    <span className="text-sm">Rozbor webu</span>
+                </label>
 
                 {/* [WAVE 4] Cena + návrh v jednej úlohe: poslanú cenu pri ešte otvorenej úlohe (návrh sa robí) zapíše „Úloha ostáva
                     otvorená“ – tok už funguje; s čiastočným vybavením sa tu ponúkne aj vrátená cena (wave-4-proposal.md §2). */}
@@ -560,6 +562,9 @@ export default function OfferSentDialog({
                     onClick={() => save()}
                 >
                     {blocked ?? "Uložiť"}
+                </Button>
+                <Button variant="ghost" className="w-full" disabled={pending} onClick={onClose}>
+                    ← Späť
                 </Button>
             </div>
         </ResponsiveSheet>
