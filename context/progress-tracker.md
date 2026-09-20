@@ -285,6 +285,15 @@ withdraw / reason / SENT refused / foreign NOT_FOUND / same key once / task unto
 | `2026-09-wave5-requests.ts` dry-run on test | ran; reported its counts and the "0 unconverted" blocker |
 | production endpoint denylist in that script | verified: aborts before connecting |
 
+### Wave 5 — problems Michal found in the click-through (2026-09-20)
+
+**`context/features/01-salesrep/wave-5-followups.md` is the list — do not close these in a review without Michal.**
+F1 the `/calls` toast says "Odovzdané: <me>" when the caller is her own sales rep (open). F2 "Poslať návrh" is
+`IN_PROGRESS`, so it lands in Rozpracované and **not** in "Na dnes", although asking the manager is work for today —
+a concept decision, not a quick fix (open). F3 the interaction sheet repeated its options and had no confirm button —
+**fixed** on branch `feature/wave5-interaction-ui`; the state before the fix is the branch
+`backup/wave5-built-pre-ui-fix-2026-09-20`.
+
 ### Wave 5 — not resolved / to do later
 
 - **Human click-through still owed** (phone + desktop, a browser session is not something this agent may open with

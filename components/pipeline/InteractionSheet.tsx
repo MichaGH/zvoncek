@@ -15,8 +15,9 @@ import type { ActionError } from "@/lib/access/errors";
 import { logFollowUp } from "@/lib/actions/pipeline";
 import { ACTIVITY_LABEL, NEXT_ACTION_LABEL, OUTCOME_LABEL, STATUS_LABEL, TASK_CONTENT_LABEL } from "@/lib/dictionaries";
 import { addBusinessCalendarDays, businessDate, businessDayMonth } from "@/lib/domain/businessTime";
-import { CLIENT_REPLIES } from "@/lib/domain/clientReplies";
-import { REQUEST_CONTENT_LABEL, REQUEST_CONTENTS } from "@/lib/domain/clientRequests";
+import { CLIENT_REPLIES, FOLLOW_UP_REPLIES } from "@/lib/domain/clientReplies";
+import { REQUEST_CONTENT_LABEL, REQUEST_CONTENTS, stepKindForOutstanding } from "@/lib/domain/clientRequests";
+import { cn } from "@/lib/utils";
 import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
 import { FOLLOW_UP_NEXT_KINDS, type FollowUpNextKind, type FollowUpOutcome } from "@/lib/domain/leadFlow";
 import { defaultStepNote, NEXT_STEP_OPTIONS } from "@/lib/domain/nextStepOptions";
@@ -59,12 +60,50 @@ export type InteractionTarget = {
     lastActivity: { type: keyof typeof ACTIVITY_LABEL; outcome: CallOutcome | null; note: string | null; at: string } | null;
     task: { id: string; type: DealTaskType; contents: DealTaskContent[]; assignee: string } | null;
     pending: PendingItem[];
+    outstanding?: RequestContent[]; // čo je nevybavené – z toho vyplýva predvolený krok (§6.8)
     // Wave 5: ktorú cenu klient naozaj videl (§3.3) a či videl aspoň cenník.
     clientPrice?: { amount: string; channel: "EMAIL" | "PHONE"; sentOn: string } | null;
     gotPricelist?: boolean;
 };
 
-type Step = "contact" | "reply" | "next" | "snooze" | "lost" | "sms";
+type Step = "contact" | "reply" | "wants" | "next" | "snooze" | "lost" | "sms";
+
+// Karta výberu – rovnaký jazyk ako „Požiadať manažéra" (Michal si ho vyžiadal 2026-09-20). Na telefóne sú karty
+// pod sebou v jednom stĺpci, na PC v dvoch.
+const CARD =
+    "flex min-h-[64px] w-full flex-col items-start justify-center gap-0.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+const CARD_ON = "border-primary bg-primary/5 font-medium text-foreground ring-1 ring-primary";
+const CARD_OFF = "hover:bg-muted/60";
+
+function OptionCard({
+    label,
+    hint,
+    on = false,
+    disabled,
+    onClick,
+    role,
+}: {
+    label: string;
+    hint?: string | null;
+    on?: boolean;
+    disabled?: boolean;
+    onClick: () => void;
+    role?: "radio" | "checkbox";
+}) {
+    return (
+        <button
+            type="button"
+            data-vaul-no-drag
+            {...(role ? { role, "aria-checked": on } : {})}
+            disabled={disabled}
+            onClick={onClick}
+            className={cn(CARD, on ? CARD_ON : CARD_OFF, disabled && "pointer-events-none opacity-50")}
+        >
+            <span>{label}</span>
+            {hint && <span className="text-xs font-normal text-muted-foreground">{hint}</span>}
+        </button>
+    );
+}
 type Contact = "ANSWERED" | "NO_ANSWER" | "REPLIED" | "SMS" | "NONE";
 
 const CONTACT_LABEL: Record<Contact, string> = {
@@ -168,6 +207,7 @@ export default function InteractionSheet({
     const [toldAmount, setToldAmount] = useState(target?.price != null ? String(target.price) : "");
     const [toldNote, setToldNote] = useState<string | null>(null); // null = neupravené (pri tej istej sume ostane rozpis)
     const [asked, setAsked] = useState<RequestContent[]>([]);
+    const [allSteps, setAllSteps] = useState(false);
     const [overlap, setOverlap] = useState<"KEEP_OPEN" | "CANCEL_TASK" | null>(null);
     const [useReturnedPrice, setUseReturnedPrice] = useState(true);
     const [acknowledge, setAcknowledge] = useState(true);
@@ -204,6 +244,17 @@ export default function InteractionSheet({
             ? [{ taskId: priceItem.taskId, kind: "PRICE" as const }]
             : undefined;
     const dateMissing = stepOption?.date === "required" && !date;
+    // Čo bude nevybavené po tejto odpovedi → z toho vyplýva predvolený krok (§6.8); „Poslať …" sa už nevyberá ručne.
+    const wantedKind = stepKindForOutstanding([...(D.outstanding ?? []), ...asked]) as FollowUpNextKind | null;
+    const replyOption = CLIENT_REPLIES.find((r) => r.key === reply);
+    const allowedKinds: FollowUpNextKind[] = allSteps
+        ? [...FOLLOW_UP_NEXT_KINDS]
+        : asked.length
+          ? ([...new Set([wantedKind, "CALL", "WAITING_FOR_CLIENT", "CUSTOM"])].filter(Boolean) as FollowUpNextKind[])
+          : (replyOption?.nextKinds ?? [...FOLLOW_UP_NEXT_KINDS]);
+    const shownSteps = allowedKinds
+        .map((k) => NEXT_STEPS.find((o) => o.kind === k))
+        .filter((o): o is (typeof NEXT_STEPS)[number] => Boolean(o));
 
     // Vrátené položky: odpoveď / zamietnutie sa predvolene berie na vedomie; neposlaná cena / návrh drží krok „Poslať…"
     // (I10) – iný krok je možný len s „Neposielam" a dôvodom.
@@ -225,6 +276,8 @@ export default function InteractionSheet({
     const dropMissing = (dropsSendItems || snoozeDrops) && (!decidesResults || !dropReason.trim());
     const cancelMissing = cancelling && !cancelReason.trim();
     const overlapMissing = priceTask && Boolean(phonePrice) && !choice;
+    // Nič sa neuloží, kým nie je vybraná voľba pri prekryve / dôvod zrušenia – karty sú dovtedy neaktívne.
+    const blockedHere = (toldPrice && !toldValid) || Boolean(overlapMissing) || cancelMissing;
 
     // Predvyplnená poznámka ku kroku: ten istý krok = jeho poznámka, iný krok = predvolený text druhu.
     const shownStepNote =
@@ -320,9 +373,7 @@ export default function InteractionSheet({
         const option = CLIENT_REPLIES.find((r) => r.key === key);
         if (!option) return;
         setReply(key);
-        // Odpoveď, ktorá JE požiadavkou („Chcú konkrétnu cenu"), sa zapíše ako požiadavka klienta (§3.5).
-        const withAsks = option.asks ? [...new Set([...asked, ...option.asks])] : asked;
-        if (option.asks) setAsked(withAsks);
+        setAllSteps(false);
         if (factOnly) {
             saveFact(option.outcome, option.label, key);
             return;
@@ -643,37 +694,28 @@ export default function InteractionSheet({
                                         )}
                                     </div>
                                 )}
-                                {/* Wave 5 (§3.5): „Chcú aj …" – druhé prianie už nekončí v poznámke. */}
-                                <div className="space-y-1.5 rounded-lg border p-3">
-                                    <p className="text-sm text-muted-foreground">Chcú aj… (nepovinné)</p>
-                                    <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                                        {REQUEST_CONTENTS.map((content) => (
-                                            <label key={content} className="flex items-center gap-2 text-sm">
-                                                <Checkbox
-                                                    data-vaul-no-drag
-                                                    checked={asked.includes(content)}
-                                                    onCheckedChange={(v) =>
-                                                        setAsked((cur) => (v === true ? [...cur, content] : cur.filter((c) => c !== content)))
-                                                    }
-                                                />
-                                                {REQUEST_CONTENT_LABEL[content]}
-                                            </label>
-                                        ))}
-                                    </div>
-                                </div>
                                 {cancelBox}
                                 <p className="px-1 pb-1 text-sm text-muted-foreground">Čo povedali?</p>
+                                {/* Wave 5: „chcú niečo" je vlastná cesta – zapíše požiadavku klienta, nie len výsledok
+                                    hovoru. Preto tu už nie je „chcú cenu / návrh / info" ako ďalšia odpoveď. */}
+                                <OptionCard
+                                    label="Chcú niečo…"
+                                    hint="cena, návrh, cenník, info, rozbor webu"
+                                    on={asked.length > 0}
+                                    disabled={pending || blockedHere}
+                                    onClick={() => setStep("wants")}
+                                />
                                 <div className="grid gap-2 md:grid-cols-2">
-                                    {CLIENT_REPLIES.map((r) => (
-                                        <Button
+                                    {FOLLOW_UP_REPLIES.map((r) => (
+                                        <OptionCard
                                             key={r.key}
-                                            variant="outline"
-                                            className="h-12 justify-start text-base"
-                                            disabled={pending || (toldPrice && !toldValid) || overlapMissing || (cancelling && cancelMissing)}
+                                            label={r.label}
+                                            hint={r.hint}
+                                            role="radio"
+                                            on={reply === r.key}
+                                            disabled={pending || blockedHere}
                                             onClick={() => pickReply(r.key)}
-                                        >
-                                            {r.label}
-                                        </Button>
+                                        />
                                     ))}
                                 </div>
                                 {factOnly && ackBox}
@@ -690,6 +732,52 @@ export default function InteractionSheet({
                                     {factOnly ? "Iné – len zapísať kontakt" : "Iné – rovno vybrať ďalší krok…"}
                                 </Button>
                                 <Button variant="ghost" className="w-full" onClick={() => setStep("contact")}>
+                                    ← Späť
+                                </Button>
+                            </>
+                        )}
+
+                        {/* Wave 5: čo klient chce – prepínateľné karty a jedno „Pokračovať". Predtým to boli
+                            zaškrtávacie políčka bez potvrdenia, takže sa nedalo pokračovať (Michal, 2026-09-20). */}
+                        {step === "wants" && (
+                            <>
+                                <p className="px-1 pb-1 text-sm text-muted-foreground">Čo chcú? (môže byť viac)</p>
+                                <div className="grid gap-2 md:grid-cols-2">
+                                    {REQUEST_CONTENTS.map((content) => (
+                                        <OptionCard
+                                            key={content}
+                                            label={REQUEST_CONTENT_LABEL[content]}
+                                            role="checkbox"
+                                            on={asked.includes(content)}
+                                            disabled={pending}
+                                            onClick={() =>
+                                                setAsked((cur) => (cur.includes(content) ? cur.filter((c) => c !== content) : [...cur, content]))
+                                            }
+                                        />
+                                    ))}
+                                </div>
+                                {factOnly && ackBox}
+                                <Button
+                                    className="h-12 w-full"
+                                    disabled={pending || asked.length === 0}
+                                    onClick={() => {
+                                        if (asked.length === 0) return;
+                                        setReply(null);
+                                        if (factOnly) {
+                                            saveFact("POSITIVE", `Chcú ${asked.map((c) => REQUEST_CONTENT_LABEL[c].toLowerCase()).join(" + ")}`);
+                                            return;
+                                        }
+                                        // Krok vyplýva z toho, čo chcú – tu sa už neponúka „Poslať …" druhýkrát.
+                                        setKind(wantedKind ?? "CALL");
+                                        setStepNote(null);
+                                        setDate("");
+                                        setTime("");
+                                        setStep("next");
+                                    }}
+                                >
+                                    {asked.length === 0 ? "Vyber, čo chcú" : "Pokračovať"}
+                                </Button>
+                                <Button variant="ghost" className="w-full" onClick={() => setStep("reply")}>
                                     ← Späť
                                 </Button>
                             </>
@@ -719,24 +807,32 @@ export default function InteractionSheet({
                                 {cancelBox}
                                 <p className="px-1 pb-1 text-sm text-muted-foreground">
                                     {CONTACT_LABEL[contact]}
-                                    {reply ? ` · ${CLIENT_REPLIES.find((r) => r.key === reply)?.label}` : ""} → aký je ďalší krok?
+                                    {reply ? ` · ${CLIENT_REPLIES.find((r) => r.key === reply)?.label}` : ""}
+                                    {asked.length ? ` · chcú ${asked.map((c) => REQUEST_CONTENT_LABEL[c].toLowerCase()).join(" + ")}` : ""} → aký je
+                                    ďalší krok?
                                 </p>
+                                {/* Len kroky, ktoré po tejto odpovedi dávajú zmysel – zvyšok cez „Iný krok…". */}
                                 <div className="grid gap-2 md:grid-cols-2">
-                                    {NEXT_STEPS.map((o) => (
-                                        <Button
+                                    {shownSteps.map((o) => (
+                                        <OptionCard
                                             key={o.kind}
-                                            variant={kind === o.kind ? "default" : "outline"}
-                                            className="h-12 justify-start text-base"
+                                            role="radio"
+                                            label={NEXT_ACTION_LABEL[o.kind as NextActionKind]}
+                                            hint={o.hint}
+                                            on={kind === o.kind}
                                             disabled={pending}
                                             onClick={() => {
                                                 setKind(o.kind as FollowUpNextKind);
                                                 setStepNote(null);
                                             }}
-                                        >
-                                            {NEXT_ACTION_LABEL[o.kind as NextActionKind]}
-                                        </Button>
+                                        />
                                     ))}
                                 </div>
+                                {shownSteps.length < NEXT_STEPS.length && !allSteps && (
+                                    <Button variant="ghost" className="w-full justify-start" onClick={() => setAllSteps(true)}>
+                                        Iný krok…
+                                    </Button>
+                                )}
                                 <DateTimeInput date={date} time={time} onDate={setDate} onTime={setTime} />
                                 <p className="px-1 text-xs text-muted-foreground">
                                     {stepOption?.hint ??

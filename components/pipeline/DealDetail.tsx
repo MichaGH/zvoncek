@@ -265,6 +265,7 @@ export default function DealDetail({
         pending: lead.pending,
         clientPrice: lead.offers.lastPrice,
         gotPricelist: lead.offers.offerPricelistAt !== null,
+        outstanding: lead.outstanding,
     };
 
     // Predvyplnenie „Zmeniť krok" z aktuálneho kroku (druh mimo ponuky akčného okna → „Zavolať").
