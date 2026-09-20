@@ -11,7 +11,9 @@ export type LogCallResult = { success: true; recipient?: HandoffRecipient } | Ac
 // Výsledok opakovaného odoslania s tým istým kľúčom (§4.5 krok 2, §10.2).
 export async function idempotentReplay(
     key: string,
-    expected: { userId: string; leadId: string; source: ActivitySource; outcome: CallOutcome },
+    // `fp` (wave 5, R01-4): kanonický odtlačok toho, čo používateľ odoslal – hlavne zoznam vecí, ktoré klient pýtal.
+    // Ten istý kľúč s INÝM výberom je konflikt, nie tiché „uložené".
+    expected: { userId: string; leadId: string; source: ActivitySource; outcome: CallOutcome; fp?: string },
 ): Promise<LogCallResult | null> {
     const existing = await prisma.activity.findUnique({
         where: { idempotencyKey: key },
@@ -21,6 +23,7 @@ export async function idempotentReplay(
             type: true,
             source: true,
             outcome: true,
+            meta: true,
             lead: { select: { owner: { select: { id: true, firstName: true, lastName: true } } } },
         },
     });
@@ -30,7 +33,8 @@ export async function idempotentReplay(
         existing.leadId === expected.leadId &&
         existing.type === "CALL" &&
         existing.source === expected.source &&
-        existing.outcome === expected.outcome;
+        existing.outcome === expected.outcome &&
+        (expected.fp === undefined || fpOf(existing.meta) === expected.fp);
     if (!matches) {
         return { error: "Kontakt sa medzitým zmenil – obnovujem.", code: "IDEMPOTENCY_CONFLICT" };
     }

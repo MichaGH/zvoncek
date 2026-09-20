@@ -49,6 +49,7 @@ export const OUTCOME_LABEL: Record<CallOutcome, string> = {
     SNOOZE: "Ozvať sa neskôr",
     POSITIVE: "Pozitívny posun",
     WANTS_TO_ORDER: "Chcú objednať",
+    INTERESTED: "Majú záujem",
 };
 
 export const ACTIVITY_LABEL: Record<ActivityType, string> = {
@@ -81,6 +82,7 @@ export const ACTIVITY_LABEL: Record<ActivityType, string> = {
     TASK_CANCELLED: "Úloha zrušená",
     TASK_REASSIGNED: "Úloha presunutá",
     TASK_RESULT_DISMISSED: "Výsledok sa neposiela",
+    CLIENT_ASK_CHANGED: "Upravené, čo klient chce",
 };
 
 export const ACTIVITY_CATEGORY_LABEL: Record<ActivityCategory, string> = {

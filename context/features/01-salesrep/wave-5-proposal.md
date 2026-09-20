@@ -1,13 +1,20 @@
 # Wave 5 — what the client asked for, what they got, which price they saw
 
-**Status:** **NEXT TO DESIGN AND IMPLEMENT**, after the outstanding wave-3 human click-through is completed and
-recorded. Draft v4 (2026-09-20) — v2 answered review R01 (request ledger §6.2, mapping §5, migration §11); v3 answers
+**Status:** **IMPLEMENTED on the test branch (2026-09-20)** — schema S-16 – S-19 applied, code and screens built,
+checks run; what it is and what it still owes: `context/progress-tracker.md` ("Wave 5"), `context/app-workflow.md`
+§3 / §5a / §5b, `context/domain/database-map.md` (`LeadRequest`) and `context/domain/db-changes.md` §5 (the
+production migration, **not executed**). The human click-through (wave 3's and wave 5's) is still owed.
+This file stays the design record. Draft v4 (2026-09-20) — v2 answered review R01 (request ledger §6.2, mapping §5, migration §11); v3 answers
 review R02: one reconciliation under the lock (§6.7), the whole next step and not only its kind (§6.8), the grouped
 projection (§6.9), close / reopen (§6.10), migration identity and provenance (§6.2, §11), complete relations (§6.2)
 and the manager's edit rights (§6.4). Draft v4 answers review R03: the projection also takes the manager's prepared results (§6.9), one coverage rule for
 the headline and warnings (§6.9a), the pencil's exact contract (§6.4) and two corrected tests. Resolutions: §12 (R01),
-§13 (R02) and §14 (R03). Nothing implemented and no schema applied.
-When §9 is answered and this file is re-reviewed it becomes `wave-5-proposal-final.md`. Backlog: BL-13.
+§13 (R02) and §14 (R03).
+
+**Where the built version differs from this draft** (both are deliberate, both are in the tracker): the send dialog
+blocks the follow-up call while anything is outstanding, not only while a returned task item is pending; and
+`sendCompletesStep` lives in `lib/domain/clientRequests.ts`, not in `tasks.ts`, because it now counts outstanding
+contents. Backlog: BL-13.
 
 **Implementation-order decision (Michal, 2026-09-19):** keep the stable identifiers, but implement **wave 5 before
 wave 4**. Order: wave-3 closeout → wave 5 → re-review wave 4 against the shipped wave-5 operations → wave 4. Do not

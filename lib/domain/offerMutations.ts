@@ -5,6 +5,8 @@ import type { Tx } from "@/lib/access/locks";
 import { createPlanningActivity, describeNextAction, nextActionData } from "@/lib/activityLog";
 import { followUpInSevenDays, hadNextAction, saveQuote, updateLead, type DealActor } from "@/lib/domain/dealMutations";
 import { assertStepAllowed, loadPending, validateFulfils } from "@/lib/domain/taskMutations";
+import { defaultStep, isSystemStep } from "@/lib/domain/clientRequests";
+import { outstandingOf, reconcileRequests } from "@/lib/domain/requestMutations";
 import type { ItemRef } from "@/lib/domain/tasks";
 import {
     moneyToString,
@@ -55,6 +57,7 @@ export async function recomputeOffers(tx: Tx, leadId: string) {
         offerAboutUsAt: summary.aboutUsAt,
         offerPricelistAt: summary.pricelistAt,
         offerPriceAt: summary.priceAt,
+        offerReviewAt: summary.reviewAt,
         // Obchod bez jediného návrhu si ponechá starý údaj (návrhy spred modelu Design).
         ...(designs.length ? { designSentAt: latestDesign } : {}),
     });
@@ -93,12 +96,33 @@ export type RecordOfferInput = {
     // Krok je zamknutý úlohou → odoslanie je len fakt, ďalší krok sa nemení (vynútené na serveri, §5.1).
     factOnly?: boolean;
     fp?: string; // odtlačok hlavného riadku (§5.5)
+    // Wave 5: požiadavky, ktoré toto odoslanie spĺňa ODKAZOM (cena povedaná v tom istom hovore, §5).
+    resolves?: readonly string[];
 };
 
 function followUpNote(contents: OfferContent[]): string {
     if (contents.includes("DESIGN")) return "Zavolať, či si pozreli návrh";
     if (contents.includes("PRICE")) return "Zavolať, či cena prišla";
     return "Zavolať, či email prišiel";
+}
+
+// Po odoslaní sa druh kroku riadi tým, čo NEVYBAVENÉ ostalo (§3.7, §6.8): poslaný návrh pri nevybavenej cene posunie
+// krok na „Poslať cenu". Prepíše sa len krok, ktorý si appka nastavila sama – dohodnutý hovor, čakanie ani vlastný
+// krok prepočet nikdy neprepíše (R01-8, R02-2). Nič nevybavené = krok ostáva, ako ho používateľ nechal (§6.4 bod 4).
+async function refreshSystemStep(tx: Tx, actor: DealActor, lead: Lead, source: ActivitySource) {
+    if (!isSystemStep(lead.nextActionKind)) return;
+    const next = defaultStep(await outstandingOf(tx, lead.id), lead);
+    if (!next || next.nextActionKind === lead.nextActionKind) return;
+    await updateLead(tx, lead.id, next);
+    await tx.activity.create({
+        data: createPlanningActivity({
+            leadId: lead.id,
+            userId: actor.id,
+            type: hadNextAction(lead) ? "NEXT_ACTION_CHANGED" : "NEXT_ACTION_SET",
+            source,
+            note: describeNextAction(next),
+        }),
+    });
 }
 
 export async function recordOffer(
@@ -184,10 +208,17 @@ export async function recordOffer(
     });
 
     await recomputeOffers(tx, lead.id);
+    // §6.7: stav požiadaviek je vždy výsledok prepočtu nad platnými odoslaniami, nikdy lokálne prepnutý.
+    await reconcileRequests(tx, lead.id, { links: (input.resolves ?? []).map((requestId) => ({ requestId, activityId: activity.id })) });
 
     if (input.historical || input.factOnly) return { activityId: activity.id };
 
-    if (input.followUp) {
+    if (!input.followUp) {
+        await refreshSystemStep(tx, actor, lead, source);
+        return { activityId: activity.id };
+    }
+
+    {
         // I10: ak po tomto odoslaní ešte čaká vrátená cena / návrh, krok nesmie prejsť na „Zavolať, či prišlo".
         await assertStepAllowed(tx, lead.id, "CALL", [...fulfils, ...(input.dismissedInSave ?? [])]);
         const at = input.followUpOn ? businessDayStart(input.followUpOn) : followUpInSevenDays(offerInstant(meta, activity.createdAt));
@@ -225,6 +256,9 @@ export async function correctRecord(
             meta: { ...base, correction: { reason, byId: actor.id, at: new Date().toISOString() } },
         },
     });
-    if (activity.type === "OFFER_SENT") await recomputeOffers(tx, activity.leadId);
-    else await bumpLeadOnce(tx, activity.leadId);
+    if (activity.type === "OFFER_SENT") {
+        await recomputeOffers(tx, activity.leadId);
+        // Prečiarknuté odoslanie otvorí požiadavku len vtedy, keď ju nespĺňa žiadne iné platné odoslanie (R02-1).
+        await reconcileRequests(tx, activity.leadId);
+    } else await bumpLeadOnce(tx, activity.leadId);
 }

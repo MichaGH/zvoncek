@@ -4,7 +4,7 @@ import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowRight, Euro, Lock, MessageSquare, Palette } from "lucide-react";
-import type { DealTaskContent, DealTaskType, LeadStatus, NextActionKind } from "@/app/generated/prisma/enums";
+import type { DealTaskContent, DealTaskType, LeadStatus, NextActionKind, RequestContent } from "@/app/generated/prisma/enums";
 import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,6 +32,8 @@ export type AskTarget = {
     nextActionKind: NextActionKind | null;
     nextActionNote: string | null;
     pending: PendingItem[];
+    // Wave 5 (§3.6): čo je nevybavené – predvolí cenu / návrh a drží krok rovnaký ako na serveri (§6.8).
+    outstanding: RequestContent[];
 };
 
 type Person = { id: string; firstName: string; lastName: string; mine?: boolean };
@@ -80,8 +82,17 @@ export default function AskManagerDialog({
     const help = type === "HELP";
     const preferred = resolvers.find((r) => r.mine) ?? (resolvers.length === 1 ? resolvers[0] : null);
 
+    // Predvolí sa to, čo klient pýta a ešte nedostal; inak (rep si to pýta sám) sa berie aktuálny krok.
     const [content, setContent] = useState<DealTaskContent | null>(
-        target.nextActionKind === "SEND_DESIGN" ? "DESIGN" : target.nextActionKind === "SEND_QUOTE" ? "PRICE" : null,
+        target.outstanding.includes("DESIGN")
+            ? "DESIGN"
+            : target.outstanding.includes("PRICE")
+              ? "PRICE"
+              : target.nextActionKind === "SEND_DESIGN"
+                ? "DESIGN"
+                : target.nextActionKind === "SEND_QUOTE"
+                  ? "PRICE"
+                  : null,
     );
     const [text, setText] = useState("");
     const [assigneeId, setAssigneeId] = useState(preferred?.id ?? "");
@@ -93,7 +104,7 @@ export default function AskManagerDialog({
     const [idempotencyKey, setIdempotencyKey] = useState(newKey);
 
     const current = { kind: target.nextActionKind, note: target.nextActionNote };
-    const auto = content ? stepAfterTask([content], current, target.pending, defaultStepNote) : null;
+    const auto = content ? stepAfterTask([content], current, target.pending, defaultStepNote, target.outstanding) : null;
     const choosable = choosableStepKinds(target.pending);
     const customStep = Boolean(auto && !auto.fixed && changeStep && kind);
     const stepKind = customStep ? kind! : (auto?.kind ?? null);

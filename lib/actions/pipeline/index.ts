@@ -8,6 +8,7 @@ import * as cmd from "@/lib/commands/pipeline";
 import * as work from "@/lib/commands/dealWork";
 import * as offers from "@/lib/commands/offers";
 import * as tasks from "@/lib/commands/tasks";
+import * as requests from "@/lib/commands/requests";
 import type { DealContactInput } from "@/lib/domain/dealMutations";
 
 // Tenké server akcie obrazovky obchodov (/dashboard/pipeline): aktuálny používateľ z DB + príkaz
@@ -132,6 +133,11 @@ export async function takeover(input: tasks.TakeoverInput) {
 }
 
 // ── Čo klient dostal (round 2, wave 3a) ──────────────────────────────────────
+
+// Wave 5: ceruzka pri „Chceli" – pridať / stiahnuť, čo klient chce.
+export async function setClientAsks(input: requests.SetClientAsksInput) {
+    return run(input.leadId, (u) => requests.setClientAsksAs(u, input));
+}
 
 export async function recordOfferSent(input: offers.RecordOfferSentInput) {
     return run(input?.leadId, (u) => offers.recordOfferSentAs(u, input));

@@ -8,6 +8,7 @@ import { claimBatch } from "@/lib/actions/calls/claims";
 import type { CallsBoard, QueueLead } from "@/lib/queries/calls";
 import type { Schedule } from "@/lib/domain/schedule";
 import type { FirstCallOutcome } from "@/lib/domain/leadFlow";
+import type { RequestContent } from "@/app/generated/prisma/enums";
 import { CLAIM_BATCH_SIZE } from "@/lib/domain/callAssignment";
 
 import CallRow from "./CallRow";
@@ -16,7 +17,7 @@ import InfoDrawer from "./InfoDrawer";
 import { Button } from "@/components/ui/button";
 import { CalendarClock, Clock, RotateCcw, Sparkles } from "lucide-react";
 
-export type OutcomeOpts = { note?: string; callbackNote?: string; schedule?: Schedule; email?: string };
+export type OutcomeOpts = { note?: string; callbackNote?: string; schedule?: Schedule; email?: string; asked?: RequestContent[] };
 type RemoveAction = { type: "remove"; leadId: string };
 
 // Kódy, pri ktorých nemá zmysel skúšať znova – kontakt sa zmenil, stránka sa obnoví.

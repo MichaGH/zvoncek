@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Lock } from "lucide-react";
-import type { CallOutcome, DealTaskContent, DealTaskType, LeadStatus, NextActionKind } from "@/app/generated/prisma/enums";
+import type { CallOutcome, DealTaskContent, DealTaskType, LeadStatus, NextActionKind, RequestContent } from "@/app/generated/prisma/enums";
 import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,6 +16,7 @@ import { logFollowUp } from "@/lib/actions/pipeline";
 import { ACTIVITY_LABEL, NEXT_ACTION_LABEL, OUTCOME_LABEL, STATUS_LABEL, TASK_CONTENT_LABEL } from "@/lib/dictionaries";
 import { addBusinessCalendarDays, businessDate, businessDayMonth } from "@/lib/domain/businessTime";
 import { CLIENT_REPLIES } from "@/lib/domain/clientReplies";
+import { REQUEST_CONTENT_LABEL, REQUEST_CONTENTS } from "@/lib/domain/clientRequests";
 import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
 import { FOLLOW_UP_NEXT_KINDS, type FollowUpNextKind, type FollowUpOutcome } from "@/lib/domain/leadFlow";
 import { defaultStepNote, NEXT_STEP_OPTIONS } from "@/lib/domain/nextStepOptions";
@@ -33,6 +34,10 @@ import { pendingSummary, requiredStepKinds, type PendingItem } from "@/lib/domai
 // Wave 3: kým čaká úloha pre manažéra, krok je zamknutý – kontakt sa zapíše ako fakt (krok sa nemení); uspať,
 // uzavrieť alebo preplánovať sa dá, len ak sa v tom istom uložení úloha zruší (s dôvodom). Dve poznámky (F1):
 // „Čo povedali" ide do histórie kontaktu, „Poznámka ku kroku" len do kroku.
+//
+// Wave 5: „Chcú aj …" zapíše, čo klient v tomto kontakte pýtal – každé zaškrtnutie je nová požiadavka, aj keď to
+// isté už raz dostal (§3.5). V hlavičke je vidno, ktorú cenu klient naozaj videl (§3.3), aby sa rep vedel rozhodnúť,
+// čo ešte môže povedať.
 //
 // Na telefóne je to drawer, na PC dialóg (ResponsiveSheet). Prvé hovory (telesales) majú vlastnú ponuku –
 // tam je zdvihnutie implicitné, preto majú vlastný komponent CallDrawer.
@@ -54,6 +59,9 @@ export type InteractionTarget = {
     lastActivity: { type: keyof typeof ACTIVITY_LABEL; outcome: CallOutcome | null; note: string | null; at: string } | null;
     task: { id: string; type: DealTaskType; contents: DealTaskContent[]; assignee: string } | null;
     pending: PendingItem[];
+    // Wave 5: ktorú cenu klient naozaj videl (§3.3) a či videl aspoň cenník.
+    clientPrice?: { amount: string; channel: "EMAIL" | "PHONE"; sentOn: string } | null;
+    gotPricelist?: boolean;
 };
 
 type Step = "contact" | "reply" | "next" | "snooze" | "lost" | "sms";
@@ -159,6 +167,7 @@ export default function InteractionSheet({
     const [toldPrice, setToldPrice] = useState(false);
     const [toldAmount, setToldAmount] = useState(target?.price != null ? String(target.price) : "");
     const [toldNote, setToldNote] = useState<string | null>(null); // null = neupravené (pri tej istej sume ostane rozpis)
+    const [asked, setAsked] = useState<RequestContent[]>([]);
     const [overlap, setOverlap] = useState<"KEEP_OPEN" | "CANCEL_TASK" | null>(null);
     const [useReturnedPrice, setUseReturnedPrice] = useState(true);
     const [acknowledge, setAcknowledge] = useState(true);
@@ -278,6 +287,8 @@ export default function InteractionSheet({
                             ? { cancelTask: { taskId: D.task.id, reason: closing ? null : cancelReason.trim() } }
                             : {}),
                         ...(dismiss && !closing ? { dismiss } : {}),
+                        // Čo klient v tomto kontakte pýtal – zapíše sa aj pri zamknutom kroku, je to fakt o klientovi.
+                        ...(asked.length && !closing && (contact === "ANSWERED" || contact === "REPLIED") ? { asked } : {}),
                         ...(fact ? { reply: extra.reply ?? null } : extra),
                     });
                     handle(r, `Zaznamenané: ${label}`, run, offerHandover ? () => onAsk?.("HANDOVER") : undefined);
@@ -309,6 +320,9 @@ export default function InteractionSheet({
         const option = CLIENT_REPLIES.find((r) => r.key === key);
         if (!option) return;
         setReply(key);
+        // Odpoveď, ktorá JE požiadavkou („Chcú konkrétnu cenu"), sa zapíše ako požiadavka klienta (§3.5).
+        const withAsks = option.asks ? [...new Set([...asked, ...option.asks])] : asked;
+        if (option.asks) setAsked(withAsks);
         if (factOnly) {
             saveFact(option.outcome, option.label, key);
             return;
@@ -355,6 +369,22 @@ export default function InteractionSheet({
                 </span>
             )}
             {D.pending.length > 0 && <span>· {pendingSummary(D.pending)}</span>}
+            {/* §3.3: cena, ktorú klient naozaj videl, vs. dnešná cena obchodu – rozhoduje, čo sa dá ešte povedať. */}
+            <span className="block">
+                {D.clientPrice ? (
+                    <>
+                        Klient videl {formatMoney(D.clientPrice.amount)}
+                        {D.clientPrice.channel === "PHONE" ? " (telefonicky)" : ""} {businessDayMonth(new Date(D.clientPrice.sentOn))}
+                        {D.price != null && moneyToString(D.price) !== D.clientPrice.amount
+                            ? ` · aktuálna ${formatMoney(D.price)} ešte neodišla`
+                            : ""}
+                    </>
+                ) : D.gotPricelist ? (
+                    "Videl len cenník"
+                ) : (
+                    "Klient cenu ešte nevidel"
+                )}
+            </span>
         </span>
     );
 
@@ -613,6 +643,24 @@ export default function InteractionSheet({
                                         )}
                                     </div>
                                 )}
+                                {/* Wave 5 (§3.5): „Chcú aj …" – druhé prianie už nekončí v poznámke. */}
+                                <div className="space-y-1.5 rounded-lg border p-3">
+                                    <p className="text-sm text-muted-foreground">Chcú aj… (nepovinné)</p>
+                                    <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                                        {REQUEST_CONTENTS.map((content) => (
+                                            <label key={content} className="flex items-center gap-2 text-sm">
+                                                <Checkbox
+                                                    data-vaul-no-drag
+                                                    checked={asked.includes(content)}
+                                                    onCheckedChange={(v) =>
+                                                        setAsked((cur) => (v === true ? [...cur, content] : cur.filter((c) => c !== content)))
+                                                    }
+                                                />
+                                                {REQUEST_CONTENT_LABEL[content]}
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
                                 {cancelBox}
                                 <p className="px-1 pb-1 text-sm text-muted-foreground">Čo povedali?</p>
                                 <div className="grid gap-2 md:grid-cols-2">

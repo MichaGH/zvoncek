@@ -150,6 +150,11 @@ function NextActionContent({ row, dense, inbox }: { row: DealRow; dense?: boolea
     const pendingLine = row.pendingText && (
         <span className={cn("text-xs font-medium text-emerald-700 dark:text-emerald-400", dense && "truncate")}>{row.pendingText}</span>
     );
+    // Wave 5 (§3.2): varovanie len vtedy, keď krok NEPOKRÝVA, čo klient ešte nedostal – krok si nesie vlastnú
+    // urgentnosť sám („dnes", „2 dni po termíne"), druhé varovanie k tomu istému by len šumelo.
+    const askLine = row.askWarning && (
+        <span className={cn("text-xs font-medium text-amber-700 dark:text-amber-400", dense && "truncate")}>⚠ {row.askWarning}</span>
+    );
     if (!row.nextActionKind) {
         return (
             <div className="flex min-w-0 flex-col">
@@ -158,6 +163,7 @@ function NextActionContent({ row, dense, inbox }: { row: DealRow; dense?: boolea
                     {row.badge ? <Badge variant="destructive" className="font-normal">{row.badge}</Badge> : "—"}
                 </span>
                 <TaskLine row={row} dense={dense} inbox={inbox} />
+                {askLine}
                 {pendingLine}
             </div>
         );
@@ -166,7 +172,7 @@ function NextActionContent({ row, dense, inbox }: { row: DealRow; dense?: boolea
         <div className="flex min-w-0 flex-col">
             <span className={cn("flex min-w-0 items-center gap-1.5", dense && "truncate")}>
                 {row.locked && <Lock className="h-3 w-3 shrink-0 text-amber-600" />}
-                {NEXT_ACTION_LABEL[row.nextActionKind]}
+                {row.stepHeadline ?? NEXT_ACTION_LABEL[row.nextActionKind]}
                 {!row.locked && (row.nextActionAt || row.nextActionMode === "IN_PROGRESS") && (
                     <UrgencyLabel at={row.nextActionAt} hasTime={row.nextActionHasTime} mode={row.nextActionMode} />
                 )}
@@ -180,6 +186,7 @@ function NextActionContent({ row, dense, inbox }: { row: DealRow; dense?: boolea
                     </span>
                 )
             )}
+            {askLine}
             {pendingLine}
         </div>
     );
@@ -287,6 +294,7 @@ export default function DealList({
                         nextActionKind: askRow.nextActionKind,
                         nextActionNote: askRow.nextActionNote,
                         pending: askRow.pending,
+                        outstanding: askRow.outstanding,
                     }}
                     type={askFor.type}
                     resolvers={resolvers}

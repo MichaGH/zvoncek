@@ -16,6 +16,16 @@ import { isDealView, STEP_KIND_VIEWS, viewIgnoresStatus } from "@/lib/domain/dea
 import { businessDaysBetween } from "@/lib/domain/businessTime";
 import { isStepLocked, parseTaskResult, pendingSummary, TASK_AGE_ALERT_DAYS, type PendingItem } from "@/lib/domain/tasks";
 import { pendingByLead } from "@/lib/domain/taskMutations";
+import {
+    clientRequestState,
+    outstandingContents,
+    stepView,
+    warningText,
+    type ClientRequestState,
+    type ManagerWork,
+    type RequestHistoryInput,
+} from "@/lib/domain/clientRequests";
+import { requestsByLead } from "@/lib/domain/requestMutations";
 import { ROLE_PERMISSIONS } from "@/lib/permissions";
 import { summarizeEvents, type Confidence } from "@/lib/tracking/confidence";
 import { trackedUrl } from "@/lib/domain/designLinks";
@@ -170,6 +180,7 @@ type DealLead = {
     offerAboutUsAt: Date | null;
     offerPricelistAt: Date | null;
     offerPriceAt: Date | null;
+    offerReviewAt: Date | null;
     hadLegacySends: boolean;
     legacySendsReviewedAt: Date | null;
     quoteSentAt: Date | null;
@@ -229,6 +240,7 @@ const LIST_SELECT = {
     offerAboutUsAt: true,
     offerPricelistAt: true,
     offerPriceAt: true,
+    offerReviewAt: true,
     hadLegacySends: true,
     legacySendsReviewedAt: true,
     quoteSentAt: true,
@@ -272,8 +284,10 @@ async function noAnswerStreaks(ids: string[]): Promise<Map<string, number>> {
     return new Map(rows.map((r) => [r.leadId, Number(r.streak)]));
 }
 
-// Posledné odoslanie pre každý obchod na strane (jeden dotaz).
-async function lastOffers(ids: string[]): Promise<Map<string, { text: string; at: string }>> {
+// Posledné odoslanie pre každý obchod na strane (jeden dotaz) + cena, ktorú klient naposledy naozaj videl (§3.3).
+export type LastOffer = { text: string; at: string; clientPrice: { amount: string; channel: "EMAIL" | "PHONE"; sentOn: string } | null };
+
+async function lastOffers(ids: string[]): Promise<Map<string, LastOffer>> {
     if (ids.length === 0) return new Map();
     const rows = await prisma.activity.findMany({
         where: { leadId: { in: ids }, type: "OFFER_SENT", revertedAt: null },
@@ -287,10 +301,17 @@ async function lastOffers(ids: string[]): Promise<Map<string, { text: string; at
         list.push({ id: r.id, createdAt: r.createdAt, revertedAt: r.revertedAt, meta });
         byLead.set(r.leadId, list);
     }
-    const out = new Map<string, { text: string; at: string }>();
+    const out = new Map<string, LastOffer>();
     for (const [leadId, list] of byLead) {
         const last = lastOfferOf(list);
-        if (last) out.set(leadId, last);
+        const price = summarizeOffers(list).lastPrice;
+        if (last || price) {
+            out.set(leadId, {
+                text: last?.text ?? "",
+                at: last?.at ?? "",
+                clientPrice: price ? { amount: price.amount, channel: price.channel, sentOn: price.sentOn } : null,
+            });
+        }
     }
     return out;
 }
@@ -341,15 +362,37 @@ async function openTasksFor(ids: string[], now: Date): Promise<Map<string, RowTa
     );
 }
 
+// Čo klient pýta / čo sa robí / čo je pripravené – jedna projekcia pre riadok aj detail (§6.9), aby zoznam a detail
+// nikdy nepopisovali inú prácu.
+function requestViewOf(
+    requests: RequestHistoryInput[],
+    work: ManagerWork,
+    stepKind: NextActionKind | null,
+): { state: ClientRequestState; outstanding: ReturnType<typeof outstandingContents>; headline: string | null; warning: string | null } {
+    const state = clientRequestState(requests, work);
+    const outstanding = outstandingContents(state);
+    const view = stepView(stepKind, outstanding);
+    return { state, outstanding, headline: view.headline, warning: warningText(view.warn) };
+}
+
+function managerWorkOfRow(task: RowTask | null, pending: PendingItem[]): ManagerWork {
+    return {
+        making: task && task.type === "HELP" ? task.contents : [],
+        prepared: pending.filter((i) => i.kind === "PRICE" || i.kind === "DESIGN"),
+    };
+}
+
 function toDealRow(
     lead: DealLead,
     now: Date,
     noAnswerStreak = 0,
-    lastOffer: { text: string; at: string } | null = null,
+    lastOffer: LastOffer | null = null,
     task: RowTask | null = null,
     pending: PendingItem[] = [],
+    requests: RequestHistoryInput[] = [],
 ) {
     const locked = isStepLocked(task ? [{ status: "OPEN" }] : []);
+    const view = requestViewOf(requests, managerWorkOfRow(task, pending), lead.nextActionKind);
     const cls = clientSection(
         {
             status: lead.status,
@@ -392,15 +435,22 @@ function toDealRow(
         task,
         pending,
         pendingText: pendingSummary(pending),
+        // Wave 5: „Poslať návrh + cenu" namiesto holého druhu kroku; varovanie len pre to, čo krok nepokrýva (§6.9a).
+        stepHeadline: view.headline,
+        askWarning: view.warning,
+        outstanding: view.outstanding,
         lastActivity: last
             ? { type: last.type, outcome: last.outcome, note: last.note, at: last.createdAt.toISOString() }
             : null,
         noAnswerStreak,
-        lastOffer,
+        lastOffer: lastOffer && lastOffer.at ? { text: lastOffer.text, at: lastOffer.at } : null,
+        clientPrice: lastOffer?.clientPrice ?? null,
         dialog: {
             ...offerDialogOf(lead),
             openTask: task ? { id: task.id, type: task.type, contents: task.contents, assignee: task.assignee } : null,
             pending,
+            asked: view.state.outstanding.filter((o) => o.openIds.length > 0).map((o) => o.content),
+            outstanding: view.outstanding,
         },
     };
 }
@@ -431,10 +481,13 @@ function offerDialogOf(lead: DealLead): OfferDialogDeal {
         nextActionAt: iso(lead.nextActionAt),
         openTask: null,
         pending: [],
+        asked: [],
+        outstanding: [],
         offers: {
             offerAboutUsAt: iso(lead.offerAboutUsAt),
             offerPricelistAt: iso(lead.offerPricelistAt),
             offerPriceAt: iso(lead.offerPriceAt),
+            offerReviewAt: iso(lead.offerReviewAt),
             designSentAt: iso(designSentAt),
             hadLegacySends: lead.hadLegacySends,
             legacySendsReviewedAt: iso(lead.legacySendsReviewedAt),
@@ -543,20 +596,29 @@ export async function getDealList(params: DealListParams): Promise<{ rows: DealR
     if (pageIds.length === 0) return { rows: [], hasMore: false };
 
     const now = new Date();
-    const [leads, streaks, offers, tasks, pending] = await Promise.all([
+    const [leads, streaks, offers, tasks, pending, requests] = await Promise.all([
         // Rozsah znova aj tu: obchod presunutý medzi prvým a druhým dotazom sa nezobrazí.
         prisma.lead.findMany({ where: { id: { in: pageIds }, ...DEAL_WHERE, ...scopeWhere(params.scope) }, select: LIST_SELECT }),
         noAnswerStreaks(pageIds),
         lastOffers(pageIds),
         openTasksFor(pageIds, now),
         pendingByLead(prisma, pageIds),
+        requestsByLead(prisma, pageIds),
     ]);
     const byId = new Map(leads.map((l) => [l.id, l]));
     const rows = pageIds
         .map((id) => byId.get(id))
         .filter((l): l is (typeof leads)[number] => Boolean(l))
         .map((l) =>
-            toDealRow(l, now, streaks.get(l.id) ?? 0, offers.get(l.id) ?? null, tasks.get(l.id) ?? null, pending.get(l.id) ?? []),
+            toDealRow(
+                l,
+                now,
+                streaks.get(l.id) ?? 0,
+                offers.get(l.id) ?? null,
+                tasks.get(l.id) ?? null,
+                pending.get(l.id) ?? [],
+                requests.get(l.id) ?? [],
+            ),
         );
     return { rows, hasMore };
 }
@@ -645,6 +707,16 @@ export async function getDealDetail(
     const stepLocked = isStepLocked(lead.tasks);
     const cls = clientSection({ ...lead, stepLocked }, now);
     const pending = (await pendingByLead(prisma, [lead.id])).get(lead.id) ?? [];
+    const openTask = lead.tasks.find((t) => t.status === "OPEN") ?? null;
+    const requests = (await requestsByLead(prisma, [lead.id])).get(lead.id) ?? [];
+    const requestView = requestViewOf(
+        requests,
+        {
+            making: openTask && openTask.type === "HELP" ? openTask.contents : [],
+            prepared: pending.filter((i) => i.kind === "PRICE" || i.kind === "DESIGN"),
+        },
+        lead.nextActionKind,
+    );
     let noAnswerStreak = 0;
     for (const a of lead.activities) {
         if ((a.type !== "CALL" && a.type !== "CLIENT_REPLIED") || a.revertedAt) continue;
@@ -693,6 +765,7 @@ export async function getDealDetail(
             offerAboutUsAt: lead.offerAboutUsAt?.toISOString() ?? null,
             offerPricelistAt: lead.offerPricelistAt?.toISOString() ?? null,
             offerPriceAt: lead.offerPriceAt?.toISOString() ?? null,
+            offerReviewAt: lead.offerReviewAt?.toISOString() ?? null,
             designSentAt: legacyAwareDesignSentAt(lead)?.toISOString() ?? null,
             hadLegacySends: lead.hadLegacySends,
             legacySendsReviewedAt: lead.legacySendsReviewedAt?.toISOString() ?? null,
@@ -711,10 +784,15 @@ export async function getDealDetail(
         owner: lead.owner,
         handedOffBy: lead.handedOffBy,
         stepLocked,
-        openTask: (() => {
-            const t = lead.tasks.find((x) => x.status === "OPEN");
-            return t ? { id: t.id, type: t.type, contents: t.contents, assignee: t.assignee.firstName } : null;
-        })(),
+        openTask: openTask ? { id: openTask.id, type: openTask.type, contents: openTask.contents, assignee: openTask.assignee.firstName } : null,
+        // Wave 5 (§3.2, §3.7): „Chceli" ako história udalostí + zoskupená nevybavená práca a jej nadpis / varovanie.
+        askHistory: requestView.state.history,
+        outstandingRows: requestView.state.outstanding,
+        outstanding: requestView.outstanding,
+        // Predvyplnenie dialógu „Čo sme poslali": len to, čo klient PÝTA a ešte nedostal (§3.4).
+        asked: requestView.state.outstanding.filter((o) => o.openIds.length > 0).map((o) => o.content),
+        stepHeadline: requestView.headline,
+        askWarning: requestView.warning,
         // Karta úlohy: otvorená úloha (s jej správami) a uzavreté úlohy s výsledkami (wave 3 §7).
         tasks: lead.tasks.map((t) => ({
             id: t.id,

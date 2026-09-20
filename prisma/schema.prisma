@@ -41,6 +41,8 @@ model User {
   ownershipFrom      DealOwnership[] @relation("DealOwnershipFrom")
   ownershipTo        DealOwnership[] @relation("DealOwnershipTo")
   ownershipBy        DealOwnership[] @relation("DealOwnershipBy")
+  requestsRecorded   LeadRequest[]   @relation("LeadRequestRequestedBy")
+  requestsResolved   LeadRequest[]   @relation("LeadRequestResolvedBy")
 
   // Tímy: user je členom max. jedného tímu (teamId) a zároveň môže viesť max. jeden tím (leadsTeam).
   team      Team?   @relation("TeamMembers", fields: [teamId], references: [id])
@@ -117,6 +119,7 @@ model Lead {
   offerAboutUsAt        DateTime? // prvýkrát „o nás"
   offerPricelistAt      DateTime? // prvýkrát cenník
   offerPriceAt          DateTime? // naposledy konkrétna cena (email aj telefón)
+  offerReviewAt         DateTime? // prvýkrát rozbor webu (wave 5, S-17)
   hadLegacySends        Boolean   @default(false) // mal odoslania ešte zo starého systému – nastaví jednorazový krok, potom sa nemení
   legacySendsReviewedAt DateTime? // manažér potvrdil, čo klient zo starého systému naozaj dostal
 
@@ -151,6 +154,7 @@ model Lead {
   designs    Design[]
   tasks      DealTask[]
   ownerships DealOwnership[]
+  requests   LeadRequest[] // čo klient pýtal (wave 5)
   createdAt  DateTime        @default(now())
   updatedAt  DateTime        @updatedAt
 
@@ -196,6 +200,10 @@ model Activity {
   task           DealTask? @relation(fields: [taskId], references: [id]) // udalosť úlohy pre manažéra (wave 3)
   taskId         String?
 
+  // Wave 5: hovor, z ktorého požiadavka vznikla / odoslanie, ktoré ju splnilo (lib/domain/clientRequests.ts).
+  requestsSourced  LeadRequest[] @relation("LeadRequestSource")
+  requestsResolved LeadRequest[] @relation("LeadRequestResolution")
+
   @@index([leadId])
   @@index([taskId])
   @@index([userId, createdAt])
@@ -233,6 +241,7 @@ enum ActivityType {
   TASK_CANCELLED // úloha zrušená (vlastník, uzavretie, zmena vlastníka)
   TASK_REASSIGNED // úloha presunutá inému manažérovi
   TASK_RESULT_DISMISSED // vrátený výsledok sa neposiela / berie na vedomie (meta.items + dôvod)
+  CLIENT_ASK_CHANGED // wave 5: ručná oprava toho, čo klient pýtal (meta.added / withdrawn / reason)
 }
 
 enum CallOutcome {
@@ -246,6 +255,7 @@ enum CallOutcome {
   SNOOZE // 2h "o X mesiacov"
   POSITIVE // videli, páči sa, posúva sa to
   WANTS_TO_ORDER // len follow-up: klient chce ísť do toho – obyčajná odpoveď, ďalší krok vyberá obchodník
+  INTERESTED // wave 5: dovolali sme sa, majú záujem – ČO chceli, je v LeadRequest riadkoch
 }
 
 enum Role {
@@ -446,6 +456,65 @@ enum DealOwnershipReason {
   TAKEOVER // manažér prevzal klienta sám
   HANDOVER // manažér prijal odovzdanie
   REVERT // vrátenie výsledku prvého hovoru
+}
+
+// ── ČO KLIENT PÝTAL (wave 5) ─────────────────────────────────────────────────
+// Požiadavka je UDALOSŤ s časom, nie trvalá nálepka: klient môže to isté pýtať znova aj po tom, čo to dostal.
+// Stav riadku je vždy VÝSLEDOK prepočtu (reconcileRequests, lib/domain/requestMutations.ts) nad požiadavkami
+// a platnými OFFER_SENT záznamami – nikdy lokálne prepnutý. Pravidlá: lib/domain/clientRequests.ts.
+
+enum RequestContent {
+  INFO // info / ukážky (pošle sa ako ABOUT_US)
+  PRICELIST // cenník
+  PRICE // konkrétna cena pre tohto klienta
+  DESIGN // dizajnový návrh
+  REVIEW // rozbor webu
+}
+
+enum RequestState {
+  OPEN // ešte nedostali
+  SENT // splnené platným OFFER_SENT
+  WITHDRAWN // už to nechcú (ručne, s dôvodom)
+}
+
+enum RequestOrigin {
+  LIVE // zaznamenané v aplikácii
+  MIGRATED_RECEIPT // odvodené z prevedeného odoslania (§11)
+  MIGRATED_OPEN_STEP // odvodené z otvoreného kroku bez odoslania (§11)
+}
+
+model LeadRequest {
+  id      String         @id @default(cuid())
+  lead    Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId  String
+  content RequestContent
+  state   RequestState   @default(OPEN)
+  origin  RequestOrigin  @default(LIVE)
+
+  // Kedy a od koho: „instant" = čas zdrojovej aktivity, nie zaokrúhlený deň.
+  requestedAt      DateTime
+  requestedBy      User?     @relation("LeadRequestRequestedBy", fields: [requestedById], references: [id])
+  requestedById    String? // NULL pri migrovanom riadku bez známeho aktéra – nikdy dnešný vlastník
+  source           Activity? @relation("LeadRequestSource", fields: [sourceActivityId], references: [id], onDelete: SetNull)
+  sourceActivityId String? // hovor, z ktorého vznikla; vrátenie prvého hovoru riadky zmaže
+
+  // Vyriešenie – prepočítané, nie prepínané
+  resolvedAt         DateTime?
+  resolvedBy         User?     @relation("LeadRequestResolvedBy", fields: [resolvedById], references: [id])
+  resolvedById       String?
+  resolution         Activity? @relation("LeadRequestResolution", fields: [resolvedActivityId], references: [id], onDelete: SetNull)
+  resolvedActivityId String? // OFFER_SENT, ktoré ju splnilo
+  reason             String? // povinný pri ručnom stiahnutí
+
+  // Migrácia (§11)
+  migrationKey String? @unique // deterministický kľúč zdroja – opakovaný beh nevytvorí duplikát
+  provenance   Json? // zdrojové stĺpce / aktivity, istota, schválená výnimka
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId, state])
+  @@index([leadId, content, state])
 }
 
 model DealOwnership {

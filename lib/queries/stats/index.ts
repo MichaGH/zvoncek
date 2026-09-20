@@ -1,7 +1,8 @@
 import prisma from "@/lib/db";
 import { POOL_WHERE } from "@/lib/queries/calls";
-import type { CallOutcome, LeadStatus } from "@/app/generated/prisma/enums";
+import type { CallOutcome, LeadStatus, RequestContent } from "@/app/generated/prisma/enums";
 import { CallOutcome as CallOutcomeEnum, LeadStatus as LeadStatusEnum } from "@/app/generated/prisma/enums";
+import { REQUEST_CONTENTS } from "@/lib/domain/clientRequests";
 import type { DateRange } from "@/lib/stats/range";
 
 // Stats queries live here so pages stay thin. All time-bound metrics take a
@@ -67,8 +68,10 @@ export async function getCallStats({
     }
 
     const reached = total - byOutcome.NO_ANSWER - byOutcome.BAD_NUMBER;
+    // Wave 5 (§6.5): nové hovory zapisujú INTERESTED, staré WANTS_* ostávajú v histórii a počítajú sa ďalej.
+    // ČO chceli, sa počíta z LeadRequest riadkov (getDemandStats), nikdy z výsledku hovoru.
     const interested =
-        byOutcome.WANTS_QUOTE + byOutcome.WANTS_DESIGN + byOutcome.WANTS_EMAIL + byOutcome.POSITIVE;
+        byOutcome.INTERESTED + byOutcome.WANTS_QUOTE + byOutcome.WANTS_DESIGN + byOutcome.WANTS_EMAIL + byOutcome.POSITIVE;
 
     return {
         totalCalls: total,
@@ -78,6 +81,36 @@ export async function getCallStats({
         notInterested: byOutcome.NOT_INTERESTED,
         byOutcome,
     };
+}
+
+// ── Čo klienti chceli (wave 5 §6.5) ──────────────────────────────────────────
+// Dopyt sa NIKDY nečíta z výsledku hovoru – ten hovorí len „majú záujem". Počítajú sa riadky LeadRequest, takže
+// jeden hovor môže počítať v dvoch obsahoch a „len cenník" je konečne merateľný. Migrované riadky sa vynechávajú
+// (origin = LIVE), inak by stará konverzia zdvihla čísla obdobia, v ktorom sa nevolalo.
+export type DemandStats = { byContent: Record<RequestContent, number>; total: number };
+
+export async function getDemandStats({
+    range,
+    userId,
+    userIds,
+}: {
+    range: DateRange;
+    userId?: string;
+    userIds?: string[];
+}): Promise<DemandStats> {
+    const requestedAt = rangeFilter(range);
+    const grouped = await prisma.leadRequest.groupBy({
+        by: ["content"],
+        where: {
+            origin: "LIVE",
+            ...(requestedAt ? { requestedAt } : {}),
+            ...(userId ? { requestedById: userId } : userIds ? { requestedById: { in: userIds } } : {}),
+        },
+        _count: true,
+    });
+    const byContent = Object.fromEntries(REQUEST_CONTENTS.map((c) => [c, 0])) as Record<RequestContent, number>;
+    for (const g of grouped) byContent[g.content] = g._count;
+    return { byContent, total: Object.values(byContent).reduce((a, b) => a + b, 0) };
 }
 
 export type UserCallStat = {
@@ -117,6 +150,7 @@ export async function getCallStatsByUser({
             entry.reached += row._count;
         }
         if (
+            row.outcome === "INTERESTED" ||
             row.outcome === "WANTS_QUOTE" ||
             row.outcome === "WANTS_DESIGN" ||
             row.outcome === "WANTS_EMAIL" ||

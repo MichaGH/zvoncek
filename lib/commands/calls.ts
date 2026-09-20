@@ -12,6 +12,9 @@ import type { AccessUser } from "@/lib/access/user";
 import { createAuditActivity, createPlanningActivity, describeNextAction } from "@/lib/activityLog";
 import { resolveDealOwner } from "@/lib/domain/dealRouting";
 import { recordOwnership } from "@/lib/domain/taskMutations";
+import { askedSchema, normalizeAsked } from "@/lib/domain/clientRequests";
+import { addRequests, reconcileRequests } from "@/lib/domain/requestMutations";
+import { canonical } from "@/lib/domain/tasks";
 import { FIRST_CALL_OUTCOMES, isHandoffOutcome, leadStateForOutcome } from "@/lib/domain/leadFlow";
 import { bump, markLeadBumped } from "@/lib/domain/revision";
 import { isDayOnlySnooze, resolveSchedule, scheduleSchema } from "@/lib/domain/schedule";
@@ -29,6 +32,8 @@ const logCallSchema = z.object({
     callbackNote: z.string().max(500).optional(),
     schedule: scheduleSchema.optional(),
     email: z.string().max(200).optional(),
+    // Wave 5 (§3.1): čo klient pýtal – jeden alebo viac obsahov. Patrí len k výsledku INTERESTED.
+    asked: askedSchema.optional(),
 });
 
 export type LogCallInput = z.input<typeof logCallSchema>;
@@ -42,8 +47,14 @@ export async function logCallAs(user: AccessUser, raw: LogCallInput): Promise<Lo
     const { outcome } = input;
     if (outcome === "CALL_AGAIN" && !input.schedule) return { error: "Vyber termín." };
     if (outcome === "SNOOZE" && !(input.schedule && isDayOnlySnooze(input.schedule))) return { error: "Vyber dátum." };
+    // Staré WANTS_* ostávajú prijateľné (história, seedy), ale nenesú výber – ten patrí k INTERESTED (§6.5).
+    const asked = outcome === "INTERESTED" ? normalizeAsked(input.asked ?? []) : [];
+    if (outcome === "INTERESTED" && asked.length === 0) return { error: "Zaškrtni aspoň jednu vec, ktorú chcú." };
+    if (outcome !== "INTERESTED" && input.asked?.length) return { error: "Neplatné údaje." };
 
-    const replayKey = { userId: user.id, leadId: input.leadId, source: "CALL_QUEUE" as const, outcome };
+    // Odtlačok hlavného riadku: opakovanie s tým istým kľúčom, ale iným výberom, je konflikt (R01-4).
+    const fp = canonical({ asked });
+    const replayKey = { userId: user.id, leadId: input.leadId, source: "CALL_QUEUE" as const, outcome, fp };
     const replay = await idempotentReplay(input.idempotencyKey, replayKey);
     if (replay) return replay;
 
@@ -85,12 +96,13 @@ export async function logCallAs(user: AccessUser, raw: LogCallInput): Promise<Lo
                     source: "CALL_QUEUE",
                     outcome,
                     note: note || null,
+                    meta: { asked, fp },
                     idempotencyKey: input.idempotencyKey,
                 },
                 select: { id: true, createdAt: true },
             });
 
-            const flow = leadStateForOutcome(outcome, when, callbackNote, now);
+            const flow = leadStateForOutcome(outcome, when, callbackNote, now, asked);
             const { keepsAssignment, ...state } = flow;
             const email = input.email?.trim();
             const updated = await tx.lead.update({
@@ -113,6 +125,20 @@ export async function logCallAs(user: AccessUser, raw: LogCallInput): Promise<Lo
                 select: { revision: true },
             });
             markLeadBumped(tx, lead.id);
+
+            // Čo klient pýtal = riadky s časom zdrojového hovoru (§6.2). Aktivita je audit, riadky sú práca.
+            // Beží až po zápise leadu, aby revízia stúpla presne raz (bumpLeadOnce v prepočte je potom bez efektu).
+            if (asked.length) {
+                await addRequests(tx, {
+                    leadId: lead.id,
+                    contents: asked,
+                    requestedAt: call.createdAt,
+                    requestedById: user.id,
+                    sourceActivityId: call.id,
+                    sourceTypes: ["CALL"],
+                });
+                await reconcileRequests(tx, lead.id);
+            }
 
             let recipient: Recipient | undefined;
             if (handoff) {

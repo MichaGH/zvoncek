@@ -4,6 +4,7 @@ import { AccessError, FORBIDDEN, toActionError, type ActionError } from "@/lib/a
 import { lockLeadWithUsers } from "@/lib/access/leads";
 import { withLockTx } from "@/lib/access/locks";
 import type { AccessUser } from "@/lib/access/user";
+import { deleteRequestsOfActivity } from "@/lib/domain/requestMutations";
 import { bump, markLeadBumped } from "@/lib/domain/revision";
 import { recordOwnership } from "@/lib/domain/taskMutations";
 import { can } from "@/lib/permissions";
@@ -89,6 +90,10 @@ export async function revertCallResultAs(
             if (!stateMatchesCall(lead, activity)) {
                 throw new AccessError("FORBIDDEN", "Kontakt sa od hovoru zmenil – vrátenie nie je možné.");
             }
+
+            // Čo klient pýtal v tomto hovore, ide preč s ním (R01-9). Ak už niečo z toho dostal, vrátenie sa odmietne –
+            // odoslanie ostáva pravdou a požiadavka, ktorú splnilo, sa nesmie stratiť.
+            await deleteRequestsOfActivity(tx, lead.id, activity.id);
 
             const now = new Date();
             // revertedAt je evidencia na Activity – revíziu nezvyšuje.

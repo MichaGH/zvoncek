@@ -1,3 +1,4 @@
+import type { RequestContent } from "@/app/generated/prisma/enums";
 import type { FollowUpNextKind, FollowUpOutcome } from "@/lib/domain/leadFlow";
 
 // „Čo povedali" – ponuka odpovedí po tom, čo sa obchodník dovolal (round 2, D-06).
@@ -15,6 +16,9 @@ export type ClientReply = {
     days?: number; // predvyplnený dátum (obchodné dni sa neriešia, je to len návrh do poľa)
     needsDate?: boolean; // bez dátumu sa neodošle
     terminal?: boolean; // výsledok si ďalší krok nastaví sám (napr. chcú CP)
+    // Wave 5 (§3.5): odpoveď, ktorá JE požiadavkou klienta – predzaškrtne „Chcú aj …". Riadok vzniká vždy nanovo,
+    // aj keď to isté už raz dostali.
+    asks?: RequestContent[];
 };
 
 export const CLIENT_REPLIES: ClientReply[] = [
@@ -26,8 +30,8 @@ export const CLIENT_REPLIES: ClientReply[] = [
     { key: "SOMEONE_ELSE", label: "Rieši to niekto iný", outcome: "POSITIVE", nextKind: "CALL", days: 3, needsDate: true },
     { key: "PRICE_HIGH", label: "Cena je vysoká", outcome: "POSITIVE", nextKind: "CALL", days: 3, needsDate: true },
     { key: "WANTS_INFO", label: "Chcú info (o nás, cenník)", outcome: "POSITIVE", nextKind: "SEND_EMAIL" },
-    { key: "WANTS_QUOTE", label: "Chcú konkrétnu cenu", outcome: "WANTS_QUOTE", terminal: true },
-    { key: "WANTS_DESIGN", label: "Chcú návrh", outcome: "WANTS_DESIGN", terminal: true },
+    { key: "WANTS_QUOTE", label: "Chcú konkrétnu cenu", outcome: "WANTS_QUOTE", terminal: true, asks: ["PRICE"] },
+    { key: "WANTS_DESIGN", label: "Chcú návrh", outcome: "WANTS_DESIGN", terminal: true, asks: ["DESIGN"] },
     // Obyčajná odpoveď (wave 3, D15): zapíše sa, ďalší krok vyberá obchodník; odovzdanie manažérovi je samostatná akcia.
     { key: "WANTS_TO_ORDER", label: "Chcú objednať", outcome: "WANTS_TO_ORDER", nextKind: "CALL", days: 1, needsDate: true },
 ];

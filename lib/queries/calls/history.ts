@@ -1,5 +1,6 @@
 import prisma from "@/lib/db";
 import type { AccessUser } from "@/lib/access/user";
+import { askedOfMeta, REQUEST_CONTENT_LABEL } from "@/lib/domain/clientRequests";
 import { can } from "@/lib/permissions";
 
 // userId === null → história všetkých (len s callHistory.viewAll, vynútené na stránke).
@@ -16,6 +17,7 @@ export async function getCallHistory(viewer: AccessUser, userId: string | null) 
             userId: true,
             outcome: true,
             note: true,
+            meta: true,
             createdAt: true,
             leadRevision: true,
             revertedAt: true,
@@ -73,9 +75,12 @@ export async function getCallHistory(viewer: AccessUser, userId: string | null) 
             isDeal && (can(viewer, "deals.viewAll") || (can(viewer, "deals.view") && l.ownerId === viewer.id))
                 ? `/dashboard/pipeline/${l.id}`
                 : null;
+        // Wave 5, Q2: výsledok hovoru hovorí len „majú záujem" – ČO chceli, je v riadku histórie.
+        const asked = askedOfMeta(activity.meta);
         return {
             id: activity.id,
             outcome: activity.outcome,
+            asked: asked.length ? asked.map((c) => REQUEST_CONTENT_LABEL[c]).join(" + ") : null,
             note: activity.note,
             createdAt: activity.createdAt.toISOString(),
             reverted: Boolean(activity.revertedAt),

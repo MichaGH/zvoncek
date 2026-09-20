@@ -3,16 +3,27 @@
 import { useState } from "react";
 import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import type { RequestContent } from "@/app/generated/prisma/enums";
 import type { QueueLead } from "@/lib/queries/calls";
 import type { FirstCallOutcome } from "@/lib/domain/leadFlow";
+import { REQUEST_CONTENT_LABEL, REQUEST_CONTENTS } from "@/lib/domain/clientRequests";
 import type { OutcomeOpts } from "./CallQueue";
 
 type Step = "main" | "scheduled" | "interested" | "email" | "snooze";
 
 // Po výbere záujmu uložíme pending outcome, potom prejdeme na email step
 type PendingOutcome = { outcome: FirstCallOutcome; label: string } | null;
+
+// Wave 5 (§3.1): jeden pozitívny výsledok („majú záujem") a zaškrtnutie toho, ČO chceli – aj viac naraz.
+// Pôvodné tri tlačidlá (Chcú cenu / návrh / info) boli jedna voľba, takže druhé prianie končilo v poznámke.
+const ASK_HINT: Partial<Record<RequestContent, string>> = {
+    INFO: "kto sme, čo sme robili",
+    PRICE: "cena pre nich, nie cenník",
+    REVIEW: "čo je zlé na ich webe – pýtajú sa na to zriedka",
+};
 
 // Trieda pre natívne date/datetime inputy:
 // text-[16px] – zabraňuje iOS auto-zoom pri focuse
@@ -34,6 +45,7 @@ export default function CallDrawer({
     const [customDate, setCustomDate] = useState("");
     const [customTime, setCustomTime] = useState("");
     const [pendingOutcome, setPendingOutcome] = useState<PendingOutcome>(null);
+    const [asked, setAsked] = useState<RequestContent[]>([]);
     const [email, setEmail] = useState(lead?.email ?? "");
 
     if (!lead) return null;
@@ -46,8 +58,13 @@ export default function CallDrawer({
         onOutcome(L, outcome, label, { note, ...opts });
     }
 
-    function selectInterest(outcome: FirstCallOutcome, label: string) {
-        setPendingOutcome({ outcome, label });
+    function toggleAsk(content: RequestContent, on: boolean) {
+        setAsked((cur) => (on ? [...cur, content] : cur.filter((c) => c !== content)));
+    }
+
+    function goToEmail() {
+        if (asked.length === 0) return;
+        setPendingOutcome({ outcome: "INTERESTED", label: "Majú záujem" });
         setStep("email");
     }
 
@@ -65,10 +82,11 @@ export default function CallDrawer({
     }
 
     function fireWithEmail() {
-        if (!pendingOutcome) return;
+        if (!pendingOutcome || asked.length === 0) return;
         fire(pendingOutcome.outcome, pendingOutcome.label, {
             callbackNote: cbNote(),
             email: email.trim() || undefined,
+            asked,
         });
     }
 
@@ -158,7 +176,7 @@ export default function CallDrawer({
                             </>
                         )}
 
-                        {/* ── TYP ZÁUJMU ── */}
+                        {/* ── ČO CHCELI (wave 5, §3.1) ── */}
                         {step === "interested" && (
                             <>
                                 <p className="px-1 pb-1 text-xs text-muted-foreground">
@@ -166,14 +184,27 @@ export default function CallDrawer({
                                         ? `Pravdepodobne odovzdá: ${recipientPreview} (náhľad)`
                                         : "Pravdepodobne nepriradené – obchod priradí manažér (náhľad)"}
                                 </p>
-                                <Button variant="outline" className={big} onClick={() => selectInterest("WANTS_DESIGN", "Chcú návrh")}>
-                                    🎨 Chcú návrh zdarma
-                                </Button>
-                                <Button variant="outline" className={big} onClick={() => selectInterest("WANTS_QUOTE", "Chcú konkrétnu cenu")}>
-                                    💶 Chcú konkrétnu cenu
-                                </Button>
-                                <Button variant="outline" className={big} onClick={() => selectInterest("WANTS_EMAIL", "Chcú info emailom")}>
-                                    ✉️ Chcú info emailom (o nás, cenník)
+                                <p className="px-1 pb-1 text-sm font-medium">Čo chceli? (môže byť viac)</p>
+                                {REQUEST_CONTENTS.map((content) => (
+                                    <label
+                                        key={content}
+                                        className="flex items-start gap-3 rounded-lg border p-3 text-sm"
+                                    >
+                                        <Checkbox
+                                            data-vaul-no-drag
+                                            checked={asked.includes(content)}
+                                            onCheckedChange={(v) => toggleAsk(content, v === true)}
+                                        />
+                                        <span className="min-w-0">
+                                            {REQUEST_CONTENT_LABEL[content]}
+                                            {ASK_HINT[content] && (
+                                                <span className="block text-xs text-muted-foreground">{ASK_HINT[content]}</span>
+                                            )}
+                                        </span>
+                                    </label>
+                                ))}
+                                <Button className="h-12 w-full" disabled={asked.length === 0} onClick={goToEmail}>
+                                    {asked.length === 0 ? "Zaškrtni, čo chceli" : "Pokračovať"}
                                 </Button>
                                 <Button variant="ghost" className="w-full" onClick={() => setStep("main")}>← Späť</Button>
                             </>
@@ -193,6 +224,9 @@ export default function CallDrawer({
                                     onChange={(e) => setEmail(e.target.value)}
                                     className="mb-2 text-base"
                                 />
+                                <p className="px-1 pb-1 text-xs text-muted-foreground">
+                                    Chcú: {asked.map((c) => REQUEST_CONTENT_LABEL[c]).join(", ")}
+                                </p>
                                 <Button className="h-12 w-full" onClick={fireWithEmail}>
                                     Uložiť
                                 </Button>

@@ -24,7 +24,9 @@ import {
     businessDayStart,
     businessTodayStart,
 } from "@/lib/domain/businessTime";
+import { defaultStep } from "@/lib/domain/clientRequests";
 import { hadNextAction, updateLead } from "@/lib/domain/leadWrites";
+import { outstandingOf } from "@/lib/domain/requestMutations";
 import { resolveSchedule, scheduleSchema, type Schedule } from "@/lib/domain/schedule";
 import {
     assertStepAllowed,
@@ -352,7 +354,11 @@ export async function reopenDeal(tx: Tx, actor: DealActor, lead: Lead, source: A
     if (!isClosedDealStatus(lead.status)) throw new AccessError("FORBIDDEN", "Obchod nie je uzavretý.");
     if ((people.owner?.id ?? null) !== lead.ownerId) throw new AccessError("STALE", "Obchod sa medzitým zmenil – obnovujem.");
     await assertStepUnlocked(tx, lead.id);
-    const next = nextActionData("CALL", businessTodayStart(), REOPEN_STEP_NOTE, false);
+    // Wave 5 (§6.10): ak je ešte niečo nevybavené, obchod sa otvorí na TO – „Poslať návrh", nie „Zavolať". Pevné
+    // „Zavolať" ostáva len vtedy, keď nie je čo poslať (pôvodné wave-3 zjednodušenie).
+    const outstanding = await outstandingOf(tx, lead.id);
+    const derived = defaultStep(outstanding, { ...lead, nextActionKind: null, nextActionAt: null, nextActionNote: null });
+    const next = derived ?? nextActionData("CALL", businessTodayStart(), REOPEN_STEP_NOTE, false);
     await updateLead(tx, lead.id, { status: "ACTIVE", closedAt: null, lostReason: null, ...next });
     await tx.activity.create({
         data: {

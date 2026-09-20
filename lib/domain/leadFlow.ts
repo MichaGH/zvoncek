@@ -4,8 +4,10 @@ import {
     LeadStatus,
     NextActionKind,
     NextActionMode,
+    RequestContent,
 } from "@/app/generated/prisma/enums";
 import { businessTodayStart, nextBusinessWorkingDayStart } from "@/lib/domain/businessTime";
+import { defaultStep } from "@/lib/domain/clientRequests";
 import { defaultStepNote, nextStepOption } from "@/lib/domain/nextStepOptions";
 
 // Prechody stavov – čisté funkcie bez DB. Kontrola prístupu, zámky a revízia sú v akciách.
@@ -16,6 +18,7 @@ export const FIRST_CALL_OUTCOMES = [
     "SNOOZE",
     "NOT_INTERESTED",
     "BAD_NUMBER",
+    "INTERESTED",
     "WANTS_QUOTE",
     "WANTS_EMAIL",
     "WANTS_DESIGN",
@@ -23,7 +26,9 @@ export const FIRST_CALL_OUTCOMES = [
 
 export type FirstCallOutcome = (typeof FIRST_CALL_OUTCOMES)[number];
 
-export const HANDOFF_OUTCOMES = ["WANTS_QUOTE", "WANTS_EMAIL", "WANTS_DESIGN"] as const;
+// Wave 5 (§6.5): jeden pozitívny výsledok hovoru, ČO chceli je v LeadRequest riadkoch. Staré WANTS_* hodnoty ostávajú
+// platné a v histórii sa naďalej zobrazujú – nový hovor ich už nezapisuje (fronta volaní posiela INTERESTED).
+export const HANDOFF_OUTCOMES = ["INTERESTED", "WANTS_QUOTE", "WANTS_EMAIL", "WANTS_DESIGN"] as const;
 
 export function isHandoffOutcome(outcome: CallOutcome): outcome is (typeof HANDOFF_OUTCOMES)[number] {
     return (HANDOFF_OUTCOMES as readonly string[]).includes(outcome);
@@ -62,9 +67,16 @@ export function leadStateForOutcome(
     when: { at: Date; hasTime: boolean } | null,
     callbackNote: string | null,
     now: Date = new Date(),
+    asked: readonly RequestContent[] = [],
 ): CallStageState {
     const cleared = { callbackKind: null, callbackAt: null, callbackHasTime: false, callbackNote: null };
     switch (outcome) {
+        case "INTERESTED": {
+            // Krok vyplýva z toho, čo klient pýtal (§5, §6.8) – žiadne hádanie dominantnej hodnoty výsledku.
+            const step = defaultStep(asked, { nextActionKind: null, nextActionAt: null, nextActionHasTime: false, nextActionMode: "SCHEDULED", nextActionNote: null }, { now });
+            if (!step) throw new Error("INTERESTED vyžaduje aspoň jednu vec, ktorú klient chce");
+            return { status: "ACTIVE", ...cleared, lostReason: null, keepsAssignment: false, ...step };
+        }
         case "NO_ANSWER":
             return {
                 status: "CALLING",

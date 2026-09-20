@@ -10,9 +10,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { confirmLegacyReviewed, saveDealQuote, saveQuote } from "@/lib/actions/pipeline";
+import { Checkbox } from "@/components/ui/checkbox";
+import { confirmLegacyReviewed, saveDealQuote, saveQuote, setClientAsks } from "@/lib/actions/pipeline";
 import type { ActionError } from "@/lib/access/errors";
+import type { RequestContent } from "@/app/generated/prisma/enums";
 import { businessDayMonth } from "@/lib/domain/businessTime";
+import {
+    ASK_REASON_MAX,
+    outstandingLabel,
+    REQUEST_CONTENT_LABEL,
+    REQUEST_CONTENTS,
+    type HistoryRow,
+    type OutstandingRow,
+} from "@/lib/domain/clientRequests";
 import {
     clientKnowledge,
     formatMoney,
@@ -30,6 +40,12 @@ import type { DealDetailData } from "@/lib/queries/pipeline";
 
 const SAVE = { pipeline: saveQuote, clients: saveDealQuote };
 
+function newKey() {
+    return typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function Known({ label, state, extra }: { label: string; state: KnowledgeState; extra?: string }) {
     if (state.state === "yes") {
         return (
@@ -45,9 +61,13 @@ function Known({ label, state, extra }: { label: string; state: KnowledgeState; 
 
 export default function CenovaPonukaCard({
     leadId,
+    revision,
     price,
     priceNote,
     offers,
+    askHistory,
+    outstandingRows,
+    openTaskAssignee = null,
     mode = "pipeline",
     readOnly = false,
     isManager,
@@ -55,9 +75,13 @@ export default function CenovaPonukaCard({
     onHistorical,
 }: {
     leadId: string;
+    revision: number;
     price: number | null;
     priceNote: string | null;
     offers: DealDetailData["offers"];
+    askHistory: HistoryRow[];
+    outstandingRows: OutstandingRow[];
+    openTaskAssignee?: string | null;
     mode?: "pipeline" | "clients";
     readOnly?: boolean;
     isManager: boolean;
@@ -66,6 +90,7 @@ export default function CenovaPonukaCard({
 }) {
     const router = useRouter();
     const [editing, setEditing] = useState(false);
+    const [editingAsks, setEditingAsks] = useState(false);
     const [busy, setBusy] = useState(false);
     const [confirmingReview, setConfirmingReview] = useState(false);
 
@@ -102,6 +127,44 @@ export default function CenovaPonukaCard({
                         {price != null ? formatMoney(price) : "— €"}
                     </p>
                     {priceNote && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{priceNote}</p>}
+                </div>
+
+                {/* Wave 5 (§3.2): čo klient pýtal – udalosti, nie trvalá nálepka. Druhá žiadosť o to isté je nový riadok. */}
+                <div className="space-y-1 text-sm">
+                    <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Chceli</p>
+                        {!readOnly && (
+                            <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 w-7 shrink-0 p-0"
+                                onClick={() => setEditingAsks(true)}
+                                aria-label="Upraviť, čo klient chce"
+                            >
+                                <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                        )}
+                    </div>
+                    {askHistory.length === 0 ? (
+                        <p className="text-muted-foreground">Nič si výslovne nepýtali.</p>
+                    ) : (
+                        <ul className="space-y-0.5">
+                            {askHistory.map((row) => (
+                                <li key={row.id} className="flex flex-wrap items-baseline gap-x-1.5">
+                                    <span className={row.state === "WITHDRAWN" ? "line-through decoration-muted-foreground/40" : undefined}>
+                                        {REQUEST_CONTENT_LABEL[row.content]}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">{businessDayMonth(new Date(row.requestedAt))}</span>
+                                    {row.state === "SENT" && <span className="text-xs text-emerald-700 dark:text-emerald-400">✓ dostali</span>}
+                                    {row.state === "OPEN" && <span className="text-xs text-amber-700 dark:text-amber-400">ešte neposlané</span>}
+                                    {row.state === "WITHDRAWN" && (
+                                        <span className="text-xs text-muted-foreground">už nechcú{row.reason ? ` – ${row.reason}` : ""}</span>
+                                    )}
+                                    {row.origin !== "LIVE" && <span className="text-xs text-muted-foreground">(zo starých dát)</span>}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                 </div>
 
                 <div className="space-y-1 text-sm">
@@ -175,6 +238,15 @@ export default function CenovaPonukaCard({
                     </Button>
                 )}
             </CardContent>
+            {editingAsks && (
+                <ClientAsksSheet
+                    leadId={leadId}
+                    revision={revision}
+                    rows={outstandingRows}
+                    maker={openTaskAssignee}
+                    onClose={() => setEditingAsks(false)}
+                />
+            )}
             {editing && (
                 <PriceEditSheet
                     price={price}
@@ -249,6 +321,128 @@ function PriceEditSheet({
                     }}
                 >
                     {invalid ? "Neplatná suma" : saving ? "Ukladám…" : "Uložiť cenu"}
+                </Button>
+            </div>
+        </ResponsiveSheet>
+    );
+}
+
+// Ceruzka pri „Chceli" (§3.2, §6.4): pridať, čo klient chce, alebo stiahnuť otvorenú požiadavku s dôvodom.
+// Vybavenú požiadavku stiahnuť nemožno – klient to naozaj dostal a odkaz na odoslanie sa nesmie stratiť.
+// Otvorenej úlohy sa to nedotkne; tú ruší „Zmeniť krok (zruší úlohu)".
+function ClientAsksSheet({
+    leadId,
+    revision,
+    rows,
+    maker,
+    onClose,
+}: {
+    leadId: string;
+    revision: number;
+    rows: OutstandingRow[];
+    maker: string | null;
+    onClose: () => void;
+}) {
+    const router = useRouter();
+    const [add, setAdd] = useState<RequestContent[]>([]);
+    const [withdraw, setWithdraw] = useState<string[]>([]);
+    const [reason, setReason] = useState("");
+    const [saving, setSaving] = useState(false);
+    const [idempotencyKey, setIdempotencyKey] = useState(newKey);
+
+    const openRows = rows.filter((r) => r.openIds.length > 0);
+    const nothing = add.length === 0 && withdraw.length === 0;
+    const needsReason = withdraw.length > 0 && !reason.trim();
+    const working = rows.find((r) => r.making || r.prepared.length > 0);
+
+    function toggleWithdraw(row: OutstandingRow, on: boolean) {
+        setWithdraw((cur) => (on ? [...new Set([...cur, ...row.openIds])] : cur.filter((id) => !row.openIds.includes(id))));
+    }
+
+    async function save() {
+        setSaving(true);
+        const r = await setClientAsks({
+            leadId,
+            expectedRevision: revision,
+            idempotencyKey,
+            add,
+            withdraw,
+            reason: reason.trim() || null,
+        });
+        setSaving(false);
+        if ("error" in r) {
+            toast.error(r.error);
+            setIdempotencyKey(newKey());
+        } else {
+            toast.success("Uložené, čo klient chce");
+            onClose();
+        }
+        router.refresh();
+    }
+
+    return (
+        <ResponsiveSheet
+            open
+            onOpenChange={(o) => !o && onClose()}
+            title="Čo klient chce"
+            description="Oprava záznamu – neposiela sa tým nič klientovi."
+        >
+            <div className="mx-auto w-full max-w-md space-y-3 px-4 pb-6 md:max-w-none md:px-0 md:pb-0">
+                <div className="space-y-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Chcú aj</p>
+                    {REQUEST_CONTENTS.map((content) => (
+                        <label key={content} className="flex items-center gap-3 rounded-lg border p-3 text-sm">
+                            <Checkbox
+                                data-vaul-no-drag
+                                checked={add.includes(content)}
+                                onCheckedChange={(v) => setAdd((cur) => (v === true ? [...cur, content] : cur.filter((c) => c !== content)))}
+                            />
+                            {REQUEST_CONTENT_LABEL[content]}
+                        </label>
+                    ))}
+                </div>
+
+                {openRows.length > 0 && (
+                    <div className="space-y-2 border-t pt-3">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Už to nechcú</p>
+                        {openRows.map((row) => (
+                            <label key={row.content} className="flex items-start gap-3 rounded-lg border p-3 text-sm">
+                                <Checkbox
+                                    data-vaul-no-drag
+                                    checked={row.openIds.every((id) => withdraw.includes(id))}
+                                    onCheckedChange={(v) => toggleWithdraw(row, v === true)}
+                                />
+                                <span className="min-w-0">
+                                    {REQUEST_CONTENT_LABEL[row.content]}
+                                    <span className="block text-xs text-muted-foreground">{outstandingLabel(row, maker)}</span>
+                                </span>
+                            </label>
+                        ))}
+                    </div>
+                )}
+
+                {withdraw.length > 0 && (
+                    <div className="grid gap-1.5">
+                        <Label className="text-xs text-muted-foreground">Prečo to už nechcú</Label>
+                        <Input
+                            data-vaul-no-drag
+                            value={reason}
+                            maxLength={ASK_REASON_MAX}
+                            onChange={(e) => setReason(e.target.value)}
+                            placeholder="napr. rozmysleli si to"
+                            className="text-[16px]"
+                        />
+                    </div>
+                )}
+
+                {withdraw.length > 0 && working && (
+                    <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+                        Úloha pre manažéra ostáva otvorená – zruš ju cez „Zmeniť krok (zruší úlohu)“.
+                    </p>
+                )}
+
+                <Button className="h-12 w-full" disabled={saving || nothing || needsReason} onClick={save}>
+                    {nothing ? "Nič sa nemení" : needsReason ? "Napíš, prečo to už nechcú" : saving ? "Ukladám…" : "Uložiť"}
                 </Button>
             </div>
         </ResponsiveSheet>

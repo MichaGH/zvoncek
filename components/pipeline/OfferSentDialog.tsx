@@ -15,7 +15,17 @@ import { NEXT_ACTION_LABEL, TASK_CONTENT_LABEL } from "@/lib/dictionaries";
 import { addBusinessCalendarDays, businessDate, businessDayMonth, businessDayStart } from "@/lib/domain/businessTime";
 import { displayUrl } from "@/lib/domain/designLinks";
 import { formatMoney, legacyUnreviewed, moneyToString, type OfferContent, type OfferDialogDeal } from "@/lib/domain/offers";
-import { overlapsTask, sendCompletesStep, type PendingItem } from "@/lib/domain/tasks";
+import {
+    contentOfOffer,
+    contentOfTask,
+    isSystemStep,
+    REQUEST_CONTENT_LABEL,
+    sendCompletesStep,
+    sortContents,
+    stepKindForOutstanding,
+    stepView,
+} from "@/lib/domain/clientRequests";
+import { overlapsTask, type PendingItem } from "@/lib/domain/tasks";
 
 // „Čo sme poslali" (round 2, wave 3a – §2c 5.2/5.3). Jedno miesto pre každé odoslanie ponukových materiálov.
 // Predvyplnenie je len návrh: „o nás" a „cenník" sa zaškrtnú, len ak ešte nešli (na neoverenom starom obchode nikdy),
@@ -26,6 +36,9 @@ import { overlapsTask, sendCompletesStep, type PendingItem } from "@/lib/domain/
 // meta.fulfils; jedno odoslanie = jedna cena (staršia sa odmietne ako nahradená). Kým niečo vrátené ostáva neposlané,
 // krok ostáva „Poslať…" (alebo sa zvyšok v tom istom uložení odmietne). Zamknutý krok: odoslanie je len fakt; ak sa
 // kryje s tým, na čom manažér robí, treba vybrať, čo s úlohou.
+//
+// Wave 5 (§3.4): čo klient pýtal a ešte nedostal, je predzaškrtnuté (aj cenník pri kroku „Poslať cenu"); odškrtnutie
+// netreba zdôvodňovať – riadok jednoducho ostane nevybavený. Pribudol obsah „Rozbor webu".
 
 const REFRESH_CODES = new Set(["NOT_FOUND", "STALE", "DEAL_CLOSED", "IDEMPOTENCY_CONFLICT", "UNAUTHENTICATED", "STEP_LOCKED"]);
 const SUPERSEDED = "nahradená novšou";
@@ -69,10 +82,15 @@ export default function OfferSentDialog({
         (i, idx) => liveDesign(i.designId) && !designItems.slice(idx + 1).some((j) => j.designId === i.designId),
     );
 
+    // Čo klient pýtal a ešte nedostal – predvyplní sa vždy, aj keď to už raz dostal (nová požiadavka, §3.4).
+    const asked = historical ? [] : deal.asked;
     const [sentOn, setSentOn] = useState(historical ? "" : today);
-    const [aboutUs, setAboutUs] = useState(!historical && !deal.offers.offerAboutUsAt && !unknownLegacy);
-    const [pricelist, setPricelist] = useState(!historical && !deal.offers.offerPricelistAt && !unknownLegacy);
-    const [withPrice, setWithPrice] = useState(!historical && (newestPrice !== null || (deal.nextActionKind === "SEND_QUOTE" && deal.price != null)));
+    const [aboutUs, setAboutUs] = useState(!historical && (asked.includes("INFO") || (!deal.offers.offerAboutUsAt && !unknownLegacy)));
+    const [pricelist, setPricelist] = useState(!historical && (asked.includes("PRICELIST") || (!deal.offers.offerPricelistAt && !unknownLegacy)));
+    const [review, setReview] = useState(!historical && asked.includes("REVIEW"));
+    const [withPrice, setWithPrice] = useState(
+        !historical && (asked.includes("PRICE") || newestPrice !== null || (deal.nextActionKind === "SEND_QUOTE" && deal.price != null)),
+    );
     const [designIds, setDesignIds] = useState<string[]>(
         preselectDesignId
             ? [preselectDesignId]
@@ -108,6 +126,7 @@ export default function OfferSentDialog({
     const contents: OfferContent[] = [
         ...(aboutUs ? (["ABOUT_US"] as const) : []),
         ...(pricelist ? (["PRICELIST"] as const) : []),
+        ...(review ? (["REVIEW"] as const) : []),
         ...(withPrice ? (["PRICE"] as const) : []),
         ...(designIds.length ? (["DESIGN"] as const) : []),
     ];
@@ -137,13 +156,17 @@ export default function OfferSentDialog({
     // „Poslať cenu" dokončí cena, „Poslať návrh" návrh, „Poslať úvodný email" o nás / cenník – a „Poslať…" aj posledná
     // čakajúca vrátená položka (R03-1, sendCompletesStep). Iný krok (napr. hovor) sa predvolene ponecháva; bez kroku follow-up.
     const pendingAfter = dropped.length ? [] : remaining;
-    const completesStep = sendCompletesStep(
-        deal.nextActionKind,
-        contents,
-        returned.filter((i) => i.kind === "PRICE" || i.kind === "DESIGN"),
-        pendingAfter,
-    );
-    const pendingBlocksFollowUp = pendingAfter.length > 0;
+    // Čo ostane nevybavené po tomto uložení (§6.9): čo klient stále nedostal, čo manažér ešte robí a čo vrátil a
+    // neposiela sa. Podľa toho sa predvolí „Zavolať, či prišlo" a ukáže sa, čo ešte ostáva.
+    const taskContent = (k: "PRICE" | "DESIGN" | "OTHER") => contentOfTask(k);
+    const sentContents = contents.map(contentOfOffer);
+    const outstandingAfter = sortContents([
+        ...asked.filter((c) => !sentContents.includes(c)),
+        ...pendingAfter.flatMap((i) => (i.kind === "PRICE" || i.kind === "DESIGN" ? [i.kind] : [])),
+        ...(task && !cancelling ? task.contents.flatMap((c) => (taskContent(c) ? [taskContent(c)!] : [])) : []),
+    ]);
+    const completesStep = sendCompletesStep(deal.nextActionKind, contents, deal.outstanding, outstandingAfter);
+    const pendingBlocksFollowUp = pendingAfter.length > 0 || outstandingAfter.length > 0;
     const followUp = !factOnly && !pendingBlocksFollowUp && (followUpChoice ?? completesStep);
     const amountNumber = amount.trim() === "" ? null : Number(amount.replace(",", "."));
     const amountValid = amountNumber !== null && Number.isFinite(amountNumber) && amountNumber >= 0;
@@ -155,8 +178,14 @@ export default function OfferSentDialog({
     const defaultFollowUp = addBusinessCalendarDays(sentOn || today, 7);
     const followUpDate = businessDayMonth(businessDayStart(followUpOn || defaultFollowUp));
     const followUpInvalid = followUp && followUpOn !== "" && followUpOn < today;
-    const current = deal.nextActionKind
-        ? `${NEXT_ACTION_LABEL[deal.nextActionKind]}${deal.nextActionAt ? ` · ${businessDayMonth(new Date(deal.nextActionAt))}` : ""}`
+    // „Ponechať" nesmie klamať: po čiastočnom odoslaní krok padne na to, čo ostalo (§3.7) – tlačidlo teda ukazuje,
+    // čím krok naozaj bude. Ručne zvolený krok (hovor, čakanie, vlastný) sa neprepisuje, takže ostáva, ako je.
+    const keptKind = isSystemStep(deal.nextActionKind) ? (stepKindForOutstanding(outstandingAfter) ?? deal.nextActionKind) : deal.nextActionKind;
+    const keptLabel = keptKind
+        ? (stepView(keptKind, outstandingAfter).headline ?? NEXT_ACTION_LABEL[keptKind])
+        : null;
+    const current = keptLabel
+        ? `${keptLabel}${keptKind === deal.nextActionKind && deal.nextActionAt ? ` · ${businessDayMonth(new Date(deal.nextActionAt))}` : ""}`
         : "bez ďalšieho kroku";
     const legacy = deal.offers.legacy;
     const blocked =
@@ -279,13 +308,23 @@ export default function OfferSentDialog({
                     />
                 </label>
 
+                {asked.length > 0 && (
+                    <p className="rounded-lg border border-sky-500/40 bg-sky-500/10 p-3 text-sm">
+                        Chceli: {asked.map((c) => REQUEST_CONTENT_LABEL[c]).join(", ")} – predvyplnené. Odškrtnuté ostane nevybavené.
+                    </p>
+                )}
+
                 <label className={row}>
                     <Checkbox data-vaul-no-drag checked={aboutUs} onCheckedChange={(v) => setAboutUs(v === true)} />
-                    <span className="text-sm">O nás</span>
+                    <span className="text-sm">Info / ukážky</span>
                 </label>
                 <label className={row}>
                     <Checkbox data-vaul-no-drag checked={pricelist} onCheckedChange={(v) => setPricelist(v === true)} />
                     <span className="text-sm">Cenník</span>
+                </label>
+                <label className={row}>
+                    <Checkbox data-vaul-no-drag checked={review} onCheckedChange={(v) => setReview(v === true)} />
+                    <span className="text-sm">Rozbor webu</span>
                 </label>
 
                 <div className={row}>
@@ -485,7 +524,11 @@ export default function OfferSentDialog({
                             </label>
                         )}
                         {pendingBlocksFollowUp && (
-                            <p className="text-xs text-muted-foreground">Dátum a poznámku kroku zmeníš cez „Zmeniť krok“.</p>
+                            <p className="text-xs text-muted-foreground">
+                                {outstandingAfter.length > 0
+                                    ? `Ostáva nevybavené: ${outstandingAfter.map((c) => REQUEST_CONTENT_LABEL[c]).join(", ")}. Dátum a poznámku kroku zmeníš cez „Zmeniť krok“.`
+                                    : "Dátum a poznámku kroku zmeníš cez „Zmeniť krok“."}
+                            </p>
                         )}
                     </div>
                 )}

@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { DealTaskContent, DealTaskStatus, DealTaskType, NextActionKind } from "@/app/generated/prisma/enums";
+import type { DealTaskContent, DealTaskStatus, DealTaskType, NextActionKind, RequestContent } from "@/app/generated/prisma/enums";
+import { contentOfTask, stepKindForOutstanding } from "@/lib/domain/clientRequests";
 import { formatMoney, type OfferContent } from "@/lib/domain/offers";
 import { FOLLOW_UP_NEXT_KINDS, type FollowUpNextKind } from "@/lib/domain/leadFlow";
 
@@ -32,7 +33,9 @@ export function isStepLocked(tasks: readonly { status: DealTaskStatus }[]): bool
 // [WAVE 4] (context/features/01-salesrep/wave-4-proposal.md §2): úloha bude niesť cenu AJ návrh naraz (výber
 // v components/pipeline/AskManagerDialog.tsx), krok „Poslať návrh + cenu", čiastočné vybavenie (cena hotová, návrh
 // ešte nie). Dovtedy je obsah úlohy jedna voľba; pri viacerých obsahoch návrh vyhráva (návrh nesie aj cenu).
-// [WAVE 5] Celý výber cena / návrh / email sa prerobí (čo klient chcel vs. čo sme poslali) – samostatná feature.
+//
+// Wave 5: druh kroku sa neodvodzuje len z obsahu úlohy, ale z celej nevybavenej práce (§6.8) – čo klient pýta,
+// čo sa robí a čo je pripravené. „Iné" na obchode, kde klient čaká na cenu, teda ostáva pri „Poslať cenu".
 
 export type StepAfterTask = { kind: FollowUpNextKind; note: string | null; fixed: boolean };
 
@@ -41,13 +44,13 @@ export function stepAfterTask(
     current: { kind: NextActionKind | null; note: string | null },
     pending: readonly { kind: ItemKind }[],
     defaultNote: (kind: NextActionKind) => string | null,
+    outstanding: readonly RequestContent[] = [],
 ): StepAfterTask {
+    const all = [...outstanding, ...contents.map(contentOfTask).filter((c): c is RequestContent => c !== null)];
+    // „Pevný" ostáva o tom, ČO sa žiada: cena / návrh sa musia poslať, takže krok sa nevyberá. Pri „Iné" si krok
+    // obchodník zvoliť môže – nevybavená práca mu ho len zúži (I10, assertStepAllowed).
     const fixed = contents.includes("DESIGN") || contents.includes("PRICE");
-    let kind: FollowUpNextKind = contents.includes("DESIGN")
-        ? "SEND_DESIGN"
-        : contents.includes("PRICE")
-          ? "SEND_QUOTE"
-          : (current.kind ?? "CALL");
+    let kind: FollowUpNextKind = (stepKindForOutstanding(all) as FollowUpNextKind | null) ?? current.kind ?? "CALL";
     const required = requiredStepKinds(pending);
     if (required && !required.includes(kind)) kind = required[0] as FollowUpNextKind;
     return { kind, note: kind === current.kind ? (current.note ?? null) : defaultNote(kind), fixed };
@@ -206,21 +209,8 @@ export function requiredStepKinds(pending: readonly { kind: ItemKind }[]): NextA
     return null;
 }
 
-// Dokončí toto odoslanie aktuálny krok (predvolí sa „Zavolať, či prišlo")? Áno, keď posiela obsah druhu kroku – alebo keď
-// pri kroku „Poslať cenu / návrh" spotrebuje (pošle / odmietne) poslednú čakajúcu vrátenú cenu / návrh (R03-1: návrh
-// išiel skôr, teraz posledná cena – krok „Poslať návrh" by inak ostal, hoci už nie je čo poslať).
-export function sendCompletesStep(
-    step: NextActionKind | null,
-    sent: readonly OfferContent[],
-    pendingBefore: readonly { kind: ItemKind }[],
-    pendingAfter: readonly { kind: ItemKind }[],
-): boolean {
-    if (!step) return true;
-    if (step === "SEND_QUOTE" && sent.includes("PRICE")) return true;
-    if (step === "SEND_DESIGN" && sent.includes("DESIGN")) return true;
-    if (step === "SEND_EMAIL" && (sent.includes("ABOUT_US") || sent.includes("PRICELIST"))) return true;
-    return (step === "SEND_QUOTE" || step === "SEND_DESIGN") && requiredStepKinds(pendingBefore) !== null && requiredStepKinds(pendingAfter) === null;
-}
+// sendCompletesStep sa presunul do lib/domain/clientRequests.ts – od wave 5 počíta s nevybavenými OBSAHMI
+// (požiadavky klienta + práca manažéra), nie len s vrátenými položkami úloh (§6.4).
 
 // Riadok v zozname: „✓ cena 1 285 € (Michal) · ✓ návrh Variant A (Nikolas)"; jedno meno na konci, keď sú od toho istého.
 export function pendingSummary(items: readonly PendingItem[]): string | null {

@@ -4,7 +4,7 @@
 //   npx tsx prisma/backfill/check-concurrency.ts --expect-endpoint ep-xxxx [--only claims,stale] [--iterations 100]
 import "dotenv/config";
 import bcrypt from "bcrypt";
-import type { Role } from "../../app/generated/prisma/enums";
+import type { RequestContent, Role } from "../../app/generated/prisma/enums";
 import prisma from "../../lib/db";
 import type { AccessUser } from "../../lib/access/user";
 import { logCallAs } from "../../lib/commands/calls";
@@ -92,6 +92,7 @@ async function makeAssignedLead(userId: string, status: "NEW" | "CALLING" = "NEW
 
 async function cleanup() {
     if (createdLeads.length) {
+        await prisma.leadRequest.deleteMany({ where: { leadId: { in: createdLeads } } });
         await prisma.activity.deleteMany({ where: { leadId: { in: createdLeads } } });
         await prisma.dealOwnership.deleteMany({ where: { leadId: { in: createdLeads } } });
         await prisma.dealTask.deleteMany({ where: { leadId: { in: createdLeads } } });
@@ -2137,11 +2138,13 @@ tests.w3R02 = async () => {
 // cena posledná (krok „Poslať návrh", posiela sa len cena) aj cena skôr, návrh posledný. Kým niečo čaká, krok ostáva.
 tests.w3R03 = async () => {
     const { lead, ask, finish, send, pending, design } = await w3();
-    const { sendCompletesStep } = await import("../../lib/domain/tasks");
+    // Wave 5: sendCompletesStep počíta s nevybavenými OBSAHMI (požiadavky klienta + práca manažéra), nie len
+    // s vrátenými položkami úloh – preto býva v lib/domain/clientRequests.ts.
+    const { sendCompletesStep } = await import("../../lib/domain/clientRequests");
     const manager = await makeUser("MANAGER");
     const rep = await makeUser("SALES_REP");
-    const P = [{ kind: "PRICE" as const }];
-    const D = [{ kind: "DESIGN" as const }];
+    const P = ["PRICE"] as const;
+    const D = ["DESIGN"] as const;
     const pureOk =
         sendCompletesStep("SEND_DESIGN", ["PRICE"], P, []) && // návrh už išiel, posledná cena
         sendCompletesStep("SEND_DESIGN", ["DESIGN"], D, []) &&
@@ -2174,9 +2177,11 @@ tests.w3R03 = async () => {
     const bMid = await lead(b.id);
     const bDesign = await send(rep, b.id, { contents: ["DESIGN"], designIds: [b.d.id], fulfils: [{ taskId: b.tDesign, kind: "DESIGN", designId: b.d.id }], followUp: true });
     const bEnd = await lead(b.id);
+    // Wave 5 (§3.7, §6.8): po čiastočnom odoslaní krok padne na to, čo NEVYBAVENÉ ostalo – po odoslanom návrhu
+    // teda „Poslať cenu". Predtým tu ostávalo „Poslať návrh", hoci už nebolo čo posielať.
     check(
-        "R03-1: návrh first → step stays 'Poslať návrh', last price + call → CALL; price first → 'Poslať návrh', last návrh + call → CALL",
-        codeOf(aDesign) === "OK" && aMid.nextActionKind === "SEND_DESIGN" && codeOf(aPrice) === "OK" && aEnd.nextActionKind === "CALL" &&
+        "R03-1 + W5: návrh first → step follows the rest ('Poslať cenu'), last price + call → CALL; price first → 'Poslať návrh', last návrh + call → CALL",
+        codeOf(aDesign) === "OK" && aMid.nextActionKind === "SEND_QUOTE" && codeOf(aPrice) === "OK" && aEnd.nextActionKind === "CALL" &&
             bMid.nextActionKind === "SEND_DESIGN" && codeOf(bDesign) === "OK" && bEnd.nextActionKind === "CALL" &&
             (await pending(a.id)).length === 0 && (await pending(b.id)).length === 0,
         `a: ${codeOf(aDesign)} ${aMid.nextActionKind} → ${codeOf(aPrice)} ${aEnd.nextActionKind}; b: ${bMid.nextActionKind} → ${codeOf(bDesign)} ${bEnd.nextActionKind}`,
@@ -2991,6 +2996,572 @@ tests.w3SheetNotes = async () => {
             codeOf(quote) === "OK" && l3.nextActionNote === "Poslať cenu" &&
             codeOf(noneWithNote) !== "OK" && codeOf(lostWithStep) !== "OK",
         `${codeOf(r)} call="${call.note}" step="${l.nextActionNote}" empty="${l2.nextActionNote}" quote="${l3.nextActionNote}" ${codeOf(noneWithNote)} ${codeOf(lostWithStep)}`,
+    );
+};
+
+// ── Wave 5: čo klient pýtal vs. čo dostal (wave-5-proposal.md §10) ──────────
+
+async function w5() {
+    const base = await w3();
+    const calls = await import("../../lib/commands/calls");
+    const requests = await import("../../lib/commands/requests");
+    const rq = await import("../../lib/domain/requestMutations");
+    const cr = await import("../../lib/domain/clientRequests");
+    const stats = await import("../../lib/queries/stats");
+    // Prvý hovor „majú záujem" so zaškrtnutými obsahmi – nový vstup fronty volaní (§3.1).
+    const interested = async (rep: AccessUser, asked: RequestContent[], extra: { idempotencyKey?: string } = {}) => {
+        const id = await makeAssignedLead(rep.id);
+        const r = await calls.logCallAs(rep, {
+            leadId: id,
+            outcome: "INTERESTED",
+            asked,
+            expectedRevision: await leadRev(id),
+            idempotencyKey: extra.idempotencyKey ?? key(),
+        });
+        if ("error" in r) throw new Error(`INTERESTED failed: ${r.error}`);
+        return id;
+    };
+    const rows = (leadId: string) =>
+        prisma.leadRequest.findMany({ where: { leadId }, orderBy: [{ requestedAt: "asc" }, { id: "asc" }] });
+    const state = (leadId: string) => rq.requestStateOf(prisma, leadId);
+    const outstanding = (leadId: string) => rq.outstandingOf(prisma, leadId);
+    const asks = async (
+        u: AccessUser,
+        leadId: string,
+        input: { add?: RequestContent[]; withdraw?: string[]; reason?: string | null; expectedRevision?: number; idempotencyKey?: string },
+    ) =>
+        requests.setClientAsksAs(u, {
+            leadId,
+            expectedRevision: input.expectedRevision ?? (await leadRev(leadId)),
+            idempotencyKey: input.idempotencyKey ?? key(),
+            add: input.add ?? [],
+            withdraw: input.withdraw ?? [],
+            reason: input.reason ?? null,
+        });
+    const openIdsOf = async (leadId: string, content: RequestContent) =>
+        (await rows(leadId)).filter((r) => r.content === content && r.state === "OPEN").map((r) => r.id);
+    return { ...base, calls, requests, rq, cr, stats, interested, rows, state, outstanding, asks, openIdsOf };
+}
+
+// W5-1 prvý hovor (§10.1): jeden aj viac obsahov naraz, krok podľa dominantného obsahu, kanonický odtlačok
+// (preusporiadané pole = to isté, zmenený výber pod tým istým kľúčom = konflikt), súbežné odoslanie = jeden zápis.
+tests.w5FirstCall = async () => {
+    const { interested, rows, lead, calls } = await w5();
+    const rep = await makeUser("SALES_REP");
+
+    const single: [RequestContent, string][] = [
+        ["INFO", "SEND_EMAIL"],
+        ["PRICELIST", "SEND_EMAIL"],
+        ["PRICE", "SEND_QUOTE"],
+        ["DESIGN", "SEND_DESIGN"],
+        ["REVIEW", "SEND_EMAIL"],
+    ];
+    const singleOk: string[] = [];
+    for (const [content, kind] of single) {
+        const id = await interested(rep, [content]);
+        const l = await lead(id);
+        const r = await rows(id);
+        singleOk.push(`${content}:${l.nextActionKind}:${r.length}:${r[0]?.state}`);
+        if (l.nextActionKind !== kind || r.length !== 1 || r[0].state !== "OPEN") singleOk.push("FAIL");
+    }
+
+    const multi = await interested(rep, ["PRICELIST", "DESIGN", "PRICE"]);
+    const mLead = await lead(multi);
+    const mRows = await rows(multi);
+    const call = await prisma.activity.findFirstOrThrow({ where: { leadId: multi, type: "CALL" } });
+    const meta = call.meta as { asked?: string[] } | null;
+
+    // Ten istý kľúč a ten istý výber v inom poradí = to isté uloženie; iný výber = konflikt (R01-4).
+    const sameKey = key();
+    const id2 = await makeAssignedLead(rep.id);
+    const first = await calls.logCallAs(rep, {
+        leadId: id2, outcome: "INTERESTED", asked: ["PRICE", "DESIGN"], expectedRevision: 0, idempotencyKey: sameKey,
+    });
+    const reordered = await calls.logCallAs(rep, {
+        leadId: id2, outcome: "INTERESTED", asked: ["DESIGN", "PRICE"], expectedRevision: 0, idempotencyKey: sameKey,
+    });
+    const changed = await calls.logCallAs(rep, {
+        leadId: id2, outcome: "INTERESTED", asked: ["DESIGN"], expectedRevision: 0, idempotencyKey: sameKey,
+    });
+
+    // Súbežné odoslanie toho istého výsledku: jeden hovor, jedna sada riadkov.
+    const id3 = await makeAssignedLead(rep.id);
+    const k3 = key();
+    const parallel = await Promise.all(
+        Array.from({ length: 5 }, () =>
+            calls.logCallAs(rep, { leadId: id3, outcome: "INTERESTED", asked: ["PRICE", "INFO"], expectedRevision: 0, idempotencyKey: k3 }),
+        ),
+    );
+    const empty = await calls.logCallAs(rep, {
+        leadId: (await makeAssignedLead(rep.id)), outcome: "INTERESTED", asked: [], expectedRevision: 0, idempotencyKey: key(),
+    });
+
+    check(
+        "W5-1: first call records every ticked content, the step follows the dominant one, reordered = same payload, changed = conflict, parallel = one write",
+        !singleOk.includes("FAIL") &&
+            mLead.nextActionKind === "SEND_DESIGN" && mLead.nextActionMode === "IN_PROGRESS" && mRows.length === 3 &&
+            (meta?.asked ?? []).join() === "PRICELIST,PRICE,DESIGN" &&
+            codeOf(first) === "OK" && codeOf(reordered) === "OK" && codeOf(changed) === "ERR:IDEMPOTENCY_CONFLICT" &&
+            (await rows(id2)).length === 2 &&
+            Object.keys(tally(parallel)).join() === "OK" &&
+            (await prisma.activity.count({ where: { leadId: id3, type: "CALL" } })) === 1 &&
+            (await rows(id3)).length === 2 &&
+            codeOf(empty) !== "OK",
+        `${singleOk.join(" ")} | multi=${mLead.nextActionKind}/${mRows.length} meta=${(meta?.asked ?? []).join("+")} | ${codeOf(first)} ${codeOf(reordered)} ${codeOf(changed)} | ${JSON.stringify(tally(parallel))} | empty=${codeOf(empty)}`,
+    );
+};
+
+// W5-2 telefonická cena (§10.2, §10.12): povedaná cena splní otvorenú požiadavku odkazom z toho istého hovoru;
+// ručne zvolený krok (potvrdiť emailom / dohodnutý hovor) prepočet NEPREPÍŠE.
+tests.w5PhonePrice = async () => {
+    const { interested, rows, lead, follow, asks, outstanding } = await w5();
+    const rep = await makeUser("SALES_REP");
+
+    const id = await interested(rep, ["PRICE"]);
+    const r = await follow(rep, id, { nextKind: "SEND_QUOTE", phonePrice: { amount: 1285, note: null } });
+    const after = await rows(id);
+    const offer = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "OFFER_SENT" } });
+    const l1 = await lead(id);
+
+    // Ručne zvolený „Zavolať" prežije aj ďalšiu požiadavku – projekcia dáva len predvoľbu (R02-2).
+    const manual = await follow(rep, id, { nextKind: "CALL", schedule: { kind: "daysFromToday", days: 3 } });
+    const add = await asks(rep, id, { add: ["DESIGN"] });
+    const l2 = await lead(id);
+
+    check(
+        "W5-2: a price told on the call satisfies that call's PRICE request by link; a deliberately chosen step survives later reconciliation",
+        codeOf(r) === "OK" && after.length === 1 && after[0].state === "SENT" && after[0].resolvedActivityId === offer.id &&
+            l1.nextActionKind === "SEND_QUOTE" &&
+            codeOf(manual) === "OK" && codeOf(add) === "OK" && l2.nextActionKind === "CALL" &&
+            (await outstanding(id)).join() === "DESIGN",
+        `${codeOf(r)} ${after[0]?.state} step=${l1.nextActionKind} → ${codeOf(add)} ${l2.nextActionKind} outstanding=${(await outstanding(id)).join("+")}`,
+    );
+};
+
+// W5-3 požiadali znova (§10.3, §10.14): stará cena novú požiadavku nespĺňa; dve otvorené požiadavky na ten istý
+// obsah sú JEDEN riadok práce a jedno odoslanie zavrie obe; pre štatistiky ostávajú dve udalosti.
+tests.w5AskAgain = async () => {
+    const { interested, rows, lead, send, asks, state, outstanding, today, bt } = await w5();
+    const rep = await makeUser("SALES_REP");
+
+    const id = await interested(rep, ["PRICE"]);
+    await send(rep, id, { contents: ["PRICE"], price: { amount: 900, note: null } });
+    const afterSend = await rows(id);
+    const again = await asks(rep, id, { add: ["PRICE"] });
+    const afterAsk = await rows(id);
+    const l1 = await lead(id);
+
+    // Druhá otvorená požiadavka na ten istý obsah → stále jeden riadok práce.
+    await asks(rep, id, { add: ["PRICE"] });
+    const grouped = await state(id);
+    const closing = await send(rep, id, { contents: ["PRICE"], price: { amount: 1100, note: null } });
+    const closed = await rows(id);
+
+    // Spätne datované odoslanie nesplní požiadavku, ktorá vznikla neskôr (§5).
+    const id2 = await interested(rep, ["INFO"]);
+    const back = await send(rep, id2, { contents: ["ABOUT_US"], sentOn: bt.addBusinessCalendarDays(today, -3) });
+    const backRows = await rows(id2);
+
+    check(
+        "W5-3: an older receipt never satisfies a later request; two open requests of one content are one work row and one send closes both; a backdated send does not satisfy a later request",
+        afterSend.length === 1 && afterSend[0].state === "SENT" &&
+            codeOf(again) === "OK" && afterAsk.length === 2 && afterAsk[1].state === "OPEN" && l1.nextActionKind === "SEND_QUOTE" &&
+            grouped.outstanding.length === 1 && grouped.outstanding[0].openIds.length === 2 && grouped.history.length === 3 &&
+            codeOf(closing) === "OK" && closed.filter((x) => x.state === "OPEN").length === 0 &&
+            (await outstanding(id)).length === 0 &&
+            codeOf(back) === "OK" && backRows[0].state === "OPEN",
+        `sent=${afterSend[0]?.state} again=${codeOf(again)} rows=${afterAsk.length} work=${grouped.outstanding.length}/${grouped.outstanding[0]?.openIds.length} closed=${closed.filter((x) => x.state === "OPEN").length} backdated=${backRows[0]?.state}`,
+    );
+};
+
+// W5-4 čiastočné odoslanie a pokrytie kroku (§10.4, §10.19): po odoslaní časti krok padne na to, čo ostalo;
+// zámerne užší krok si ponechá vlastný popisok a to, čo nepokrýva, varuje – rovnako v detaile aj v zozname.
+tests.w5PartialSend = async () => {
+    const { interested, rows, lead, send, detail, queries, dealScope, cr, outstanding } = await w5();
+    const rep = await makeUser("SALES_REP");
+
+    const id = await interested(rep, ["PRICELIST", "PRICE", "DESIGN"]);
+    const l0 = await lead(id);
+    const part = await send(rep, id, { contents: ["PRICELIST"] });
+    const l1 = await lead(id);
+    const afterPart = await rows(id);
+
+    // Zámerne užší krok: „Poslať cenu", hoci je nevybavený aj návrh.
+    const view = cr.stepView("SEND_QUOTE", ["DESIGN", "PRICE"]);
+    const combined = cr.stepView("SEND_DESIGN", ["DESIGN", "PRICE", "PRICELIST"]);
+    const covered = cr.coveredContents("SEND_DESIGN", ["DESIGN", "PRICE", "PRICELIST"]);
+
+    const d = await detail(id, rep);
+    const row = (await queries.getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "all", take: 500 })).rows.find((x) => x.id === id);
+
+    // Obsah navyše, ktorý nikto nepýtal, nerobí žiadny riadok – len sa zapíše ako odoslané.
+    const extra = await send(rep, id, { contents: ["REVIEW"] });
+    const afterExtra = await rows(id);
+
+    check(
+        "W5-4: a partial send drops what went out and the step follows the rest; a deliberately narrower step keeps its own label and warns about what it does not cover; list and detail agree",
+        l0.nextActionKind === "SEND_DESIGN" && codeOf(part) === "OK" &&
+            afterPart.filter((x) => x.state === "SENT").map((x) => x.content).join() === "PRICELIST" &&
+            l1.nextActionKind === "SEND_DESIGN" &&
+            view.headline === null && view.warn.join() === "DESIGN" &&
+            combined.headline === "Poslať návrh + cenu + cenník" && combined.warn.length === 0 &&
+            covered.join() === "DESIGN,PRICE" &&
+            d?.stepHeadline === row?.stepHeadline && d?.askWarning === row?.askWarning &&
+            d?.outstanding.join() === row?.outstanding.join() && d?.stepHeadline === "Poslať návrh + cenu" &&
+            codeOf(extra) === "OK" && afterExtra.length === 3 &&
+            (await outstanding(id)).join() === "DESIGN,PRICE",
+        `${l0.nextActionKind} → ${codeOf(part)} ${l1.nextActionKind} | narrow=${JSON.stringify(view)} combined="${combined.headline}" | detail="${d?.stepHeadline}" list="${row?.stepHeadline}" warn="${row?.askWarning}"`,
+    );
+};
+
+// W5-5 opravy a poradie (§10.5, §10.11): prečiarknuté odoslanie otvorí požiadavku len vtedy, keď ju nespĺňa žiadne
+// iné platné odoslanie; po dvoch odoslaniach a oprave prvého ostáva vybavená (vyriešenie sa presunie na druhé).
+tests.w5Correction = async () => {
+    const { interested, rows, send, offers, cr } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+
+    const id = await interested(rep, ["INFO"]);
+    await send(rep, id, { contents: ["ABOUT_US"] });
+    const sent = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "OFFER_SENT" } });
+    const undo = await offers.correctRecordAs(manager, sent.id, "poslalo sa na zlú adresu");
+    const reopened = await rows(id);
+
+    const id2 = await interested(rep, ["INFO"]);
+    await send(rep, id2, { contents: ["ABOUT_US"] });
+    await send(rep, id2, { contents: ["ABOUT_US"] });
+    const two = await prisma.activity.findMany({ where: { leadId: id2, type: "OFFER_SENT" }, orderBy: { createdAt: "asc" } });
+    const fix = await offers.correctRecordAs(manager, two[0].id, "duplicitný záznam");
+    const still = await rows(id2);
+
+    // Čisté pravidlo: prvé oprávnené odoslanie vyhráva, stiahnutú požiadavku neoživí žiadne odoslanie.
+    const t = (ms: number) => new Date(2026, 0, 1, 0, 0, 0, ms);
+    const pure = cr.resolveRequests(
+        [
+            { id: "a", content: "PRICE", state: "OPEN", requestedAt: t(10), resolvedAt: null, resolvedById: null, resolvedActivityId: null },
+            { id: "b", content: "PRICE", state: "WITHDRAWN", requestedAt: t(10), resolvedAt: t(11), resolvedById: "u", resolvedActivityId: null },
+            { id: "c", content: "PRICE", state: "OPEN", requestedAt: t(30), resolvedAt: null, resolvedById: null, resolvedActivityId: null },
+        ],
+        [
+            { id: "r2", userId: "u", instant: t(20), contents: ["PRICE"] },
+            { id: "r1", userId: "u", instant: t(15), contents: ["PRICE"] },
+        ],
+    );
+
+    check(
+        "W5-5: crossing out a send reopens a row only when no other valid receipt satisfies it; the earliest eligible receipt wins; a withdrawn row is never revived",
+        codeOf(undo) === "OK" && reopened[0].state === "OPEN" && reopened[0].resolvedActivityId === null &&
+            codeOf(fix) === "OK" && still[0].state === "SENT" && still[0].resolvedActivityId === two[1].id &&
+            pure.get("a")?.resolvedActivityId === "r1" && pure.get("b")?.state === "WITHDRAWN" && pure.get("c")?.state === "OPEN",
+        `${codeOf(undo)} ${reopened[0]?.state} | ${codeOf(fix)} ${still[0]?.state} moved=${still[0]?.resolvedActivityId === two[1].id} | pure a=${pure.get("a")?.resolvedActivityId} b=${pure.get("b")?.state} c=${pure.get("c")?.state}`,
+    );
+};
+
+// W5-6 vrátenie prvého hovoru (§10.6): riadky toho hovoru sa zmažú; ak klient už niečo z nich dostal, vrátenie sa
+// odmietne – odoslanie ostáva pravdou a požiadavka, ktorú splnilo, sa nesmie stratiť.
+tests.w5Revert = async () => {
+    const { interested, rows, rq, send } = await w5();
+    const rep = await makeUser("SALES_REP");
+
+    const id = await interested(rep, ["PRICE", "INFO"]);
+    const call = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "CALL" } });
+    const before = (await rows(id)).length;
+    const undo = await revertCallResultAs(rep, call.id, await leadRev(id));
+    const after = (await rows(id)).length;
+
+    const id2 = await interested(rep, ["PRICE"]);
+    const call2 = await prisma.activity.findFirstOrThrow({ where: { leadId: id2, type: "CALL" } });
+    await send(rep, id2, { contents: ["PRICE"], price: { amount: 700, note: null } });
+    let refused = "none";
+    try {
+        await prisma.$transaction(async (tx) => {
+            await rq.deleteRequestsOfActivity(tx as never, id2, call2.id);
+        });
+    } catch (error) {
+        refused = (error as { code?: string }).code ?? "threw";
+    }
+
+    check(
+        "W5-6: the first-call revert deletes that call's request rows; a row the client already received refuses the revert",
+        codeOf(undo) === "OK" && before === 2 && after === 0 && refused === "STALE",
+        `${codeOf(undo)} ${before}→${after} refused=${refused}`,
+    );
+};
+
+// W5-7 úlohy pre manažéra (§10.7, §10.18): pri nevybavenom návrhu ostáva uložený druh „Poslať návrh" aj pri cenovej
+// úlohe; a manažérska práca BEZ požiadavky klienta ostáva nevybavená, drží krok a odoslanie ju spotrebuje (R03-1).
+tests.w5ManagerWork = async () => {
+    const { interested, lead, ask, finish, send, state, outstanding, offers } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+
+    const id = await interested(rep, ["DESIGN"]);
+    // Krok sa pri žiadosti nevyberá: klient čaká na návrh, takže zamknutý krok je „Poslať návrh" aj pri cenovej
+    // úlohe – a formulár, ktorý pošle iný krok, dostane STALE.
+    const priceTask = await ask(rep, id, manager.id, { contents: ["PRICE"], step: undefined });
+    const wrongStep = await ask(rep, id, manager.id, { contents: ["PRICE"] });
+    const locked = await lead(id);
+
+    // Bez jedinej požiadavky klienta: obchodník si vypýta cenu sám.
+    const id2 = await makeDeal(rep, "WANTS_QUOTE");
+    const none = (await state(id2)).history.length;
+    await ask(rep, id2, manager.id, { contents: ["PRICE"] });
+    const making = await outstanding(id2);
+    await finish(manager, id2, { price: { amount: 1500, note: null } });
+    const prepared = await outstanding(id2);
+    const l2 = await lead(id2);
+    const sendIt = await send(rep, id2, { contents: ["PRICE"], fulfils: [{ taskId: (await prisma.dealTask.findFirstOrThrow({ where: { leadId: id2 } })).id, kind: "PRICE" }], followUp: true });
+    const afterSend = await outstanding(id2);
+    const l3 = await lead(id2);
+    const offer = await prisma.activity.findFirstOrThrow({ where: { leadId: id2, type: "OFFER_SENT" } });
+    await offers.correctRecordAs(manager, offer.id, "poslalo sa omylom");
+    const back = await outstanding(id2);
+
+    check(
+        "W5-7: an open DESIGN request keeps the stored kind 'Poslať návrh' even for a price task; manager work without any client request stays outstanding, holds the step, is consumed by the send and comes back when that send is crossed out",
+        codeOf(priceTask) === "OK" && codeOf(wrongStep) === "ERR:STALE" && locked.nextActionKind === "SEND_DESIGN" && locked.nextActionAt === null &&
+            none === 0 && making.join() === "PRICE" && prepared.join() === "PRICE" && l2.nextActionKind === "SEND_QUOTE" &&
+            codeOf(sendIt) === "OK" && afterSend.length === 0 && l3.nextActionKind === "CALL" && back.join() === "PRICE",
+        `task=${codeOf(priceTask)}/${codeOf(wrongStep)} locked=${locked.nextActionKind} | making=${making.join("+")} prepared=${prepared.join("+")} step=${l2.nextActionKind} → ${codeOf(sendIt)} after=${afterSend.join("+")} step=${l3.nextActionKind} back=${back.join("+")}`,
+    );
+};
+
+// W5-8 ceruzka (§10.8, §10.9): pridať / stiahnuť, dôvod len pri stiahnutí, vybavený riadok sa stiahnuť nedá,
+// cudzí obchod NOT_FOUND, dve karty = jedno uloženie, presne jedno zvýšenie revízie.
+tests.w5Pencil = async () => {
+    const { interested, rows, lead, asks, send, openIdsOf, ask } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const other = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+
+    const id = await interested(rep, ["PRICE"]);
+    const rev0 = await leadRev(id);
+    const added = await asks(rep, id, { add: ["DESIGN", "PRICELIST"] });
+    const rev1 = await leadRev(id);
+    const l1 = await lead(id);
+
+    const noReason = await asks(rep, id, { withdraw: await openIdsOf(id, "DESIGN") });
+    const withdrawn = await asks(rep, id, { withdraw: await openIdsOf(id, "DESIGN"), reason: "rozmysleli si to" });
+    const l2 = await lead(id);
+    const afterWithdraw = await rows(id);
+
+    await send(rep, id, { contents: ["PRICE"], price: { amount: 800, note: null } });
+    const sentRow = (await rows(id)).find((r) => r.content === "PRICE" && r.state === "SENT")!;
+    const withdrawSent = await asks(rep, id, { withdraw: [sentRow.id], reason: "omyl" });
+
+    const foreign = await asks(other, id, { add: ["INFO"] });
+    const byManager = await asks(manager, id, { add: ["INFO"] });
+
+    // Dve karty, ten istý kľúč a obsah → jedno uloženie; iný obsah pod tým istým kľúčom → konflikt.
+    const k = key();
+    const revNow = await leadRev(id);
+    const twice = await Promise.all([
+        asks(rep, id, { add: ["REVIEW"], idempotencyKey: k, expectedRevision: revNow }),
+        asks(rep, id, { add: ["REVIEW"], idempotencyKey: k, expectedRevision: revNow }),
+    ]);
+    const conflict = await asks(rep, id, { add: ["INFO"], idempotencyKey: k, expectedRevision: await leadRev(id) });
+
+    // Otvorená úloha sa ceruzkou nikdy neruší.
+    const id3 = await interested(rep, ["PRICE"]);
+    await ask(rep, id3, manager.id, { contents: ["PRICE"] });
+    const withTask = await asks(rep, id3, { withdraw: await openIdsOf(id3, "PRICE"), reason: "už nechcú" });
+    const taskStillOpen = (await prisma.dealTask.count({ where: { leadId: id3, status: "OPEN" } })) === 1;
+
+    check(
+        "W5-8: the pencil adds and withdraws open rows only, a reason is required for a withdrawal, a satisfied row cannot be withdrawn, another rep gets NOT_FOUND, the same key saves once, and an open task is never cancelled by it",
+        codeOf(added) === "OK" && rev1 === rev0 + 1 && l1.nextActionKind === "SEND_DESIGN" &&
+            codeOf(noReason) !== "OK" && codeOf(withdrawn) === "OK" && l2.nextActionKind === "SEND_QUOTE" &&
+            afterWithdraw.filter((r) => r.state === "WITHDRAWN").length === 1 &&
+            codeOf(withdrawSent) === "ERR:STALE" &&
+            codeOf(foreign) === "ERR:NOT_FOUND" && codeOf(byManager) === "OK" &&
+            JSON.stringify(tally(twice)) === JSON.stringify({ OK: 2 }) &&
+            (await rows(id)).filter((r) => r.content === "REVIEW").length === 1 &&
+            codeOf(conflict) === "ERR:IDEMPOTENCY_CONFLICT" &&
+            codeOf(withTask) === "OK" && taskStillOpen,
+        `add=${codeOf(added)} rev=${rev0}→${rev1} step=${l1.nextActionKind} | noReason=${codeOf(noReason)} withdraw=${codeOf(withdrawn)} step=${l2.nextActionKind} | sent=${codeOf(withdrawSent)} foreign=${codeOf(foreign)} manager=${codeOf(byManager)} | ${JSON.stringify(tally(twice))} conflict=${codeOf(conflict)} | task=${codeOf(withTask)}/${taskStillOpen}`,
+    );
+};
+
+// W5-9 uzavretie a znovuotvorenie (§10.17): uzavretie riadky nechá tak a nič nestiahne; znovuotvorenie s nevybavenou
+// prácou otvorí obchod na ten odosielací krok, bez nevybavenej práce na pevné „Zavolať".
+tests.w5CloseReopen = async () => {
+    const { interested, rows, lead, pipeline, send } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+    const { REOPEN_STEP_NOTE } = await import("../../lib/domain/dealMutations");
+
+    const id = await interested(rep, ["DESIGN"]);
+    const won = await pipeline.changeStatusAs(manager, id, { status: "WON", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const closedRows = await rows(id);
+    const reopen = await pipeline.reopenDealAs(manager, id, { expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const l1 = await lead(id);
+
+    const id2 = await interested(rep, ["INFO"]);
+    await send(rep, id2, { contents: ["ABOUT_US"] });
+    await pipeline.changeStatusAs(manager, id2, { status: "LOST", expectedRevision: await leadRev(id2), idempotencyKey: key() });
+    await pipeline.reopenDealAs(manager, id2, { expectedRevision: await leadRev(id2), idempotencyKey: key() });
+    const l2 = await lead(id2);
+
+    check(
+        "W5-9: closing leaves the request rows untouched; reopening with outstanding work gives that send step today, and 'Zavolať' only when nothing is outstanding",
+        codeOf(won) === "OK" && closedRows.length === 1 && closedRows[0].state === "OPEN" &&
+            codeOf(reopen) === "OK" && l1.nextActionKind === "SEND_DESIGN" && l1.nextActionAt !== null &&
+            l2.nextActionKind === "CALL" && l2.nextActionNote === REOPEN_STEP_NOTE,
+        `${codeOf(won)} rows=${closedRows[0]?.state} → ${codeOf(reopen)} ${l1.nextActionKind} | nothing outstanding → ${l2.nextActionKind} "${l2.nextActionNote}"`,
+    );
+};
+
+// W5-10 odkazy a rozsah (§10.16): aktivita z iného obchodu, prečiarknutý záznam a nesprávny typ sa pod zámkom
+// odmietnu – cudzí kľúč to dokázať nevie.
+tests.w5Links = async () => {
+    const { interested, rq, send, offers } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+
+    const a = await interested(rep, ["PRICE"]);
+    const b = await interested(rep, ["PRICE"]);
+    const callOfB = await prisma.activity.findFirstOrThrow({ where: { leadId: b, type: "CALL" } });
+    await send(rep, a, { contents: ["PRICE"], price: { amount: 500, note: null } });
+    const offerOfA = await prisma.activity.findFirstOrThrow({ where: { leadId: a, type: "OFFER_SENT" } });
+    await offers.correctRecordAs(manager, offerOfA.id, "test");
+
+    const attempt = async (activityId: string, types: ("CALL" | "OFFER_SENT")[]) => {
+        try {
+            await prisma.$transaction(async (tx) => {
+                await rq.addRequests(tx as never, {
+                    leadId: a,
+                    contents: ["INFO"],
+                    requestedAt: new Date(),
+                    requestedById: rep.id,
+                    sourceActivityId: activityId,
+                    sourceTypes: types,
+                });
+                throw new Error("ROLLBACK_OK");
+            });
+            return "none";
+        } catch (error) {
+            const code = (error as { code?: string }).code;
+            return code ?? ((error as Error).message === "ROLLBACK_OK" ? "accepted" : "threw");
+        }
+    };
+
+    const crossLead = await attempt(callOfB.id, ["CALL"]);
+    const crossedOut = await attempt(offerOfA.id, ["OFFER_SENT"]);
+    const wrongType = await attempt(offerOfA.id, ["CALL"]);
+
+    check(
+        "W5-10: a source activity from another lead, a crossed-out record and a wrong type are refused under the lock",
+        crossLead === "NOT_FOUND" && crossedOut === "STALE" && wrongType === "FORBIDDEN",
+        `crossLead=${crossLead} crossedOut=${crossedOut} wrongType=${wrongType}`,
+    );
+};
+
+// W5-11 migrácia (§10.15): deterministický `migrationKey` je jediná ochrana proti duplikátu pri opakovanom aj
+// prerušenom behu; migrované riadky sa do štatistík dopytu nerátajú a nemajú pripísaného aktéra.
+tests.w5Migration = async () => {
+    const { interested, stats, rows } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const id = await interested(rep, ["PRICE"]);
+
+    const insert = async () =>
+        prisma.$executeRawUnsafe(
+            `INSERT INTO "LeadRequest" (id, "leadId", content, state, origin, "requestedAt", "requestedById",
+                                        "migrationKey", provenance, "createdAt", "updatedAt")
+             VALUES (gen_random_uuid()::text, $1, 'INFO', 'SENT', 'MIGRATED_RECEIPT', now(), NULL,
+                     'w5:receipt:' || $1 || ':INFO',
+                     jsonb_build_object('source', 'OFFER_SENT', 'confidence', 'high'), now(), now())
+             ON CONFLICT ("migrationKey") DO NOTHING`,
+            id,
+        );
+    const first = await insert();
+    const second = await insert(); // opakovaný / prerušený beh
+    const all = await rows(id);
+    const migrated = all.find((r) => r.origin === "MIGRATED_RECEIPT")!;
+
+    const demand = await stats.getDemandStats({ range: { key: "all", label: "all", from: null, to: null }, userId: rep.id });
+
+    check(
+        "W5-11: the deterministic migrationKey makes a rerun a no-op; a migrated row carries no actor and is excluded from demand statistics",
+        first === 1 && second === 0 && all.length === 2 && migrated.requestedById === null &&
+            demand.byContent.PRICE === 1 && demand.byContent.INFO === 0,
+        `insert=${first}/${second} rows=${all.length} actor=${migrated.requestedById} demand=${JSON.stringify(demand.byContent)}`,
+    );
+};
+
+// W5-12 parita (§10.10, §10.13): riadok zoznamu a detail popisujú tú istú prácu, a obchod, ktorého krok dala
+// projekcia, sedí so sekciou „Na dnes" aj s jej SQL dvojčaťom.
+tests.w5Parity = async () => {
+    const { interested, queries, dealScope, detail, lead, cr } = await w5();
+    const rep = await makeUser("SALES_REP");
+
+    const ids = [
+        await interested(rep, ["DESIGN", "PRICE"]),
+        await interested(rep, ["PRICE"]),
+        await interested(rep, ["PRICELIST", "REVIEW"]),
+    ];
+    const list = await queries.getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "all", take: 500 });
+    const todayIds = (await queries.getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "today", take: 500 })).rows.map((r) => r.id);
+
+    let same = true;
+    let expected = true;
+    for (const id of ids) {
+        const row = list.rows.find((r) => r.id === id);
+        const d = await detail(id, rep);
+        const l = await lead(id);
+        if (!row || !d) { same = false; continue; }
+        if (row.stepHeadline !== d.stepHeadline || row.askWarning !== d.askWarning || row.outstanding.join() !== d.outstanding.join()) same = false;
+        // §6.8: uložený krok je predvoľba projekcie a nadpis vymenuje všetko nevybavené.
+        if (l.nextActionKind !== cr.stepKindForOutstanding(row.outstanding)) expected = false;
+        if (row.stepHeadline !== cr.stepView(l.nextActionKind, row.outstanding).headline) expected = false;
+        // §6.8: návrh je „rozpracované" (patrí do Rozpracované, nie do Na dnes), ostatné sú splatné dnes.
+        const inProgress = l.nextActionMode === "IN_PROGRESS";
+        if (todayIds.includes(id) === inProgress) expected = false;
+        if (inProgress !== (row.section === "IN_PROGRESS")) expected = false;
+    }
+
+    check(
+        "W5-12: the list row and the detail describe the same work, the stored step is the projection's default and every such deal lands in 'Na dnes' (TS + SQL)",
+        same && expected,
+        `same=${same} expected=${expected} today=${todayIds.length}/${ids.length}`,
+    );
+};
+
+// W5-13 súbeh a uzavretý obchod (§10.4, §10.9): dve karty posielajúce prekrývajúce sa podmnožiny skončia s tým, čo
+// klient naozaj dostal (nikdy dve otvorené požiadavky na to isté), a ceruzka na uzavretom obchode neprejde.
+tests.w5Race = async () => {
+    const { interested, rows, asks, offers, pipeline } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+
+    const id = await interested(rep, ["INFO", "PRICELIST", "PRICE"]);
+    const rev = await leadRev(id);
+    // Dve karty: prvá posiela „info + cenník", druhá „cenník + cena". Jedna vyhrá revíziu, druhá dostane STALE.
+    const both = await Promise.all([
+        offers.recordOfferSentAs(rep, {
+            leadId: id, expectedRevision: rev, idempotencyKey: key(),
+            contents: ["ABOUT_US", "PRICELIST"], sentOn: (await import("../../lib/domain/businessTime")).businessDate(new Date()), followUp: false,
+        }),
+        offers.recordOfferSentAs(rep, {
+            leadId: id, expectedRevision: rev, idempotencyKey: key(),
+            contents: ["PRICELIST", "PRICE"], sentOn: (await import("../../lib/domain/businessTime")).businessDate(new Date()),
+            price: { amount: 990, note: null }, followUp: false,
+        }),
+    ]);
+    const after = await rows(id);
+    const sent = after.filter((r) => r.state === "SENT").map((r) => r.content).sort().join(",");
+    const open = after.filter((r) => r.state === "OPEN").map((r) => r.content).sort().join(",");
+    const offerCount = await prisma.activity.count({ where: { leadId: id, type: "OFFER_SENT" } });
+
+    await pipeline.changeStatusAs(manager, id, { status: "WON", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const closed = await asks(rep, id, { add: ["DESIGN"] });
+
+    check(
+        "W5-13: two tabs sending overlapping subsets leave exactly what the client received (one send lands, the other is STALE); the pencil is refused on a closed deal",
+        Object.keys(tally(both)).sort().join() === "ERR:STALE,OK" && offerCount === 1 &&
+            (sent === "INFO,PRICELIST" || sent === "PRICE,PRICELIST") &&
+            (open === "PRICE" || open === "INFO") &&
+            codeOf(closed) === "ERR:DEAL_CLOSED",
+        `${JSON.stringify(tally(both))} offers=${offerCount} sent=${sent} open=${open} closed=${codeOf(closed)}`,
     );
 };
 

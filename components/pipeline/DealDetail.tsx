@@ -3,11 +3,12 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Check, Copy, Lock, Pencil, Phone, PhoneCall, Send, UserCheck, XCircle } from "lucide-react";
+import { AlertTriangle, Check, Copy, Lock, Pencil, Phone, PhoneCall, Send, UserCheck, XCircle } from "lucide-react";
 import { LeadStatus, ProjectType } from "@/app/generated/prisma/enums";
 import { DashboardContent, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import AskManagerDialog from "@/components/pipeline/AskManagerDialog";
 import CenovaPonukaCard from "@/components/pipeline/CenovaPonukaCard";
+import { outstandingLabel, REQUEST_CONTENT_LABEL, type OutstandingRow } from "@/lib/domain/clientRequests";
 import DesignTrackingCard from "@/components/pipeline/DesignTrackingCard";
 import FinishTaskDialog from "@/components/pipeline/FinishTaskDialog";
 import TakeoverDialog from "@/components/pipeline/TakeoverDialog";
@@ -262,6 +263,8 @@ export default function DealDetail({
         lastActivity: lead.lastTouch,
         task: lead.openTask,
         pending: lead.pending,
+        clientPrice: lead.offers.lastPrice,
+        gotPricelist: lead.offers.offerPricelistAt !== null,
     };
 
     // Predvyplnenie „Zmeniť krok" z aktuálneho kroku (druh mimo ponuky akčného okna → „Zavolať").
@@ -433,9 +436,11 @@ export default function DealDetail({
                                     <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Ďalší krok</p>
                                     {lead.nextActionKind ? (
                                         <>
+                                            {/* Wave 5 (§3.7): nadpis vymenuje všetko, čo treba poslať; uložený druh kroku
+                                                ostáva jedna kategória pre filtre a „Na dnes". */}
                                             <p className="flex items-center gap-1.5 font-medium">
                                                 {openTask && <Lock className="h-3.5 w-3.5 text-amber-600" />}
-                                                {NEXT_ACTION_LABEL[lead.nextActionKind]}
+                                                {lead.stepHeadline ?? NEXT_ACTION_LABEL[lead.nextActionKind]}
                                             </p>
                                             {openTask ? (
                                                 <p className="text-xs text-amber-700 dark:text-amber-400">⏳ čaká na {openTask.assignee.firstName}</p>
@@ -449,6 +454,13 @@ export default function DealDetail({
                                     ) : (
                                         <p className="text-muted-foreground">Bez ďalšieho kroku.</p>
                                     )}
+                                    {lead.askWarning && (
+                                        <p className="flex items-start gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                                            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                            {lead.askWarning}
+                                        </p>
+                                    )}
+                                    <OutstandingChecklist rows={lead.outstandingRows} maker={openTask?.assignee.firstName ?? null} />
                                     {lead.pendingText && (
                                         <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">{lead.pendingText}</p>
                                     )}
@@ -496,9 +508,13 @@ export default function DealDetail({
                         {/* Cena */}
                         <CenovaPonukaCard
                             leadId={lead.id}
+                            revision={lead.revision}
                             price={lead.price}
                             priceNote={lead.priceNote}
                             offers={lead.offers}
+                            askHistory={lead.askHistory}
+                            outstandingRows={lead.outstandingRows}
+                            openTaskAssignee={openTask?.assignee.firstName ?? null}
                             mode={api.quoteMode}
                             readOnly={!editable}
                             isManager={caps.manage}
@@ -813,6 +829,7 @@ export default function DealDetail({
                         nextActionKind: lead.nextActionKind,
                         nextActionNote: lead.nextActionNote,
                         pending: lead.pending,
+                        outstanding: lead.outstanding,
                     }}
                     type={ask}
                     resolvers={resolvers}
@@ -933,5 +950,21 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
             <Label>{label}</Label>
             <Input value={value} onChange={(event) => onChange(event.target.value)} />
         </div>
+    );
+}
+
+// Zoznam toho, čo ešte treba poslať (§3.7). Zelená ✓ patrí len tomu, čo klient naozaj dostal – „pripravené" od
+// manažéra nie je „prijaté", preto tu ostáva prázdny krúžok.
+function OutstandingChecklist({ rows, maker }: { rows: OutstandingRow[]; maker: string | null }) {
+    if (rows.length === 0) return null;
+    return (
+        <ul className="space-y-0.5 border-t pt-1.5 text-xs text-muted-foreground">
+            {rows.map((row) => (
+                <li key={row.content}>
+                    <span aria-hidden>○</span> <span className="text-foreground">{REQUEST_CONTENT_LABEL[row.content]}</span> –{" "}
+                    {outstandingLabel(row, maker)}
+                </li>
+            ))}
+        </ul>
     );
 }

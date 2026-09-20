@@ -11,6 +11,8 @@ import { recordOffer } from "@/lib/domain/offerMutations";
 import { businessDate } from "@/lib/domain/businessTime";
 import { dealStateForFollowUp, FOLLOW_UP_NEXT_KINDS, FOLLOW_UP_OUTCOMES, type FollowUpOutcome } from "@/lib/domain/leadFlow";
 import { noteWithReply, REPLY_KEYS } from "@/lib/domain/clientReplies";
+import { defaultStep, isSystemStep, normalizeAsked, REQUEST_CONTENT_ENUM, REQUEST_CONTENTS } from "@/lib/domain/clientRequests";
+import { addRequests, outstandingOf } from "@/lib/domain/requestMutations";
 import { moneyToString } from "@/lib/domain/offers";
 import { resolveSchedule, scheduleSchema } from "@/lib/domain/schedule";
 import {
@@ -111,6 +113,9 @@ const followUpSchema = z
         cancelTask: deal.cancelTaskSchema.nullish(),
         // Vrátené položky, ktoré sa neposielajú / berú na vedomie v tom istom uložení (§6.13).
         dismiss: dismissInputSchema.nullish(),
+        // Wave 5 (§3.5): „Chcú aj …" – čo klient v tomto kontakte pýtal. Každé zaškrtnutie je NOVÁ požiadavka,
+        // aj keď to isté už raz dostal.
+        asked: z.array(REQUEST_CONTENT_ENUM).max(REQUEST_CONTENTS.length).nullish(),
     })
     .strict();
 
@@ -152,6 +157,12 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
     }
     if (input.overlap === "KEEP_OPEN" && !factOnly) return { error: "Neplatné údaje." };
     if (input.overlap === "CANCEL_TASK" && !input.cancelTask) return { error: "Neplatné údaje." };
+    // Čo klient pýtal, sa dá zaznamenať len tam, kde klient naozaj prehovoril – nie pri našej SMS ani „bez kontaktu".
+    const asked = normalizeAsked(input.asked ?? []);
+    if (asked.length && input.contact !== "CALL" && input.contact !== "REPLIED") {
+        return { error: "Bez kontaktu s klientom sa nezapisuje, čo chcú." };
+    }
+    if (asked.length && closing) return { error: "Neplatné údaje." };
 
     const source = sourceFor(user);
     // Jeden kanonický odtlačok všetkého, čo používateľ odoslal (W3-R3-07) – bez revízie a samotného kľúča.
@@ -172,6 +183,7 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
         overlap: input.overlap ?? null,
         cancelTask: input.cancelTask ? { taskId: input.cancelTask.taskId, reason: trim(input.cancelTask.reason) } : null,
         dismiss: input.dismiss ? { items: sortedItems(input.dismiss.items), reason: trim(input.dismiss.reason) } : null,
+        asked,
     });
 
     return runKeyed(
@@ -217,6 +229,7 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
                 // V histórii chceme čítať „čo povedali" bez lúštenia meta; kľúč ostáva strojovo spracovateľný.
                 const note = input.contact === "SMS" ? trim(input.note) : noteWithReply(input.reply, input.note);
                 let contactId: string | null = null;
+                let contactAt: Date | null = null;
                 if (input.contact !== "NONE") {
                     const contact = await tx.activity.create({
                         data: {
@@ -230,13 +243,26 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
                             meta: { ...(input.reply && input.contact !== "SMS" ? { reply: input.reply } : {}), fp },
                             idempotencyKey: input.idempotencyKey,
                         },
-                        select: { id: true },
+                        select: { id: true, createdAt: true },
                     });
                     contactId = contact.id;
+                    contactAt = contact.createdAt;
                 }
+                // Čo klient pýtal v tomto kontakte (§6.2): nové riadky s časom kontaktu, aj keď to isté už raz dostal.
+                const added = contactId
+                    ? await addRequests(tx, {
+                          leadId: lead.id,
+                          contents: asked,
+                          // Okamih požiadavky = čas zdrojovej aktivity z DB, nie hodiny aplikačného servera (§5).
+                          requestedAt: contactAt ?? now,
+                          requestedById: actor.id,
+                          sourceActivityId: contactId,
+                          sourceTypes: ["CALL", "CLIENT_REPLIED"],
+                      })
+                    : [];
+
                 const phoneFulfils: ItemRef[] = (input.fulfils ?? []).map((f) => ({ taskId: f.taskId, kind: f.kind }));
-                const phone = async () => {
-                    if (!input.phonePrice || !contactId) return;
+                if (input.phonePrice && contactId) {
                     await recordOffer(
                         tx,
                         actor,
@@ -251,14 +277,16 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
                             callActivityId: contactId,
                             fulfils: phoneFulfils,
                             factOnly: true,
+                            // Cena povedaná v tom istom hovore spĺňa práve tie požiadavky, ktoré tento hovor vytvoril –
+                            // odkazom, nie porovnaním rovnakých časov (§5).
+                            resolves: added.filter((r) => r.content === "PRICE").map((r) => r.id),
                         },
                         source,
                     );
-                };
+                }
 
                 if (factOnly) {
                     // „Naposledy" sa posunie, krok ani stav nie (§5.1). Revízia sa zvýši raz.
-                    await phone();
                     await deal.updateLead(tx, lead.id, {});
                     return;
                 }
@@ -285,7 +313,15 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
                 } catch (error) {
                     throw new AccessError("FORBIDDEN", error instanceof Error ? error.message : "Neplatný výsledok.");
                 }
-                const { closes, lostReason, status: stateStatus, ...next } = state;
+                const { closes, lostReason, status: stateStatus, ...nextState } = state;
+                let next = nextState;
+                // §6.4: predvoľbu kroku dáva projekcia, VÝSLOVNE odoslaný krok vyhráva. Výsledky „chcú cenu" / „chcú
+                // návrh" krok nevyberajú – ten sa odvodí z toho, čo je nevybavené (§6.8), takže pri otvorenom návrhu
+                // neprebije „Poslať návrh" krokom „Poslať cenu". Dohodnutý hovor ani čakanie sa neprepisujú.
+                if (!closes && !input.nextKind && isSystemStep(next.nextActionKind)) {
+                    const derived = defaultStep(await outstandingOf(tx, lead.id), lead, { now });
+                    if (derived) next = { ...derived, nextActionNote: trim(input.stepNote) ?? derived.nextActionNote };
+                }
                 if (closes) {
                     // Uzavretie odmietne všetko vrátené a neposlané s pevným dôvodom (W3-R3-04).
                     await dismissAllPending(tx, actor, lead.id, "obchod uzavretý", source);
@@ -312,7 +348,6 @@ export async function logFollowUpAs(user: AccessUser, raw: FollowUpInput): Promi
                         ...(input.contact === "NONE" ? { idempotencyKey: input.idempotencyKey, meta: { fp } } : {}),
                     },
                 });
-                await phone();
             }),
         (error) => toActionError(error, "Nepodarilo sa uložiť. Skús znova.", "logFollowUp"),
     );

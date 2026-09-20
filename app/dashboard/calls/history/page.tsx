@@ -89,6 +89,8 @@ export default async function CallsHistoryPage({
                                         </Badge>
                                     )}
                                 </div>
+                                {/* Wave 5, Q2: čo chceli, sa nedá vyčítať z výsledku – je to samostatný riadok. */}
+                                {row.asked && <div className="mt-1 text-xs text-muted-foreground">Chceli: {row.asked}</div>}
                                 <div className="mt-1 text-xs text-muted-foreground tabular-nums">
                                     {new Date(row.createdAt).toLocaleString("sk-SK", { timeZone: BUSINESS_TZ })} · {row.user.firstName}{" "}
                                     {row.user.lastName}
@@ -143,6 +145,7 @@ export default async function CallsHistoryPage({
                                             {row.reverted && (
                                                 <Badge variant="outline" className="ml-1">vrátené</Badge>
                                             )}
+                                            {row.asked && <div className="mt-1 text-xs text-muted-foreground">Chceli: {row.asked}</div>}
                                         </TableCell>
                                         <TableCell className="max-w-sm whitespace-normal text-muted-foreground">
                                             {row.note ?? "—"}

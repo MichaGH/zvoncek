@@ -206,6 +206,100 @@ Still open (§6 of that file): whether `ActivitySource.CLIENTS` survives the mer
 handed-off-by, note edit/delete rules, whether a sales-rep team leader is a separate role, whether a future developer
 role shares this screen, and the parked ceník-in-app idea.
 
+## Wave 5: what the client asked for vs. what they got (DONE on the test branch, 2026-09-20)
+
+Design: `context/features/01-salesrep/wave-5-proposal.md` (draft v4, reviews R01–R03 resolved). Implemented in the
+order the design asks for: schema → pure rules → reconciliation → commands → screens → tests → docs.
+
+### Schema (S-16 – S-19, applied on test only)
+
+- New table **`LeadRequest`** + enums `RequestContent` (INFO · PRICELIST · PRICE · DESIGN · REVIEW), `RequestState`
+  (OPEN · SENT · WITHDRAWN), `RequestOrigin` (LIVE · MIGRATED_RECEIPT · MIGRATED_OPEN_STEP), with real relations to
+  `Lead`, `User` and `Activity`, a unique `migrationKey` and `provenance`.
+- `Lead.offerReviewAt`, `ActivityType.CLIENT_ASK_CHANGED`, `CallOutcome.INTERESTED`.
+- Endpoint verified first (`…nhww8x` / `neondb`), diff reviewed before applying: `CREATE TYPE` ×3,
+  `ALTER TYPE … ADD VALUE` ×2, one nullable `ADD COLUMN`, one `CREATE TABLE`, 3 indexes, 5 FKs — **no DROP, no
+  retype**. `prisma db push` applied it with no data-loss warning; a second run reported "already in sync".
+  Ledger: `context/domain/db-changes.md` §1 and §5.
+
+### Code
+
+- **`lib/domain/clientRequests.ts`** (pure, client-safe): the §5 mapping, dominance, `coveredContents` / `stepView` /
+  `warningText` (§6.9a), `resolveRequests` (§6.7), `clientRequestState` over **three** sources (§6.9),
+  `defaultStep` (§6.8), `isSystemStep`, and `sendCompletesStep` — **moved here from `tasks.ts`**, because it now
+  counts outstanding contents, not only returned task items.
+- **`lib/domain/requestMutations.ts`**: `reconcileRequests` (the only writer of `state` / resolver),
+  `addRequests`, `withdrawRequests`, `deleteRequestsOfActivity`, `assertLeadActivity`, and the read helpers the
+  queries use.
+- **`lib/commands/requests.ts`**: `setClientAsksAs` — the pencil, keyed, one bump, open rows only.
+- `logCallAs`: `INTERESTED` + `asked[]`, rows with the call's instant, `meta.asked` / `meta.fp` (a different
+  selection under the same key is a conflict). `logFollowUpAs`: "Chcú aj …" (also while the step is locked), a phone
+  price resolving that call's rows by link, and the step re-derived when the user submitted none.
+  `recordOfferSentAs` / `recordOffer`: `REVIEW` content, reconciliation after every send, and the step following
+  what is left outstanding. `correctRecord`, `revertCallResultAs`, `reopenDeal`, `askManagerAs` updated to match.
+- Queries: one projection for the list and the detail (`outstanding`, `stepHeadline`, `askWarning`, `askHistory`,
+  `outstandingRows`, `asked`, `clientPrice`).
+- Screens: telesales ticks instead of three buttons; "Chceli" + pencil on the price card; the derived headline,
+  checklist and warning in the detail and the list; "Rozbor webu" and pre-ticked asks in "Čo sme poslali";
+  "Chcú aj …" in the call sheet plus the "which price did they see" line; the call-history line ("Chceli: …").
+- Statistics: `getDemandStats` counts `LeadRequest` rows with `origin = LIVE` — the "Čo chceli" card no longer reads
+  `CallOutcome` (R01-11). `INTERESTED` joins the "interested" bucket next to the frozen `WANTS_*`.
+- **Migration script** `prisma/backfill/2026-09-wave5-requests.ts` (dry-run default, production endpoint denied
+  independently of the arguments, `--apply` needs a direct host + `--confirm`, `--verify`, blocked while unconverted
+  legacy sends exist). **Not run against production.**
+
+### Two deliberate behaviour changes to shipped wave-3 rules
+
+1. **After a partial send the step follows what is left.** Sending the návrh while a returned price is still unsent
+   now moves the step to "Poslať cenu" instead of keeping "Poslať návrh" (design §3.7 / §6.8). Test `w3R03` was
+   updated to assert the new, specified result.
+2. **Reopen is no longer always "Zavolať".** A reopened deal with outstanding work opens on that send step, due
+   today; "Zavolať" + `REOPEN_STEP_NOTE` remains only when nothing is outstanding (§6.10). This also settles the
+   wave-4 leftover "reopen has no step choice" for the request case.
+
+Only a step the app chose itself is ever re-derived: a call, "Čakáme na klienta" and a custom step are the user's
+decision and survive every reconciliation (R01-8 / R02-2).
+
+### Tests
+
+13 new cases in `prisma/backfill/check-concurrency.ts`: `w5FirstCall` (single + combined ticks, canonical
+fingerprint, parallel double submit), `w5PhonePrice` (same-call link, manual step survives), `w5AskAgain` (old
+receipt never satisfies a later ask, grouping, backdated send), `w5PartialSend` (step follows the rest, coverage,
+list ↔ detail), `w5Correction` (reopen only when nothing else satisfies, earliest eligible receipt wins, withdrawn
+never revived), `w5Revert`, `w5ManagerWork` (R03-1: manager work with no client request), `w5Pencil` (add /
+withdraw / reason / SENT refused / foreign NOT_FOUND / same key once / task untouched), `w5CloseReopen`, `w5Links`
+(R02-7), `w5Migration` (rerun is a no-op, no actor, excluded from demand stats), `w5Parity` (list ↔ detail and
+"Na dnes" TS ↔ SQL), `w5Race` (two tabs with overlapping subsets, pencil on a closed deal).
+
+### Checks (all actually run, 2026-09-20)
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | clean |
+| `npx eslint .` | only the known pre-existing `components/layout/MobileNav.tsx` error |
+| `npx next build` | succeeded |
+| `npx tsx prisma/backfill/check-business-time.ts` (and `TZ=UTC`) | passed |
+| `npx tsx prisma/backfill/check-client-sections.ts` | passed (totality over 4200 combinations) |
+| `npx tsx prisma/backfill/check-concurrency.ts --expect-endpoint …nhww8x --iterations 100` | **160/160** |
+| `npx tsx prisma/backfill/check-backfill-delta.ts --expect-endpoint …nhww8x --expect-db neondb --owner-username admin --caller-username telesales` | passed |
+| `2026-09-wave5-requests.ts` dry-run on test | ran; reported its counts and the "0 unconverted" blocker |
+| production endpoint denylist in that script | verified: aborts before connecting |
+
+### Wave 5 — not resolved / to do later
+
+- **Human click-through still owed** (phone + desktop, a browser session is not something this agent may open with
+  someone's credentials): the telesales tick list and its "Pokračovať" gate, the "Chceli" card and its pencil
+  (including the "task stays open" note), the derived headline and the ⚠ line in the list and the detail, the
+  pre-ticked "Čo sme poslali", "Chcú aj …" in the call sheet, and the "which price did they see" header.
+- **The production migration has not been rehearsed.** It needs a fresh production clone under its own env name, the
+  deployed commit, a read-only inventory and Michal's cenník list (probably empty) — `db-changes.md` §5.4.
+- **Wave 4 Part A** must now be re-reviewed against the shipped operations before it is built
+  (`wave-4-proposal.md` §2, BL-12): it has to fill `ManagerWork.making` / `prepared` from `taskPartState` and must
+  not invent a second definition of what is left to send.
+- The design's §10.20 ("production-clone rehearsal") is by nature not part of the automated suite.
+- `LeadRequest` has no partial unique index for "one open row per content" — by design: a second open ask is a real
+  second ask, and the grouping happens in the projection.
+
 ## Round 2 – wave 1: merged deals screen (DONE on the test branch, 2026-09-18)
 
 **Database: no change at all.** Wave 1 is pure application code; every schema change of round 2 is still `PLANNED` in

@@ -75,6 +75,8 @@ recorded here because the row is removed after rollout.
 | `ActivityType` | `CALLER_ASSIGNED`, `CALLER_RELEASED`, `CALL_REVERTED`, `DEAL_REOPENED` | round 1 | TEST |
 | `ActivityType` | `OFFER_SENT`, `CLIENT_REPLIED` | round 2 wave 3a | TEST |
 | `ActivityType` | `TASK_CREATED`, `TASK_MESSAGE`, `TASK_DONE`, `TASK_DECLINED`, `TASK_CANCELLED`, `TASK_REASSIGNED`, `TASK_RESULT_DISMISSED` | wave 3 | TEST |
+| `ActivityType` | `CLIENT_ASK_CHANGED` (S-18) | wave 5 | TEST |
+| `CallOutcome` | `INTERESTED` (S-19) | wave 5 | TEST |
 
 `ALTER TYPE … ADD VALUE` is additive and cheap, but **a value added inside a transaction cannot be used by the same
 transaction** — a rollout script must never add a value and write rows using it in one go, and the schema must land
@@ -88,6 +90,9 @@ transaction** — a rollout script must never add a value and write rows using i
 | `DealTaskContent` | `PRICE`, `DESIGN`, `OTHER` | wave 3 | TEST |
 | `DealTaskStatus` | `OPEN`, `DONE`, `DECLINED`, `CANCELLED` | wave 3 | TEST |
 | `DealOwnershipReason` | `HANDOFF`, `CHANGE`, `BULK`, `TAKEOVER`, `HANDOVER`, `REVERT` | wave 3 | TEST |
+| `RequestContent` | `INFO`, `PRICELIST`, `PRICE`, `DESIGN`, `REVIEW` (S-16) | wave 5 | TEST |
+| `RequestState` | `OPEN`, `SENT`, `WITHDRAWN` (S-16) | wave 5 | TEST |
+| `RequestOrigin` | `LIVE`, `MIGRATED_RECEIPT`, `MIGRATED_OPEN_STEP` (S-16) | wave 5 | TEST |
 
 ### 1.3 `Lead` — new columns
 
@@ -102,9 +107,16 @@ transaction** — a rollout script must never add a value and write rows using i
 | `offerAboutUsAt`, `offerPricelistAt`, `offerPriceAt` | timestamp(3) without time zone | yes | — | wave 3a | TEST |
 | `legacySendsReviewedAt` | timestamp(3) without time zone | yes | — | wave 3a | TEST — **test-only per §3.3**, not for production |
 | `hadLegacySends` | boolean | **no** | `false` | wave 3a | TEST — **test-only per §3.3**, not for production |
+| `offerReviewAt` (S-17) | timestamp(3) without time zone | yes | — | wave 5 | TEST |
 
 `revision` and `hadLegacySends` are the only NOT NULL additions; both have a constant default (PostgreSQL 11+ fast
-default, no table rewrite).
+default, no table rewrite). `LeadRequest` is a new table, so its NOT NULL columns cost nothing.
+
+**Wave 5 application on test (2026-09-20).** The reviewed diff (`migrate diff --from-config-datasource --to-schema`)
+contained only `CREATE TYPE` ×3, `ALTER TYPE … ADD VALUE` ×2, `ADD COLUMN` ×1 (nullable), `CREATE TABLE` ×1,
+`CREATE [UNIQUE] INDEX` ×3 and `ADD CONSTRAINT … FOREIGN KEY` ×5 — **no `DROP`, no retype**. `prisma db push`
+applied it without a data-loss warning and a second run reported "already in sync". Endpoint verified before the
+command: `…nhww8x` / `neondb`.
 
 ### 1.4 `Activity` — new columns
 
@@ -133,6 +145,7 @@ explicit approval and do not answer "yes" to the warning.
 |---|---|---|---|---|
 | `DealTask` | `id`, `leadId`, `type`, `contents DealTaskContent[]`, `status` (default `OPEN`), `text`, `requestedById`, `assigneeId`, `createdAt`, `closedAt?`, `closedById?`, `closeReason?`, `result jsonb?` | `leadId` → `Lead` `CASCADE`; `requestedById`, `assigneeId` → `User` `RESTRICT`; `closedById` → `User` `SET NULL` | wave 3 | TEST |
 | `DealOwnership` | `id`, `leadId`, `fromUserId?`, `toUserId?`, `byUserId`, `reason`, `note?`, `createdAt` | `leadId` → `Lead` `CASCADE`; `fromUserId`, `toUserId` → `User` `SET NULL`; `byUserId` → `User` `RESTRICT` | wave 3 | TEST |
+| `LeadRequest` (S-16) | `id`, `leadId`, `content`, `state` (default `OPEN`), `origin` (default `LIVE`), `requestedAt`, `requestedById?`, `sourceActivityId?`, `resolvedAt?`, `resolvedById?`, `resolvedActivityId?`, `reason?`, `migrationKey?` **UNIQUE**, `provenance jsonb?`, `createdAt`, `updatedAt` | `leadId` → `Lead` `CASCADE`; `requestedById`, `resolvedById` → `User` `SET NULL`; `sourceActivityId`, `resolvedActivityId` → `Activity` `SET NULL` | wave 5 | TEST |
 
 Both start empty. "At most one `OPEN` task per deal" is enforced **in code under the Lead row lock**, not by a partial
 unique index (Prisma cannot declare one, so `db push` would treat it as drift). If it ever moves into the database it is
@@ -150,6 +163,7 @@ a new ledger row with a duplicate pre-check.
 | `Activity (taskId)` | wave 3 | TEST |
 | `DealTask (assigneeId, status, createdAt)`, `DealTask (leadId, status)` | wave 3 | TEST |
 | `DealOwnership (leadId, createdAt)`, `DealOwnership (fromUserId, createdAt)` | wave 3 | TEST |
+| `LeadRequest (leadId, state)`, `LeadRequest (leadId, content, state)`, `LeadRequest (migrationKey)` **UNIQUE** | wave 5 | TEST |
 
 Plain `CREATE INDEX` takes a lock that blocks writes for its duration. The new-table indexes are instant (empty tables);
 for `Lead` and `Activity` do not assume the duration on production — review table sizes and schedule the rollout, or
@@ -177,6 +191,7 @@ never had them, so their removal is **not** a production change. Do not add them
 | Routing team | create team "Obchod" (leader Michal) so positive telesales calls route to an owner instead of landing unassigned | seeded | **OWED** |
 | Wave 3a legacy step | `prisma/backfill/2026-09-offer-legacy.ts` | applied before the wipe | **NOT IN THE CHOSEN FINAL ROUTE** — §3.3 replaces it |
 | Wave 3 | none. `DealTask` / `DealOwnership` start empty; no existing row is rewritten | — | nothing to backfill. Consequence: História and ownership history show only moves **after** the rollout; older owner changes remain readable only as `OWNER_CHANGED` activities |
+| Wave 5 | `prisma/backfill/2026-09-wave5-requests.ts` — "what the client asked for" for old deals (§5 below) | dry-run only (test data has nothing meaningful to migrate) | **OWED**, and only **after** the §3.3 send conversion |
 
 ## 3. Old send data — wave 3a legacy layer and the decided conversion
 
@@ -352,8 +367,9 @@ Order (all of it only in a separately approved rollout session; rehearse on a fr
 3. Create the routing team "Obchod" (leader Michal) (§2).
 4. Round 1 backfill dry-run → review → `--apply` → `--verify` (§2).
 5. Old-send conversion and reconciliation per §3.3 (not the old one-time legacy step).
-6. Deploy the new code, re-run `--verify`, spot-check the screens (including "Pre mňa", "Čakám na manažéra", a task,
-   História).
+6. Wave 5 "what the client asked for" backfill per §5 (after step 5, never before).
+7. Deploy the new code, re-run `--verify`, spot-check the screens (including "Pre mňa", "Čakám na manažéra", a task,
+   História, and a deal's "Chceli" vs. "Klient dostal").
 
 | Check | Command |
 |---|---|
@@ -361,9 +377,69 @@ Order (all of it only in a separately approved rollout session; rehearse on a fr
 | client regenerated | `npx prisma generate`, then `npx tsc --noEmit` |
 | business calendar | `npx tsx prisma/backfill/check-business-time.ts` (and with `TZ=UTC`) |
 | section classification (incl. the locked step) | `npx tsx prisma/backfill/check-client-sections.ts` |
-| concurrency + scope + wave 3 tasks | `npx tsx prisma/backfill/check-concurrency.ts --expect-endpoint <dev endpoint>` |
+| concurrency + scope + wave 3 tasks + wave 5 requests | `npx tsx prisma/backfill/check-concurrency.ts --expect-endpoint <dev endpoint>` |
+| wave 5 requests backfill | `npx tsx prisma/backfill/2026-09-wave5-requests.ts …` dry-run → `--apply` → `--verify` (§5) |
 | backfill integrity | `npx tsx prisma/backfill/check-backfill-delta.ts …` and the backfill's own `--verify` |
 | wave 3a legacy step | current test implementation only; replace with the conversion/reconciliation checks in §3.3 before rollout |
 
 Re-check the target endpoint and compare the actual production schema before any production command. A Git schema diff
 alone does not establish the live database state.
+
+---
+
+## 5. Wave 5 — the production migration of "what the client asked for" (NOT executed)
+
+Design: `context/features/01-salesrep/wave-5-proposal.md` §11. Script: `prisma/backfill/2026-09-wave5-requests.ts`.
+The schema (S-16 – S-19, §1 above) is applied and verified on test; **no production command has been run**, and the
+script has only been executed in dry-run mode against the test branch.
+
+### 5.1 The rule (Michal, 2026-09-20 — business input, to be verified on the clone)
+
+For old records, everything the client **received** is treated as something they **asked for**. An open deal whose
+send step has no matching receipt still owes that content, so the pending work survives the deploy.
+
+| Old, after the §3.3 send conversion | Wave-5 backfill | `origin` |
+|---|---|---|
+| canonical `ABOUT_US` receipt | `LeadRequest(INFO, SENT)` dated with the first such send | `MIGRATED_RECEIPT` |
+| canonical `PRICE` receipt | `LeadRequest(PRICE, SENT)` | `MIGRATED_RECEIPT` |
+| canonical `DESIGN` receipt | `LeadRequest(DESIGN, SENT)` | `MIGRATED_RECEIPT` |
+| **cenník** | **nothing.** Live production had no cenník content and no flag (§3.3). Rows are created only for leads Michal names in `--pricelist-leads <file>` | `MIGRATED_RECEIPT` |
+| **rozbor webu** | nothing — the old system had no such content | — |
+| **open** deal with `SEND_QUOTE` / `SEND_DESIGN` / `SEND_EMAIL` and no matching receipt | one `LeadRequest(PRICE / DESIGN / INFO, OPEN)` | `MIGRATED_OPEN_STEP` |
+| anything else | no rows, no warnings | — |
+
+One row per (lead, content), taken from the **first** matching receipt — the client asked once, not at every email.
+
+### 5.2 Identity, provenance and safety
+
+- `migrationKey` is deterministic (`w5:receipt:<leadId>:<content>`, `w5:step:<leadId>:<content>`,
+  `w5:pricelist:<leadId>`) and **unique**, so a rerun or an interrupted run cannot duplicate a row (`ON CONFLICT DO
+  NOTHING`). Covered by `w5Migration` in the concurrency suite.
+- `provenance` records the source activity / column, the rule and the confidence.
+- `requestedById` is **NULL** — the historical actor is unknown and is never attributed to today's owner.
+- Migrated rows are excluded from demand statistics (`getDemandStats` reads `origin = LIVE` only).
+- The script **refuses the production endpoint independently of its arguments** (endpoint denylist), requires
+  `--expect-endpoint` + `--expect-db` to match `DATABASE_URL`, and `--apply` additionally needs a **direct** (non-pooler)
+  host plus `--confirm <endpoint>`. Dry-run is the default; `--verify` reports what is still missing.
+- `--apply` **aborts** while any lead still has old send evidence (`quoteSentAt` / `aboutUsSentAt` / `priceDisclosed`
+  / old `QUOTE_SENT` / `EMAIL_SENT` / `DESIGN_SENT`) without a single canonical `OFFER_SENT`: the conversion of §3.3
+  must come first, or the migration would describe an incomplete picture.
+
+### 5.3 Order inside the rollout
+
+Insert between steps 5 and 6 of §4:
+
+1. §1 schema (including S-16 – S-19; the enum values land **before** any code that writes `INTERESTED` /
+   `CLIENT_ASK_CHANGED` is deployed, and never inside the transaction that adds them).
+2. The §3.3 old-send conversion and its reconciliation.
+3. Michal's list of cenník recipients, if any (`--pricelist-leads`); without the file no `PRICELIST` row is created.
+4. `2026-09-wave5-requests.ts` dry-run → review the counts and the exception list → `--apply` → `--verify` (0 left).
+5. Reconcile: every lead's "Chceli" matches its "Klient dostal"; open deals with an unmet send step have exactly one
+   `OPEN` row; no lead has two rows of the same content from the migration; demand statistics are unchanged.
+6. Deploy the code, then re-run `--verify`.
+
+### 5.4 What is still missing before any of this may run
+
+Unchanged from the wave-5 design §11: a **fresh duplicate of production** under its own env name (never
+`DATABASE_URL`), the exact deployed commit, permission for the read-only inventory, Michal's cenník list (probably
+empty), and a full rehearsal on that duplicate. None of that has happened.

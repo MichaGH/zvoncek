@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { DealTaskContent, DealTaskType, NextActionKind } from "@/app/generated/prisma/enums";
+import type { DealTaskContent, DealTaskType, NextActionKind, RequestContent } from "@/app/generated/prisma/enums";
 import type { PendingItem } from "@/lib/domain/tasks";
 import { businessDate, businessDayStart, isValidBusinessDate } from "@/lib/domain/businessTime";
 
@@ -9,7 +9,7 @@ import { businessDate, businessDayStart, isValidBusinessDate } from "@/lib/domai
 // Staré polia (quoteSentAt, aboutUsSentAt, priceDisclosed) sú zmrazené – nikdy neznamenajú „áno", len „?".
 // Čisté funkcie bez DB – dá sa importovať aj z klientskych komponentov.
 
-export const OFFER_CONTENTS = ["ABOUT_US", "PRICELIST", "PRICE", "DESIGN"] as const;
+export const OFFER_CONTENTS = ["ABOUT_US", "PRICELIST", "PRICE", "DESIGN", "REVIEW"] as const;
 export type OfferContent = (typeof OFFER_CONTENTS)[number];
 export type OfferChannel = "EMAIL" | "PHONE";
 
@@ -18,6 +18,7 @@ export const OFFER_CONTENT_LABEL: Record<OfferContent, string> = {
     PRICELIST: "cenník",
     PRICE: "cena",
     DESIGN: "návrh",
+    REVIEW: "rozbor webu", // wave 5: čo je zlé na ich súčasnom webe
 };
 
 const moneyString = z.string().regex(/^\d{1,8}(\.\d{1,2})?$/);
@@ -109,6 +110,7 @@ export type OfferSummary = {
     aboutUsAt: Date | null;
     pricelistAt: Date | null;
     priceAt: Date | null;
+    reviewAt: Date | null;
     lastPrice: { amount: string; note: string | null; channel: OfferChannel; sentOn: string } | null;
     designFirstSent: Map<string, Date>;
 };
@@ -132,6 +134,7 @@ export function summarizeOffers(rows: OfferRow[]): OfferSummary {
     return {
         aboutUsAt: first("ABOUT_US"),
         pricelistAt: first("PRICELIST"),
+        reviewAt: first("REVIEW"),
         priceAt: last ? offerInstant(last.meta, last.createdAt) : null,
         lastPrice: last?.meta.price
             ? { amount: last.meta.price.amount, note: last.meta.price.note, channel: last.meta.channel, sentOn: last.meta.sentOn }
@@ -148,6 +151,7 @@ export type KnowledgeInput = {
     offerAboutUsAt: string | null;
     offerPricelistAt: string | null;
     offerPriceAt: string | null;
+    offerReviewAt: string | null;
     designSentAt: string | null;
     hadLegacySends: boolean;
     legacySendsReviewedAt: string | null;
@@ -166,6 +170,7 @@ export function clientKnowledge(k: KnowledgeInput): Record<OfferContent, Knowled
         ABOUT_US: of(k.offerAboutUsAt),
         PRICELIST: of(k.offerPricelistAt),
         PRICE: of(k.offerPriceAt),
+        REVIEW: of(k.offerReviewAt),
         DESIGN: k.designSentAt ? { state: "yes", at: k.designSentAt } : unknown ? { state: "unknown" } : { state: "no" },
     };
 }
@@ -228,6 +233,9 @@ export type OfferDialogDeal = {
     // Wave 3: otvorená úloha (zámok → odoslanie je len fakt; prekryv sa pýta) a vrátené položky na „použitie".
     openTask: { id: string; type: DealTaskType; contents: DealTaskContent[]; assignee: string } | null;
     pending: PendingItem[];
+    // Wave 5: čo klient pýta a ešte nedostal (predvyplní sa) a celá nevybavená práca (predvolí ďalší krok, §6.9).
+    asked: RequestContent[];
+    outstanding: RequestContent[];
     offers: KnowledgeInput & {
         legacy: { quoteSentAt: string | null; aboutUsSentAt: string | null; priceDisclosed: boolean };
     };

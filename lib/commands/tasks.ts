@@ -12,6 +12,7 @@ import { runKeyed } from "@/lib/domain/idempotency";
 import { FOLLOW_UP_NEXT_KINDS } from "@/lib/domain/leadFlow";
 import { defaultStepNote, nextStepOption } from "@/lib/domain/nextStepOptions";
 import { recordOffer } from "@/lib/domain/offerMutations";
+import { outstandingOf } from "@/lib/domain/requestMutations";
 import { isValidSentOn, moneyToString, OFFER_CONTENTS, type OfferContent } from "@/lib/domain/offers";
 import { resolveSchedule, scheduleSchema } from "@/lib/domain/schedule";
 import {
@@ -118,7 +119,8 @@ export async function askManagerAs(user: AccessUser, raw: AskManagerInput): Prom
                 const assignee = assertEligibleAssignee(users.get(input.assigneeId), lead.ownerId);
                 let lockedStep = { kind: lead.nextActionKind, note: lead.nextActionNote };
                 if (input.type === "HELP") {
-                    const auto = stepAfterTask(contents, lockedStep, await loadPending(tx, lead.id), defaultStepNote);
+                    // Wave 5: krok sa odvodí z CELEJ nevybavenej práce – čo klient pýta aj čo sa ide robiť (§6.8).
+                    const auto = stepAfterTask(contents, lockedStep, await loadPending(tx, lead.id), defaultStepNote, await outstandingOf(tx, lead.id));
                     // Pevný krok (cena / návrh) sa zmeniť nedá; pri „Iné" platí zvolený krok, ak ho I10 dovolí.
                     if (step && auto.fixed && step.kind !== auto.kind) throw new AccessError("STALE", "Krok po vybavení sa zmenil – obnovujem.");
                     if (step && !auto.fixed) await assertStepAllowed(tx, lead.id, step.kind);

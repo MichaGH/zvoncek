@@ -1,14 +1,18 @@
 # Wave 4 — price + návrh in one task, notes, wave-3 leftovers
 
-**Status:** **BLOCKED BY WAVE 5** (implementation-order decision, 2026-09-19). Part A records the accepted product
-direction, but §§2.2–2.10 are not an implementation-ready contract until wave 5 has shipped its client-request,
-remaining-to-send and partial-send operations and this proposal is re-reviewed against them. Parts B–D still wait for
+**Status:** **BLOCKED until this proposal is re-reviewed against the shipped wave 5** (implementation-order decision,
+2026-09-19). Wave 5 is **built on the test branch** (2026-09-20), so the blocking condition is now the re-review, not
+the build: Part A must consume the shipped projection — `clientRequestState(requests, managerWork)` in
+`lib/domain/clientRequests.ts`, whose `making` / `prepared` lists wave 4 fills from `taskPartState` — and must not
+invent a second definition of what is left to send. §§2.2–2.10 are not an implementation-ready contract until that
+re-review is done. Parts B–D still wait for
 answers (§7). Nothing implemented and no schema applied. The stable name/number is intentionally retained so historical
 decisions, reviews and code comments remain traceable.
 
 **Read first:** `AGENTS.md`, `context/code-standards.md`, `context/domain/database-map.md`,
 `context/domain/operations.md`, `context/app-workflow.md` §5–§7, `wave-3-task-proposal-final.md` (D3, D4, D5, §5.1,
-§6.1–§6.4, §6.13), and the **shipped final** wave-5 design/operations once they exist. Wave 3 is built on the test
+§6.1–§6.4, §6.13), and the shipped wave-5 operations (`context/domain/operations.md` — `clientRequests.ts`,
+`requestMutations.ts`, `setClientAsksAs` — plus `context/app-workflow.md` §5b). Wave 3 is built on the test
 branch; its open items are in `context/progress-tracker.md`. Do not begin wave-4 implementation from this draft.
 
 **Sources**

@@ -34,7 +34,7 @@ One row per contact, and the same row later as a deal. **Never renamed.** Soft-d
 | `revision` | optimistic version, `+1` **exactly once per business transaction** |
 | `nextActionKind?`, `nextActionAt?`, `nextActionHasTime`, `nextActionMode`, `nextActionNote?` | **deal phase only** — what happens next |
 | `callbackKind?`, `callbackAt?`, `callbackHasTime`, `callbackNote?` | **call phase only** — why this is in a caller's queue |
-| `offerAboutUsAt?`, `offerPricelistAt?`, `offerPriceAt?` | **what the client received**: first "about us", first cenník, **last** calculated price (email or phone). A summary of the valid `OFFER_SENT` activities, always recomputed by `recomputeOffers` — never written directly |
+| `offerAboutUsAt?`, `offerPricelistAt?`, `offerPriceAt?`, `offerReviewAt?` | **what the client received**: first "about us", first cenník, **last** calculated price (email or phone), first rozbor webu. A summary of the valid `OFFER_SENT` activities, always recomputed by `recomputeOffers` — never written directly |
 | `designSentAt?` | latest sent date among the lead's designs; recomputed with the above, also when a design is deleted. A lead without any `Design` row keeps its old value, and the screens show that value as "návrh sent" |
 | `hadLegacySends` | `true` = the lead had sends under the old system (set once by `prisma/backfill/2026-09-offer-legacy.ts`, never changed after). Default `false` for every new lead |
 | `legacySendsReviewedAt?` | the manager confirmed what such a lead really received; until then empty contents show as "?" |
@@ -110,7 +110,7 @@ Indexes: `leadId` · `taskId` · `(userId, createdAt)` · `(category, createdAt)
 `NEXT_ACTION_CHANGED`, `NEXT_ACTION_CLEARED`, `CONTACT_UPDATED`, `STATUS_CHANGED`, `OWNER_CHANGED`,
 `OUTCOME_CORRECTED`, `TRACKER_ATTACHED`, `TRACKER_UPDATED`, `TRACKER_OPENED`, `CALLER_ASSIGNED`, `CALLER_RELEASED`,
 `CALL_REVERTED`, `DEAL_REOPENED`, `OFFER_SENT`, `CLIENT_REPLIED`, `TASK_CREATED`, `TASK_MESSAGE`, `TASK_DONE`,
-`TASK_DECLINED`, `TASK_CANCELLED`, `TASK_REASSIGNED`, `TASK_RESULT_DISMISSED`. (`REQUEST_CREATED` /
+`TASK_DECLINED`, `TASK_CANCELLED`, `TASK_REASSIGNED`, `TASK_RESULT_DISMISSED`, `CLIENT_ASK_CHANGED`. (`REQUEST_CREATED` /
 `REQUEST_RESOLVED` were removed with `DealRequest`; the test branch had no rows of them when they were dropped.)
 
 **Task rows** (`category BUSINESS`, `taskId` set). `TASK_*` rows are internal communication with the manager — they are
@@ -136,7 +136,7 @@ client knows); "bez kontaktu" = no contact row, only the planning row. `QUOTE_SE
 **no longer written** — every existing row of those types is a legacy record whose contents are unknown.
 
 **`OFFER_SENT`** — "the client received offer material". `meta`:
-`{ channel: "EMAIL" | "PHONE", contents: ["ABOUT_US" | "PRICELIST" | "PRICE" | "DESIGN"…], price?: { amount: "1285.00"
+`{ channel: "EMAIL" | "PHONE", contents: ["ABOUT_US" | "PRICELIST" | "PRICE" | "DESIGN" | "REVIEW"…], price?: { amount: "1285.00"
 (decimal string), note }, designs?: [{ id, label, url, version }], sentOn: "YYYY-MM-DD", historical: bool,
 callActivityId? (phone price → the CALL it belongs to), fulfils?: [{ taskId, kind: "PRICE" | "DESIGN", designId? }],
 fp?, correction? }`. `createdAt` = when it was recorded, `sentOn` = when the client got it. `historical: true` = a
@@ -144,9 +144,16 @@ legacy send entered later by the manager (no next step, never fulfils a task ite
 items this send used (wave 3): at most one price, each návrh at most once, only items still pending. Order of sends: `sentOn`, then a historical entry before a normal one on the same day, then `createdAt`; the
 latest price is what the client knows (`lib/domain/offers.ts`).
 
-`CallOutcome`: `NO_ANSWER`, `BAD_NUMBER`, `NOT_INTERESTED`, `CALL_AGAIN`, `WANTS_QUOTE` ("Chcú konkrétnu cenu"),
-`WANTS_DESIGN`, `WANTS_EMAIL` ("Chcú info emailom"), `SNOOZE`, `POSITIVE`, `WANTS_TO_ORDER`. The last two exist only on
-deal follow-ups.
+`CallOutcome`: `NO_ANSWER`, `BAD_NUMBER`, `NOT_INTERESTED`, `CALL_AGAIN`, `INTERESTED` ("majú záujem" — what they
+wanted is in `LeadRequest`), `WANTS_QUOTE` ("Chcú konkrétnu cenu"), `WANTS_DESIGN`, `WANTS_EMAIL`
+("Chcú info emailom"), `SNOOZE`, `POSITIVE`, `WANTS_TO_ORDER`. `POSITIVE` and `WANTS_TO_ORDER` exist only on deal
+follow-ups. The three `WANTS_*` values are **frozen**: existing rows stay valid and still count as interest, but no
+new call writes them — the call queue sends `INTERESTED` and the ticks (wave 5). A first call with `INTERESTED`
+carries `meta.asked` (the canonical sorted tick list) and `meta.fp`, so the same key with a different selection is
+`IDEMPOTENCY_CONFLICT`.
+
+**`CLIENT_ASK_CHANGED`** (wave 5) — the pencil at "Chceli". `meta`: `{ added: RequestContent[], withdrawn: [{ id,
+content }], reason, fp }`. History only: it is not a client contact and never moves "Naposledy".
 
 ---
 
@@ -187,6 +194,42 @@ Rules in code (under the `Lead` row lock, not constraints):
 - an owner change ends or keeps the task (`ownerTransition`): new owner is a rep → the task stays (optionally moved to
   another manager); new owner is a manager → `HELP` `CANCELLED`, `HANDOVER` `DONE`; no owner → `CANCELLED`;
 - a user holding open deals or assigned `OPEN` tasks cannot be deactivated or change role (D14).
+
+## LeadRequest — what the client asked for (wave 5)
+
+One row per **ask**, not per label: the same client asking for the same thing again months later is a new row and new
+work. Rules: `lib/domain/clientRequests.ts` (pure) and `lib/domain/requestMutations.ts` (writes); commands in
+`lib/commands/requests.ts`, `calls.ts`, `dealWork.ts`, `offers.ts`.
+
+| Field | Meaning |
+|---|---|
+| `leadId` | the deal (cascade) |
+| `content` | `RequestContent`: `INFO` (Info / ukážky) · `PRICELIST` · `PRICE` (a price for *this* client) · `DESIGN` · `REVIEW` (rozbor webu) |
+| `state` | `RequestState`: `OPEN` · `SENT` (a valid `OFFER_SENT` satisfied it) · `WITHDRAWN` (they no longer want it) |
+| `origin` | `RequestOrigin`: `LIVE` (recorded in the app) · `MIGRATED_RECEIPT` · `MIGRATED_OPEN_STEP` (both from the old data, §11 of the wave-5 design) |
+| `requestedAt` | the **instant** of the source activity, not a rounded business day |
+| `requestedById?` | who recorded it; `NULL` on a migrated row — the historical actor is unknown and is never attributed to today's owner |
+| `sourceActivityId?` | the call / reply it came from (`SET NULL`); reverting a first call deletes its rows |
+| `resolvedAt?`, `resolvedById?`, `resolvedActivityId?` | **recomputed, never toggled**: the `OFFER_SENT` that satisfied it, or the moment of a manual withdrawal |
+| `reason?` | required when a row is withdrawn by hand |
+| `migrationKey?` | **unique**, deterministic key of the migration source — a rerun or an interrupted run cannot duplicate a row |
+| `provenance?` (jsonb) | source columns / activity ids, confidence, approved exception |
+| `createdAt`, `updatedAt` | |
+
+Indexes: `(leadId, state)` · `(leadId, content, state)` · `migrationKey` **UNIQUE**.
+
+Rules in code (under the `Lead` row lock, not constraints):
+
+- **the state is always the result of one recomputation** (`reconcileRequests`): every operation that changes requests
+  or receipts replays the lead's rows against its **valid** `OFFER_SENT` activities in instant order. A receipt
+  satisfies a row only if its instant is **not earlier** than the ask, the earliest eligible receipt wins, and a
+  crossed-out send reopens a row only when no other valid receipt still satisfies it;
+- a **withdrawn** row is never revived by a receipt; only an `OPEN` row may be withdrawn, and only by id;
+- a foreign key cannot prove a linked activity belongs to the same lead, so every command asserts same-`leadId`,
+  expected type and not-crossed-out under the lock;
+- satisfaction mapping: `INFO` → `ABOUT_US`, `PRICELIST` → `PRICELIST`, `PRICE` → `PRICE` (email **or** phone),
+  `DESIGN` → `DESIGN`, `REVIEW` → `REVIEW`;
+- there is **no** summary column on `Lead` for asks — one place only.
 
 ## DealOwnership — owner history (wave 3)
 
@@ -263,3 +306,6 @@ These live in code and must be preserved by every new mutation:
 - scope (who may see which lead) — always in the query, never in a constraint
 - `Lead.offer*`, `Lead.designSentAt` and `Design.sentAt` equal the recompute of the valid `OFFER_SENT` rows (+ legacy
   design dates); the frozen legacy send fields are never written
+- `LeadRequest.state` and its resolver equal the recompute of the lead's rows against its valid `OFFER_SENT` rows
+- only a step the app chose itself (`SEND_QUOTE` / `SEND_DESIGN` / `SEND_EMAIL`, or none) is re-derived from the
+  outstanding work; a call, "Čakáme na klienta" and a custom step are the user's decision

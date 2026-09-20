@@ -6,7 +6,7 @@ Michal's approval. When an item is scheduled into a wave, move it there and dele
 why, where it came from, what is already known.
 
 BL-12 and BL-13 are temporarily retained as stable cross-reference IDs because existing designs, reviews and code
-comments cite them. Their scheduling status is authoritative in their rows: BL-13 / wave 5 is next; BL-12 / wave 4
+comments cite them. Their scheduling status is authoritative in their rows: BL-13 / wave 5 is built on test; BL-12 / wave 4
 follows it. Do not renumber either wave.
 
 | id | Item | Why / origin | Known so far |
@@ -23,4 +23,4 @@ follows it. Do not renumber either wave.
 | BL-10 | **Statistics rebuild** (`/dashboard/stats`), incl. manager turnaround from task timestamps | round 2 §7 non-goals; wave 3 task timestamps | Not scheduled. |
 | BL-11 | **"Transferred" marker and filter** in the manager's pipeline — e.g. a blue dot on deals that were moved to him, and a filter "presunuté" | Michal, 2026-09-19 (wave 3 review W3-R02, deactivation) | Data exists from wave 3 on (`DealOwnership`). |
 | BL-12 | **One task for price + návrh** — **scheduled after wave 5; wave 4 Part A is blocked**, see `01-salesrep/wave-4-proposal.md` §2 (both manager-work parts selectable in any order, partial delivery with ✓ per part) | Michal, 2026-09-19 | Wave 4 consumes wave 5's shipped remaining-to-send projection; it must not own client intent or recreate the combined send checklist. Re-review wave 4 after wave 5, then delete this row when the wave-4 design is final. |
-| BL-13 | **Wave 5 — NEXT: remake the price / návrh / email selection**; record what the client **asked for** vs. what we **sent anyway**, derive the combined remaining-to-send checklist, allow partial sending, and preserve correction/revival | Michal, 2026-09-19; implementation-order decision: stable order is wave-3 closeout → wave 5 → wave 4 | Active discussion draft: `context/features/01-salesrep/wave-5-proposal.md`. It must work with current wave-3 single-content tasks and becomes the prerequisite contract for wave 4. Asked and sent may differ on purpose; exact-price visibility remains derived from "Klient dostal". |
+| BL-13 | ~~Wave 5 — remake the price / návrh / email selection~~ **BUILT on the test branch 2026-09-20** | Michal, 2026-09-19 | Design: `01-salesrep/wave-5-proposal.md`; what shipped and what it still owes: `context/progress-tracker.md` ("Wave 5"). Delete this row after the production rollout (`context/domain/db-changes.md` §5). |
