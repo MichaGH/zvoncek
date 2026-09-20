@@ -11,7 +11,6 @@ import type { FollowUpNextKind, FollowUpOutcome } from "@/lib/domain/leadFlow";
 export type ClientReply = {
     key: string;
     label: string;
-    hint?: string; // druhý riadok na karte
     outcome: FollowUpOutcome;
     nextKind?: FollowUpNextKind; // predvolený ďalší krok
     days?: number; // predvyplnený dátum (obchodné dni sa neriešia, je to len návrh do poľa)
@@ -29,15 +28,16 @@ export type ClientReply = {
 };
 
 export const CLIENT_REPLIES: ClientReply[] = [
-    { key: "NOT_LOOKED_YET", label: "Ešte sa na to nepozreli", hint: "pošlem im to pripomenúť neskôr", outcome: "POSITIVE", nextKind: "CALL", days: 2, needsDate: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT"] },
-    { key: "WANTS_CHANGES", label: "Pozreli, chcú zmeny", hint: "návrh sa prerába", outcome: "POSITIVE", nextKind: "SEND_DESIGN", nextKinds: ["SEND_DESIGN", "CUSTOM", "CALL"] },
-    { key: "RESEND", label: "Neprišlo im to", hint: "poslať znova", outcome: "POSITIVE", nextKind: "SEND_EMAIL", nextKinds: ["SEND_EMAIL", "CALL", "WAITING_FOR_CLIENT"] },
-    { key: "WILL_CONTACT_US", label: "Ozvú sa sami", hint: "čakáme na nich", outcome: "POSITIVE", nextKind: "WAITING_FOR_CLIENT", days: 7, nextKinds: ["WAITING_FOR_CLIENT", "CALL"] },
-    { key: "DECIDING", label: "Majú poradu / rozhodujú sa", hint: "zavolať po porade", outcome: "POSITIVE", nextKind: "CALL", days: 7, needsDate: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT"] },
-    { key: "SOMEONE_ELSE", label: "Rieši to niekto iný", hint: "dovolať sa tomu pravému", outcome: "POSITIVE", nextKind: "CALL", days: 3, needsDate: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT"] },
-    { key: "PRICE_HIGH", label: "Cena je vysoká", hint: "treba sa dohodnúť", outcome: "POSITIVE", nextKind: "CALL", days: 3, needsDate: true, nextKinds: ["CALL", "SEND_QUOTE", "CUSTOM"] },
+    { key: "NOT_LOOKED_YET", label: "Ešte sa na to nepozreli", outcome: "POSITIVE", nextKind: "CALL", days: 2, needsDate: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT"] },
+    { key: "WANTS_CHANGES", label: "Pozreli, chcú zmeny", outcome: "POSITIVE", nextKind: "SEND_DESIGN", nextKinds: ["SEND_DESIGN", "CUSTOM", "CALL"] },
+    { key: "RESEND", label: "Neprišlo im to", outcome: "POSITIVE", nextKind: "SEND_EMAIL", nextKinds: ["SEND_EMAIL", "CALL", "WAITING_FOR_CLIENT"] },
+    { key: "WILL_CONTACT_US", label: "Ozvú sa sami", outcome: "POSITIVE", nextKind: "WAITING_FOR_CLIENT", days: 7, nextKinds: ["WAITING_FOR_CLIENT", "CALL"] },
+    { key: "DECIDING", label: "Majú poradu / rozhodujú sa", outcome: "POSITIVE", nextKind: "CALL", days: 7, needsDate: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT"] },
+    // Kľúč ostáva čitateľný v starej histórii, ale ako dnešná voľba bol nejasný (kto to rieši a čo má rep urobiť?).
+    { key: "SOMEONE_ELSE", label: "Rieši to niekto iný", outcome: "POSITIVE", nextKind: "CALL", days: 3, needsDate: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT"], group: "legacy" },
+    { key: "PRICE_HIGH", label: "Cena je vysoká", outcome: "POSITIVE", nextKind: "CALL", days: 3, needsDate: true, nextKinds: ["CALL", "SEND_QUOTE", "CUSTOM"] },
     // Obyčajná odpoveď (wave 3, D15): zapíše sa, ďalší krok vyberá obchodník; odovzdanie manažérovi je samostatná akcia.
-    { key: "WANTS_TO_ORDER", label: "Chcú objednať", hint: "odovzdať manažérovi", outcome: "WANTS_TO_ORDER", nextKind: "CALL", days: 1, needsDate: true, nextKinds: ["CALL", "CUSTOM"] },
+    { key: "WANTS_TO_ORDER", label: "Chcú objednať", outcome: "WANTS_TO_ORDER", nextKind: "CALL", days: 1, needsDate: true, nextKinds: ["CALL", "CUSTOM"] },
     // Nahradené cestou „Chcú niečo…" (wave 5): kľúče ostávajú platné pre staré záznamy a testy, v ponuke nie sú.
     { key: "WANTS_INFO", label: "Chcú info (o nás, cenník)", outcome: "POSITIVE", nextKind: "SEND_EMAIL", group: "legacy" },
     { key: "WANTS_QUOTE", label: "Chcú konkrétnu cenu", outcome: "WANTS_QUOTE", terminal: true, asks: ["PRICE"], group: "legacy" },

@@ -1,10 +1,38 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Lock } from "lucide-react";
+import {
+    ArrowLeft,
+    BadgeEuro,
+    CalendarClock,
+    Check,
+    ChevronRight,
+    CircleEllipsis,
+    Clock3,
+    EyeOff,
+    FileText,
+    Handshake,
+    Info,
+    Lock,
+    Mail,
+    MailWarning,
+    MessageCircle,
+    MessageSquare,
+    Moon,
+    PackageCheck,
+    Palette,
+    PanelsTopLeft,
+    Phone,
+    PhoneMissed,
+    ReceiptText,
+    RefreshCw,
+    ScanSearch,
+    Send,
+    type LucideIcon,
+} from "lucide-react";
 import type { CallOutcome, DealTaskContent, DealTaskType, LeadStatus, NextActionKind, RequestContent } from "@/app/generated/prisma/enums";
 import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { Button } from "@/components/ui/button";
@@ -67,17 +95,19 @@ export type InteractionTarget = {
 };
 
 type Step = "contact" | "reply" | "wants" | "next" | "snooze" | "lost" | "sms";
+type ReplyChoice = "WANTS" | "OTHER" | string;
 
-// Karta výberu – rovnaký jazyk ako „Požiadať manažéra" (Michal si ho vyžiadal 2026-09-20). Na telefóne sú karty
-// pod sebou v jednom stĺpci, na PC v dvoch.
+// Karta výberu – rovnaký vizuálny jazyk ako „Požiadať manažéra": ikona, jeden jasný názov, krátke vysvetlenie a
+// viditeľný stav výberu. Na telefóne je karta horizontálna a ľahko trafiteľná palcom; na PC sa skladajú po dve.
 const CARD =
-    "flex min-h-[64px] w-full flex-col items-start justify-center gap-0.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-const CARD_ON = "border-primary bg-primary/5 font-medium text-foreground ring-1 ring-primary";
-const CARD_OFF = "hover:bg-muted/60";
+    "group flex min-h-[72px] w-full items-start gap-3 rounded-xl border bg-background px-3.5 py-3 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+const CARD_ON = "border-primary/70 bg-primary/[0.06] text-foreground shadow-sm ring-1 ring-primary/20";
+const CARD_OFF = "hover:border-primary/30 hover:bg-muted/50";
 
 function OptionCard({
     label,
     hint,
+    icon: Icon,
     on = false,
     disabled,
     onClick,
@@ -85,6 +115,7 @@ function OptionCard({
 }: {
     label: string;
     hint?: string | null;
+    icon?: LucideIcon;
     on?: boolean;
     disabled?: boolean;
     onClick: () => void;
@@ -99,10 +130,89 @@ function OptionCard({
             onClick={onClick}
             className={cn(CARD, on ? CARD_ON : CARD_OFF, disabled && "pointer-events-none opacity-50")}
         >
-            <span>{label}</span>
-            {hint && <span className="text-xs font-normal text-muted-foreground">{hint}</span>}
+            {Icon && (
+                <span className={cn("mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", on ? "bg-primary/12 text-primary" : "bg-muted text-muted-foreground")}>
+                    <Icon className="h-4.5 w-4.5" />
+                </span>
+            )}
+            <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium leading-5">{label}</span>
+                {hint && <span className="mt-0.5 block text-xs font-normal leading-4 text-muted-foreground">{hint}</span>}
+            </span>
+            {role && (
+                <span
+                    aria-hidden
+                    className={cn(
+                        "mt-1 flex h-5 w-5 shrink-0 items-center justify-center border transition-colors",
+                        role === "radio" ? "rounded-full" : "rounded-md",
+                        on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/30 bg-background",
+                    )}
+                >
+                    {on && <Check className="h-3.5 w-3.5" />}
+                </span>
+            )}
         </button>
     );
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
+    return <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{children}</p>;
+}
+
+function InfoPanel({ icon: Icon = Info, children, tone = "neutral" }: { icon?: LucideIcon; children: ReactNode; tone?: "neutral" | "warning" }) {
+    return (
+        <div
+            className={cn(
+                "flex items-start gap-3 rounded-xl p-3 text-sm",
+                tone === "warning" ? "border border-amber-500/35 bg-amber-500/10" : "bg-muted/55",
+            )}
+        >
+            <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", tone === "warning" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground")} />
+            <div className="min-w-0 flex-1">{children}</div>
+        </div>
+    );
+}
+
+const REQUEST_CARD: Record<RequestContent, { icon: LucideIcon; hint: string }> = {
+    INFO: { icon: PanelsTopLeft, hint: "Kto sme a ukážky našej práce" },
+    PRICELIST: { icon: ReceiptText, hint: "Všeobecný prehľad cien" },
+    PRICE: { icon: BadgeEuro, hint: "Cena pripravená pre tohto klienta" },
+    DESIGN: { icon: Palette, hint: "Grafický návrh webu" },
+    REVIEW: { icon: ScanSearch, hint: "Čo sa dá zlepšiť na ich webe" },
+};
+
+const REPLY_ICON: Record<string, LucideIcon> = {
+    NOT_LOOKED_YET: EyeOff,
+    WANTS_CHANGES: RefreshCw,
+    RESEND: MailWarning,
+    WILL_CONTACT_US: Clock3,
+    DECIDING: CalendarClock,
+    PRICE_HIGH: BadgeEuro,
+    WANTS_TO_ORDER: Handshake,
+};
+
+const NEXT_ICON: Record<FollowUpNextKind, LucideIcon> = {
+    CALL: Phone,
+    WAITING_FOR_CLIENT: Clock3,
+    SEND_QUOTE: BadgeEuro,
+    SEND_DESIGN: Palette,
+    SEND_EMAIL: Mail,
+    CUSTOM: CircleEllipsis,
+};
+
+function nextStepCopy(kind: FollowUpNextKind, reply: string | null): { label: string; hint: string } {
+    if (kind === "SEND_DESIGN" && reply === "WANTS_CHANGES") {
+        return { label: "Poslať upravený návrh", hint: "Po úpravách ho pošli klientovi znova" };
+    }
+    const hints: Record<FollowUpNextKind, string> = {
+        CALL: "Vyber deň ďalšieho hovoru",
+        WAITING_FOR_CLIENT: "Nastav deň, keď skontroluješ, či sa ozvali",
+        SEND_QUOTE: "Odoslať konkrétnu cenu klientovi",
+        SEND_DESIGN: "Návrh je rozpracovaný, čas sa počíta od začiatku",
+        SEND_EMAIL: "Odoslať info, cenník alebo rozbor webu",
+        CUSTOM: "Napíš vlastný ďalší krok",
+    };
+    return { label: NEXT_ACTION_LABEL[kind], hint: hints[kind] };
 }
 type Contact = "ANSWERED" | "NO_ANSWER" | "REPLIED" | "SMS" | "NONE";
 
@@ -195,6 +305,7 @@ export default function InteractionSheet({
     const [step, setStep] = useState<Step>(replan ? "next" : "contact");
     const [contact, setContact] = useState<Contact>(replan ? "NONE" : "ANSWERED");
     const [reply, setReply] = useState<string | null>(null);
+    const [replyChoice, setReplyChoice] = useState<ReplyChoice | null>(null);
     const [kind, setKind] = useState<FollowUpNextKind>(replan?.kind ?? "CALL");
     const [date, setDate] = useState(replan?.date ?? "");
     const [time, setTime] = useState(replan?.time ?? "");
@@ -207,6 +318,7 @@ export default function InteractionSheet({
     const [toldAmount, setToldAmount] = useState(target?.price != null ? String(target.price) : "");
     const [toldNote, setToldNote] = useState<string | null>(null); // null = neupravené (pri tej istej sume ostane rozpis)
     const [asked, setAsked] = useState<RequestContent[]>([]);
+    const [askedDraft, setAskedDraft] = useState<RequestContent[]>([]);
     const [allSteps, setAllSteps] = useState(false);
     const [overlap, setOverlap] = useState<"KEEP_OPEN" | "CANCEL_TASK" | null>(null);
     const [useReturnedPrice, setUseReturnedPrice] = useState(true);
@@ -251,6 +363,8 @@ export default function InteractionSheet({
         ? [...FOLLOW_UP_NEXT_KINDS]
         : asked.length
           ? ([...new Set([wantedKind, "CALL", "WAITING_FOR_CLIENT", "CUSTOM"])].filter(Boolean) as FollowUpNextKind[])
+          : phonePrice
+            ? ["SEND_QUOTE", "CALL", "WAITING_FOR_CLIENT", "CUSTOM"]
           : (replyOption?.nextKinds ?? [...FOLLOW_UP_NEXT_KINDS]);
     const shownSteps = allowedKinds
         .map((k) => NEXT_STEPS.find((o) => o.kind === k))
@@ -318,6 +432,7 @@ export default function InteractionSheet({
         outcome: FollowUpOutcome,
         label: string,
         extra: { schedule?: Schedule | null; nextKind?: FollowUpNextKind; lostReason?: string; reply?: string | null; stepNote?: string | null } = {},
+        askedForContact: RequestContent[] = asked,
     ) {
         const closing = outcome === "NOT_INTERESTED" || outcome === "BAD_NUMBER";
         const fact = locked && !cancelling && !closing;
@@ -341,7 +456,9 @@ export default function InteractionSheet({
                             : {}),
                         ...(dismiss && !closing ? { dismiss } : {}),
                         // Čo klient v tomto kontakte pýtal – zapíše sa aj pri zamknutom kroku, je to fakt o klientovi.
-                        ...(asked.length && !closing && (contact === "ANSWERED" || contact === "REPLIED") ? { asked } : {}),
+                        ...(askedForContact.length && !closing && (contact === "ANSWERED" || contact === "REPLIED")
+                            ? { asked: askedForContact }
+                            : {}),
                         ...(fact ? { reply: extra.reply ?? null } : extra),
                     });
                     handle(r, `Zaznamenané: ${label}`, run, offerHandover ? () => onAsk?.("HANDOVER") : undefined);
@@ -365,11 +482,11 @@ export default function InteractionSheet({
     }
 
     // Zamknutý krok: kontakt sa uloží hneď, bez obrazovky ďalšieho kroku.
-    function saveFact(outcome: FollowUpOutcome, label: string, replyKey: string | null = null) {
-        send(outcome, `${label} (krok čaká na úlohu)`, { reply: replyKey });
+    function saveFact(outcome: FollowUpOutcome, label: string, replyKey: string | null = null, askedForContact: RequestContent[] = asked) {
+        send(outcome, `${label} (krok čaká na úlohu)`, { reply: replyKey }, askedForContact);
     }
 
-    function pickReply(key: string) {
+    function continueWithReply(key: string) {
         const option = CLIENT_REPLIES.find((r) => r.key === key);
         if (!option) return;
         setReply(key);
@@ -391,7 +508,78 @@ export default function InteractionSheet({
         setStep("next");
     }
 
-    const big = "h-12 w-full justify-start text-base";
+    function chooseReply(choice: ReplyChoice) {
+        setReplyChoice(choice);
+        setAllSteps(false);
+        if (choice === "WANTS") {
+            setReply(null);
+            return;
+        }
+        setAsked([]);
+        setAskedDraft([]);
+        setReply(choice === "OTHER" ? null : choice);
+    }
+
+    function continueReply() {
+        if (replyChoice === "WANTS") {
+            setAskedDraft(asked);
+            setStep("wants");
+            return;
+        }
+        if (replyChoice === "OTHER") {
+            if (factOnly) saveFact("POSITIVE", CONTACT_LABEL[contact]);
+            else {
+                if (phonePrice) setKind("SEND_QUOTE");
+                setStepNote(null);
+                setDate("");
+                setTime("");
+                setStep("next");
+            }
+            return;
+        }
+        if (replyChoice) {
+            continueWithReply(replyChoice);
+            return;
+        }
+        // Cena môže byť jediný výsledok hovoru. Predtým po jej vyplnení nebolo kam pokračovať (F4).
+        if (phonePrice) {
+            setReply(null);
+            if (factOnly) saveFact("POSITIVE", "Povedaná cena");
+            else {
+                setKind("SEND_QUOTE");
+                setStepNote(null);
+                setDate("");
+                setTime("");
+                setStep("next");
+            }
+        }
+    }
+
+    function backToContact() {
+        setReply(null);
+        setReplyChoice(null);
+        setAsked([]);
+        setAskedDraft([]);
+        setToldPrice(false);
+        setOverlap(null);
+        setCancelReason("");
+        setAllSteps(false);
+        setStep("contact");
+    }
+
+    function startContact(nextContact: Contact, nextStep: Step) {
+        setContact(nextContact);
+        setReply(null);
+        setReplyChoice(null);
+        setAsked([]);
+        setAskedDraft([]);
+        setToldPrice(false);
+        setOverlap(null);
+        setCancelReason("");
+        setAllSteps(false);
+        setStep(nextStep);
+    }
+
     const canWork = caps.work;
     const taskLabel = D.task
         ? D.task.type === "HANDOVER"
@@ -519,150 +707,184 @@ export default function InteractionSheet({
                         )}
 
                         {step === "contact" && (
-                            <>
-                                <p className="px-1 pb-1 text-sm text-muted-foreground">Čo sa stalo?</p>
-                                <Button
-                                    variant="outline"
-                                    className={big}
-                                    disabled={pending || !canWork}
-                                    onClick={() => {
-                                        setContact("ANSWERED");
-                                        setStep("reply");
-                                    }}
-                                >
-                                    ✅ Dovolal/a som sa…
-                                </Button>
-                                <Button
-                                    variant="outline"
-                                    className={big}
-                                    disabled={pending || !canWork}
-                                    onClick={() => {
-                                        setContact("NO_ANSWER");
-                                        setReply(null);
-                                        if (locked) {
-                                            setStep("sms");
-                                            return;
-                                        }
-                                        setKind("CALL");
-                                        setStepNote(null);
-                                        setDate("");
-                                        setTime("");
-                                        setStep("next");
-                                    }}
-                                >
-                                    📵 Nezdvihli…
-                                </Button>
-                                <Button
-                                    variant="outline"
-                                    className={big}
-                                    disabled={pending || !canWork}
-                                    onClick={() => {
-                                        setContact("REPLIED");
-                                        setStep("reply");
-                                    }}
-                                >
-                                    ✉️ Odpísali / ozvali sa…
-                                </Button>
-                                {(!locked || canCancelAndChange) && (
+                            <div className="space-y-5">
+                                <div className="space-y-2">
+                                    <SectionLabel>Kontakt s klientom</SectionLabel>
+                                    <div className="grid gap-2 md:grid-cols-2">
+                                        <OptionCard
+                                            label="Dovolal/a som sa"
+                                            hint="Hovor prebehol – zapíš, čo povedali"
+                                            icon={Phone}
+                                            disabled={pending || !canWork}
+                                            onClick={() => startContact("ANSWERED", "reply")}
+                                        />
+                                        <OptionCard
+                                            label="Nezdvihli"
+                                            hint="Zaznamenať pokus a naplánovať ďalší"
+                                            icon={PhoneMissed}
+                                            disabled={pending || !canWork}
+                                            onClick={() => {
+                                                startContact("NO_ANSWER", locked ? "sms" : "next");
+                                                if (!locked) {
+                                                    setKind("CALL");
+                                                    setStepNote(null);
+                                                    setDate("");
+                                                    setTime("");
+                                                }
+                                            }}
+                                        />
+                                        <OptionCard
+                                            label="Odpísali / ozvali sa"
+                                            hint="Správa, email alebo spätný kontakt"
+                                            icon={MessageCircle}
+                                            disabled={pending || !canWork}
+                                            onClick={() => startContact("REPLIED", "reply")}
+                                        />
+                                        <OptionCard
+                                            label="Poslali sme SMS"
+                                            hint="Uložiť text správy a ďalší krok"
+                                            icon={MessageSquare}
+                                            disabled={pending || !canWork}
+                                            onClick={() => startContact("SMS", locked ? "sms" : "next")}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <SectionLabel>Odoslanie a plán</SectionLabel>
+                                    <div className="grid gap-2 md:grid-cols-2">
+                                        {onRecordOffer && (
+                                            <OptionCard
+                                                label="Poslali sme ponuku"
+                                                hint="Zaznamenať, čo klient dostal"
+                                                icon={Send}
+                                                disabled={pending || !canWork}
+                                                onClick={onRecordOffer}
+                                            />
+                                        )}
+                                        {(!locked || canCancelAndChange) && (
+                                            <OptionCard
+                                                label="Iba zmeniť ďalší krok"
+                                                hint={locked ? "Bez kontaktu – zruší otvorenú úlohu" : "Bez nového kontaktu s klientom"}
+                                                icon={CalendarClock}
+                                                disabled={pending || !canWork}
+                                                onClick={() => startContact("NONE", "next")}
+                                            />
+                                        )}
+                                        {(!locked || canCancelAndChange) && (
+                                            <OptionCard
+                                                label="Ozvať sa o pár mesiacov"
+                                                hint={locked ? "Odloží obchod a zruší otvorenú úlohu" : "Odložiť obchod na neskôr"}
+                                                icon={Moon}
+                                                disabled={pending || !canWork}
+                                                onClick={() => startContact("ANSWERED", "snooze")}
+                                            />
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
                                     <Button
-                                        variant="outline"
-                                        className={big}
+                                        variant="destructive"
+                                        className="h-11 w-full justify-start gap-2"
                                         disabled={pending || !canWork}
-                                        onClick={() => {
-                                            setContact("NONE");
-                                            setReply(null);
-                                            setStep("next");
-                                        }}
+                                        onClick={() => startContact("ANSWERED", "lost")}
                                     >
-                                        🗓️ Bez kontaktu – len naplánovať{locked ? " (zruší úlohu)" : ""}…
+                                        <span className="text-base">×</span>
+                                        Nemajú záujem / zlé číslo…
                                     </Button>
-                                )}
-                                <div className="my-2 h-px bg-border" />
-                                {onRecordOffer && (
-                                    <Button variant="outline" className={big} disabled={pending || !canWork} onClick={onRecordOffer}>
-                                        📨 Poslali sme ponuku…
+                                </div>
+
+                                <div className="rounded-xl bg-muted/45 p-2">
+                                    {caps.askManager && isOwner && !locked && onAsk && (
+                                        <Button variant="ghost" className="h-10 w-full justify-between" disabled={pending} onClick={() => onAsk("HELP")}>
+                                            <span className="flex items-center gap-2"><Handshake className="h-4 w-4" />Požiadať manažéra</span>
+                                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                        </Button>
+                                    )}
+                                    <Button asChild variant="ghost" className="h-10 w-full justify-between">
+                                        <Link href={detailHref}>
+                                            <span className="flex items-center gap-2"><FileText className="h-4 w-4" />Otvoriť detail</span>
+                                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                        </Link>
                                     </Button>
-                                )}
-                                <Button
-                                    variant="outline"
-                                    className={big}
-                                    disabled={pending || !canWork}
-                                    onClick={() => {
-                                        setContact("SMS");
-                                        setReply(null);
-                                        if (locked) setStep("sms");
-                                        else setStep("next");
-                                    }}
-                                >
-                                    💬 Poslali sme SMS…
-                                </Button>
-                                <div className="my-2 h-px bg-border" />
-                                {(!locked || canCancelAndChange) && (
-                                    <Button
-                                        variant="outline"
-                                        className={big}
-                                        disabled={pending || !canWork}
-                                        onClick={() => {
-                                            setContact("ANSWERED");
-                                            setStep("snooze");
-                                        }}
-                                    >
-                                        💤 Ozvať sa o pár mesiacov{locked ? " (zruší úlohu)" : ""}…
-                                    </Button>
-                                )}
-                                <Button
-                                    variant="destructive"
-                                    className="h-12 w-full justify-start text-base"
-                                    disabled={pending || !canWork}
-                                    onClick={() => {
-                                        setContact("ANSWERED");
-                                        setStep("lost");
-                                    }}
-                                >
-                                    ✕ Nemajú záujem…
-                                </Button>
-                                <div className="my-2 h-px bg-border" />
-                                {caps.askManager && isOwner && !locked && onAsk && (
-                                    <Button variant="ghost" className="w-full justify-start" disabled={pending} onClick={() => onAsk("HELP")}>
-                                        Požiadať manažéra…
-                                    </Button>
-                                )}
-                                <Button asChild variant="ghost" className="w-full justify-start">
-                                    <Link href={detailHref}>Otvoriť detail →</Link>
-                                </Button>
-                            </>
+                                </div>
+                            </div>
                         )}
 
                         {step === "reply" && (
-                            <>
+                            <div className="space-y-5">
+                                <div className="space-y-2">
+                                    <SectionLabel>Čo povedali</SectionLabel>
+                                    <div className="grid gap-2 md:grid-cols-2" role="radiogroup" aria-label="Čo povedali">
+                                        <OptionCard
+                                            label="Chcú niečo poslať"
+                                            hint={
+                                                asked.length
+                                                    ? asked.map((c) => REQUEST_CONTENT_LABEL[c]).join(" · ")
+                                                    : "Info, cenník, cenu, návrh alebo rozbor"
+                                            }
+                                            icon={PackageCheck}
+                                            role="radio"
+                                            on={replyChoice === "WANTS"}
+                                            disabled={pending || blockedHere}
+                                            onClick={() => chooseReply("WANTS")}
+                                        />
+                                        {FOLLOW_UP_REPLIES.map((r) => (
+                                            <OptionCard
+                                                key={r.key}
+                                                label={r.label}
+                                                icon={REPLY_ICON[r.key] ?? MessageCircle}
+                                                role="radio"
+                                                on={replyChoice === r.key}
+                                                disabled={pending || blockedHere}
+                                                onClick={() => chooseReply(r.key)}
+                                            />
+                                        ))}
+                                        <OptionCard
+                                            label="Iná odpoveď"
+                                            hint="Zapíšem poznámku a zvolím ďalší krok"
+                                            icon={CircleEllipsis}
+                                            role="radio"
+                                            on={replyChoice === "OTHER"}
+                                            disabled={pending || blockedHere}
+                                            onClick={() => chooseReply("OTHER")}
+                                        />
+                                    </div>
+                                </div>
+
                                 {contact === "ANSWERED" && (
-                                    <div className="space-y-2 rounded-lg border p-3">
-                                        <label className="flex items-center gap-3 text-sm">
-                                            <Checkbox data-vaul-no-drag checked={toldPrice} onCheckedChange={(v) => setToldPrice(v === true)} />
-                                            <span>
-                                                Povedal/a som cenu
-                                                {toldPrice && D.price != null && toldAmount === String(D.price) ? ` ${formatMoney(D.price)}` : ""}
-                                            </span>
-                                        </label>
+                                    <div className="space-y-3 rounded-xl bg-muted/55 p-3">
+                                        <SectionLabel>Cena v hovore</SectionLabel>
+                                        <OptionCard
+                                            label="Povedal/a som konkrétnu cenu"
+                                            hint="Zapíše sa, že klient túto sumu už pozná"
+                                            icon={BadgeEuro}
+                                            role="checkbox"
+                                            on={toldPrice}
+                                            disabled={pending}
+                                            onClick={() => setToldPrice((v) => !v)}
+                                        />
                                         {toldPrice && (
-                                            <>
+                                            <div className="space-y-2">
                                                 <Input
                                                     data-vaul-no-drag
                                                     inputMode="decimal"
                                                     placeholder="Aká suma zaznela (€)"
                                                     value={toldAmount}
                                                     onChange={(e) => setToldAmount(e.target.value)}
-                                                    className="text-[16px]"
+                                                    className="h-11 bg-background text-[16px]"
                                                 />
                                                 <Textarea
                                                     data-vaul-no-drag
-                                                    placeholder="Rozpis, ak zaznel (nepovinné)"
+                                                    placeholder="Rozpis ceny, ak zaznel (nepovinné)"
                                                     value={toldNote ?? (D.price != null && toldAmount === String(D.price) ? (D.priceNote ?? "") : "")}
                                                     onChange={(e) => setToldNote(e.target.value)}
-                                                    className="min-h-[52px] text-[16px]"
+                                                    className="min-h-[64px] bg-background text-[16px]"
                                                 />
+                                                {!toldValid && <p className="text-xs text-destructive">Zadaj platnú sumu.</p>}
                                                 {priceItem?.price && phonePrice && moneyToString(phonePrice.amount) === priceItem.price.amount && (
-                                                    <label className="flex items-center gap-3 text-sm">
+                                                    <label className="flex items-center gap-3 rounded-lg bg-background p-3 text-sm">
                                                         <Checkbox
                                                             data-vaul-no-drag
                                                             checked={useReturnedPrice}
@@ -672,281 +894,415 @@ export default function InteractionSheet({
                                                     </label>
                                                 )}
                                                 {priceTask && (
-                                                    <div className="space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm">
-                                                        <p>{D.task?.assignee} práve robí cenu. Čo s úlohou?</p>
-                                                        <label className="flex items-center gap-2">
-                                                            <input type="radio" checked={overlap === "KEEP_OPEN"} onChange={() => setOverlap("KEEP_OPEN")} />
-                                                            Úloha ostáva otvorená
-                                                        </label>
-                                                        {canCancelAndChange && (
+                                                    <InfoPanel icon={Lock} tone="warning">
+                                                        <p className="font-medium">{D.task?.assignee} práve pripravuje cenu.</p>
+                                                        <div className="mt-2 space-y-2">
                                                             <label className="flex items-center gap-2">
-                                                                <input
-                                                                    type="radio"
-                                                                    checked={overlap === "CANCEL_TASK"}
-                                                                    onChange={() => setOverlap("CANCEL_TASK")}
-                                                                />
-                                                                Už to netreba – zrušiť úlohu
+                                                                <input type="radio" checked={overlap === "KEEP_OPEN"} onChange={() => setOverlap("KEEP_OPEN")} />
+                                                                Úloha ostáva otvorená
                                                             </label>
-                                                        )}
-                                                    </div>
+                                                            {canCancelAndChange && (
+                                                                <label className="flex items-center gap-2">
+                                                                    <input
+                                                                        type="radio"
+                                                                        checked={overlap === "CANCEL_TASK"}
+                                                                        onChange={() => setOverlap("CANCEL_TASK")}
+                                                                    />
+                                                                    Už ju netreba – zrušiť úlohu
+                                                                </label>
+                                                            )}
+                                                        </div>
+                                                    </InfoPanel>
                                                 )}
-                                            </>
+                                            </div>
                                         )}
                                     </div>
                                 )}
+
                                 {cancelBox}
-                                <p className="px-1 pb-1 text-sm text-muted-foreground">Čo povedali?</p>
-                                {/* Wave 5: „chcú niečo" je vlastná cesta – zapíše požiadavku klienta, nie len výsledok
-                                    hovoru. Preto tu už nie je „chcú cenu / návrh / info" ako ďalšia odpoveď. */}
-                                <OptionCard
-                                    label="Chcú niečo…"
-                                    hint="cena, návrh, cenník, info, rozbor webu"
-                                    on={asked.length > 0}
-                                    disabled={pending || blockedHere}
-                                    onClick={() => setStep("wants")}
-                                />
-                                <div className="grid gap-2 md:grid-cols-2">
-                                    {FOLLOW_UP_REPLIES.map((r) => (
-                                        <OptionCard
-                                            key={r.key}
-                                            label={r.label}
-                                            hint={r.hint}
-                                            role="radio"
-                                            on={reply === r.key}
-                                            disabled={pending || blockedHere}
-                                            onClick={() => pickReply(r.key)}
-                                        />
-                                    ))}
+
+                                <div className="space-y-2">
+                                    <SectionLabel>Poznámka z kontaktu</SectionLabel>
+                                    <Textarea
+                                        data-vaul-no-drag
+                                        placeholder="Dôležité detaily z rozhovoru (nepovinné)"
+                                        value={note}
+                                        onChange={(e) => setNote(e.target.value)}
+                                        className="min-h-[72px] text-[16px] md:text-sm"
+                                    />
                                 </div>
+
                                 {factOnly && ackBox}
-                                <Button
-                                    variant="ghost"
-                                    className="w-full justify-start"
-                                    disabled={pending || overlapMissing || (toldPrice && !toldValid)}
-                                    onClick={() => {
-                                        setReply(null);
-                                        if (factOnly) saveFact("POSITIVE", CONTACT_LABEL[contact]);
-                                        else setStep("next");
-                                    }}
-                                >
-                                    {factOnly ? "Iné – len zapísať kontakt" : "Iné – rovno vybrať ďalší krok…"}
-                                </Button>
-                                <Button variant="ghost" className="w-full" onClick={() => setStep("contact")}>
-                                    ← Späť
-                                </Button>
-                            </>
+
+                                <div className="space-y-2">
+                                    <Button
+                                        className="h-12 w-full text-base"
+                                        disabled={pending || blockedHere || (!replyChoice && !phonePrice)}
+                                        onClick={continueReply}
+                                    >
+                                        {pending
+                                            ? "Ukladám…"
+                                            : replyChoice === "WANTS"
+                                              ? "Vybrať, čo chcú"
+                                              : factOnly
+                                                ? "Uložiť kontakt"
+                                                : "Pokračovať"}
+                                        {!pending && <ChevronRight className="ml-1 h-4 w-4" />}
+                                    </Button>
+                                    {!replyChoice && !phonePrice && (
+                                        <p className="text-center text-xs text-muted-foreground">Vyber odpoveď alebo zapíš povedanú cenu.</p>
+                                    )}
+                                    <Button variant="ghost" className="w-full" onClick={backToContact}>
+                                        <ArrowLeft className="mr-2 h-4 w-4" /> Späť
+                                    </Button>
+                                </div>
+                            </div>
                         )}
 
                         {/* Wave 5: čo klient chce – prepínateľné karty a jedno „Pokračovať". Predtým to boli
                             zaškrtávacie políčka bez potvrdenia, takže sa nedalo pokračovať (Michal, 2026-09-20). */}
                         {step === "wants" && (
-                            <>
-                                <p className="px-1 pb-1 text-sm text-muted-foreground">Čo chcú? (môže byť viac)</p>
-                                <div className="grid gap-2 md:grid-cols-2">
-                                    {REQUEST_CONTENTS.map((content) => (
-                                        <OptionCard
-                                            key={content}
-                                            label={REQUEST_CONTENT_LABEL[content]}
-                                            role="checkbox"
-                                            on={asked.includes(content)}
-                                            disabled={pending}
-                                            onClick={() =>
-                                                setAsked((cur) => (cur.includes(content) ? cur.filter((c) => c !== content) : [...cur, content]))
-                                            }
-                                        />
-                                    ))}
+                            <div className="space-y-5">
+                                <div className="space-y-2">
+                                    <SectionLabel>Čo chcú poslať</SectionLabel>
+                                    <InfoPanel icon={PackageCheck}>Môžeš vybrať viac možností. Ďalší krok sa z nich predvyplní automaticky.</InfoPanel>
+                                    <div className="grid gap-2 md:grid-cols-2">
+                                        {REQUEST_CONTENTS.map((content) => (
+                                            <OptionCard
+                                                key={content}
+                                                label={REQUEST_CONTENT_LABEL[content]}
+                                                hint={REQUEST_CARD[content].hint}
+                                                icon={REQUEST_CARD[content].icon}
+                                                role="checkbox"
+                                                on={askedDraft.includes(content)}
+                                                disabled={pending}
+                                                onClick={() =>
+                                                    setAskedDraft((cur) => (cur.includes(content) ? cur.filter((c) => c !== content) : [...cur, content]))
+                                                }
+                                            />
+                                        ))}
+                                    </div>
                                 </div>
+
+                                <div className="space-y-2">
+                                    <SectionLabel>Poznámka z kontaktu</SectionLabel>
+                                    <Textarea
+                                        data-vaul-no-drag
+                                        placeholder="Dôležité detaily z rozhovoru (nepovinné)"
+                                        value={note}
+                                        onChange={(e) => setNote(e.target.value)}
+                                        className="min-h-[72px] text-[16px] md:text-sm"
+                                    />
+                                </div>
+
                                 {factOnly && ackBox}
-                                <Button
-                                    className="h-12 w-full"
-                                    disabled={pending || asked.length === 0}
-                                    onClick={() => {
-                                        if (asked.length === 0) return;
-                                        setReply(null);
-                                        if (factOnly) {
-                                            saveFact("POSITIVE", `Chcú ${asked.map((c) => REQUEST_CONTENT_LABEL[c].toLowerCase()).join(" + ")}`);
-                                            return;
-                                        }
-                                        // Krok vyplýva z toho, čo chcú – tu sa už neponúka „Poslať …" druhýkrát.
-                                        setKind(wantedKind ?? "CALL");
-                                        setStepNote(null);
-                                        setDate("");
-                                        setTime("");
-                                        setStep("next");
-                                    }}
-                                >
-                                    {asked.length === 0 ? "Vyber, čo chcú" : "Pokračovať"}
-                                </Button>
-                                <Button variant="ghost" className="w-full" onClick={() => setStep("reply")}>
-                                    ← Späť
-                                </Button>
-                            </>
-                        )}
 
-                        {step === "sms" && (
-                            <>
-                                <p className="px-1 pb-1 text-sm text-muted-foreground">
-                                    {CONTACT_LABEL[contact]} – zapíše sa kontakt, krok ostáva zamknutý.
-                                </p>
-                                {ackBox}
-                                <Button
-                                    className="h-12 w-full"
-                                    disabled={pending || (contact === "SMS" && !note.trim())}
-                                    onClick={() => saveFact(contact === "NO_ANSWER" ? "NO_ANSWER" : "POSITIVE", CONTACT_LABEL[contact])}
-                                >
-                                    {contact === "SMS" && !note.trim() ? "Napíš text SMS" : "Uložiť"}
-                                </Button>
-                                <Button variant="ghost" className="w-full" onClick={() => setStep("contact")}>
-                                    ← Späť
-                                </Button>
-                            </>
-                        )}
-
-                        {step === "next" && (
-                            <>
-                                {cancelBox}
-                                <p className="px-1 pb-1 text-sm text-muted-foreground">
-                                    {CONTACT_LABEL[contact]}
-                                    {reply ? ` · ${CLIENT_REPLIES.find((r) => r.key === reply)?.label}` : ""}
-                                    {asked.length ? ` · chcú ${asked.map((c) => REQUEST_CONTENT_LABEL[c].toLowerCase()).join(" + ")}` : ""} → aký je
-                                    ďalší krok?
-                                </p>
-                                {/* Len kroky, ktoré po tejto odpovedi dávajú zmysel – zvyšok cez „Iný krok…". */}
-                                <div className="grid gap-2 md:grid-cols-2">
-                                    {shownSteps.map((o) => (
-                                        <OptionCard
-                                            key={o.kind}
-                                            role="radio"
-                                            label={NEXT_ACTION_LABEL[o.kind as NextActionKind]}
-                                            hint={o.hint}
-                                            on={kind === o.kind}
-                                            disabled={pending}
-                                            onClick={() => {
-                                                setKind(o.kind as FollowUpNextKind);
-                                                setStepNote(null);
-                                            }}
-                                        />
-                                    ))}
-                                </div>
-                                {shownSteps.length < NEXT_STEPS.length && !allSteps && (
-                                    <Button variant="ghost" className="w-full justify-start" onClick={() => setAllSteps(true)}>
-                                        Iný krok…
+                                <div className="space-y-2">
+                                    <Button
+                                        className="h-12 w-full text-base"
+                                        disabled={pending || askedDraft.length === 0}
+                                        onClick={() => {
+                                            if (askedDraft.length === 0) return;
+                                            const confirmed = [...askedDraft];
+                                            setAsked(confirmed);
+                                            setReply(null);
+                                            setReplyChoice("WANTS");
+                                            if (factOnly) {
+                                                saveFact(
+                                                    "POSITIVE",
+                                                    `Chcú ${confirmed.map((c) => REQUEST_CONTENT_LABEL[c].toLowerCase()).join(" + ")}`,
+                                                    null,
+                                                    confirmed,
+                                                );
+                                                return;
+                                            }
+                                            const nextWanted = stepKindForOutstanding([...(D.outstanding ?? []), ...confirmed]);
+                                            setKind((nextWanted as FollowUpNextKind | null) ?? "CALL");
+                                            setStepNote(null);
+                                            setDate("");
+                                            setTime("");
+                                            setStep("next");
+                                        }}
+                                    >
+                                        {askedDraft.length === 0 ? "Vyber, čo chcú" : factOnly ? "Pokračovať k uloženiu" : "Pokračovať"}
+                                        <ChevronRight className="ml-1 h-4 w-4" />
                                     </Button>
-                                )}
-                                <DateTimeInput date={date} time={time} onDate={setDate} onTime={setTime} />
-                                <p className="px-1 text-xs text-muted-foreground">
-                                    {stepOption?.hint ??
-                                        (stepOption?.date === "today"
-                                            ? "Prázdny dátum = dnes."
-                                            : "Dátum je nepovinný.")}
-                                    {contact === "NO_ANSWER" && !date ? " Prázdny dátum pri „Zavolať“ = nasledujúci pracovný deň." : ""}
-                                </p>
-                                <Input
-                                    data-vaul-no-drag
-                                    value={shownStepNote}
-                                    onChange={(e) => setStepNote(e.target.value)}
-                                    placeholder="Poznámka ku kroku"
-                                    className="text-[16px]"
-                                />
-                                {ackBox}
-                                {dropBox}
-                                <Button
-                                    className="h-12 w-full"
-                                    disabled={pending || (dateMissing && contact !== "NO_ANSWER") || dropMissing || cancelMissing}
-                                    onClick={saveNextStep}
-                                >
-                                    {dateMissing && contact !== "NO_ANSWER"
-                                        ? "Vyber dátum"
-                                        : cancelMissing
-                                          ? "Napíš, prečo rušíš úlohu"
-                                          : dropMissing
-                                            ? decidesResults
-                                                ? "Napíš, prečo sa neposiela"
-                                                : "Rozhoduje vlastník – nechaj „Poslať…“"
-                                            : "Uložiť"}
-                                </Button>
-                                {!replan && (
                                     <Button
                                         variant="ghost"
                                         className="w-full"
-                                        onClick={() => setStep(contact === "ANSWERED" || contact === "REPLIED" ? "reply" : "contact")}
+                                        onClick={() => {
+                                            setAskedDraft(asked);
+                                            setStep("reply");
+                                        }}
                                     >
-                                        ← Späť
+                                        <ArrowLeft className="mr-2 h-4 w-4" /> Späť
                                     </Button>
+                                </div>
+                            </div>
+                        )}
+
+                        {step === "sms" && (
+                            <div className="space-y-5">
+                                <InfoPanel icon={Lock} tone="warning">
+                                    <p className="font-medium">Krok zostáva zamknutý.</p>
+                                    <p className="mt-0.5 text-xs text-muted-foreground">Zapíše sa iba kontakt; úloha pre manažéra pokračuje.</p>
+                                </InfoPanel>
+                                {contact === "SMS" && (
+                                    <div className="space-y-2">
+                                        <SectionLabel>Text SMS</SectionLabel>
+                                        <Textarea
+                                            data-vaul-no-drag
+                                            placeholder="Čo sme klientovi poslali"
+                                            value={note}
+                                            onChange={(e) => setNote(e.target.value)}
+                                            className="min-h-[88px] text-[16px] md:text-sm"
+                                        />
+                                    </div>
                                 )}
-                            </>
+                                {contact === "NO_ANSWER" && (
+                                    <div className="space-y-2">
+                                        <SectionLabel>Poznámka k pokusu</SectionLabel>
+                                        <Textarea
+                                            data-vaul-no-drag
+                                            placeholder="Nepovinné"
+                                            value={note}
+                                            onChange={(e) => setNote(e.target.value)}
+                                            className="min-h-[72px] text-[16px] md:text-sm"
+                                        />
+                                    </div>
+                                )}
+                                {ackBox}
+                                <div className="space-y-2">
+                                    <Button
+                                        className="h-12 w-full text-base"
+                                        disabled={pending || (contact === "SMS" && !note.trim())}
+                                        onClick={() => saveFact(contact === "NO_ANSWER" ? "NO_ANSWER" : "POSITIVE", CONTACT_LABEL[contact])}
+                                    >
+                                        {pending ? "Ukladám…" : contact === "SMS" && !note.trim() ? "Napíš text SMS" : "Uložiť kontakt"}
+                                    </Button>
+                                    <Button variant="ghost" className="w-full" onClick={backToContact}>
+                                        <ArrowLeft className="mr-2 h-4 w-4" /> Späť
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+
+                        {step === "next" && (
+                            <div className="space-y-5">
+                                {cancelBox}
+
+                                {!replan && (
+                                    <InfoPanel icon={Check}>
+                                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Zaznamenáme</p>
+                                        <p className="mt-1 font-medium">
+                                            {CONTACT_LABEL[contact]}
+                                            {reply ? ` · ${CLIENT_REPLIES.find((r) => r.key === reply)?.label}` : ""}
+                                            {asked.length ? ` · chcú ${asked.map((c) => REQUEST_CONTENT_LABEL[c].toLowerCase()).join(" + ")}` : ""}
+                                            {phonePrice ? ` · cena ${formatMoney(phonePrice.amount)}` : ""}
+                                        </p>
+                                    </InfoPanel>
+                                )}
+
+                                <div className="space-y-2">
+                                    <SectionLabel>Čo bude ďalej</SectionLabel>
+                                    <div className="grid gap-2 md:grid-cols-2" role="radiogroup" aria-label="Ďalší krok">
+                                        {shownSteps.map((o) => {
+                                            const copy = nextStepCopy(o.kind as FollowUpNextKind, reply);
+                                            return (
+                                                <OptionCard
+                                                    key={o.kind}
+                                                    role="radio"
+                                                    label={copy.label}
+                                                    hint={copy.hint}
+                                                    icon={NEXT_ICON[o.kind as FollowUpNextKind]}
+                                                    on={kind === o.kind}
+                                                    disabled={pending}
+                                                    onClick={() => {
+                                                        setKind(o.kind as FollowUpNextKind);
+                                                        setStepNote(null);
+                                                    }}
+                                                />
+                                            );
+                                        })}
+                                    </div>
+                                    {shownSteps.length < NEXT_STEPS.length && !allSteps && (
+                                        <Button variant="ghost" className="w-full justify-start" onClick={() => setAllSteps(true)}>
+                                            <CircleEllipsis className="mr-2 h-4 w-4" /> Zobraziť iný krok
+                                        </Button>
+                                    )}
+                                </div>
+
+                                <div className="space-y-3 rounded-xl bg-muted/55 p-3">
+                                    <SectionLabel>Termín a poznámka ku kroku</SectionLabel>
+                                    <DateTimeInput date={date} time={time} onDate={setDate} onTime={setTime} />
+                                    <p className="text-xs text-muted-foreground">
+                                        {stepOption?.date === "required"
+                                            ? "Vyber deň. Čas môže zostať prázdny."
+                                            : stepOption?.date === "today"
+                                              ? "Prázdny dátum znamená dnes."
+                                              : "Dátum je nepovinný – slúži ako deň kontroly."}
+                                        {contact === "NO_ANSWER" && !date ? " Bez dátumu sa ďalší pokus naplánuje na nasledujúci pracovný deň." : ""}
+                                    </p>
+                                    <Input
+                                        data-vaul-no-drag
+                                        value={shownStepNote}
+                                        onChange={(e) => setStepNote(e.target.value)}
+                                        placeholder="Poznámka ku kroku"
+                                        className="h-11 bg-background text-[16px] md:text-sm"
+                                    />
+                                </div>
+
+                                {(contact === "SMS" || contact === "NO_ANSWER") && (
+                                    <div className="space-y-2">
+                                        <SectionLabel>{contact === "SMS" ? "Text SMS" : "Poznámka k pokusu"}</SectionLabel>
+                                        <Textarea
+                                            data-vaul-no-drag
+                                            placeholder={contact === "SMS" ? "Čo sme klientovi poslali" : "Čo sa stalo (nepovinné)"}
+                                            value={note}
+                                            onChange={(e) => setNote(e.target.value)}
+                                            className="min-h-[72px] text-[16px] md:text-sm"
+                                        />
+                                    </div>
+                                )}
+
+                                {ackBox}
+                                {dropBox}
+
+                                <div className="space-y-2">
+                                    <Button
+                                        className="h-12 w-full text-base"
+                                        disabled={
+                                            pending ||
+                                            (dateMissing && contact !== "NO_ANSWER") ||
+                                            (contact === "SMS" && !note.trim()) ||
+                                            dropMissing ||
+                                            cancelMissing
+                                        }
+                                        onClick={saveNextStep}
+                                    >
+                                        {dateMissing && contact !== "NO_ANSWER"
+                                            ? "Vyber dátum"
+                                            : contact === "SMS" && !note.trim()
+                                              ? "Napíš text SMS"
+                                              : cancelMissing
+                                                ? "Napíš, prečo rušíš úlohu"
+                                                : dropMissing
+                                                  ? decidesResults
+                                                      ? "Napíš, prečo sa neposiela"
+                                                      : "Rozhoduje vlastník – nechaj „Poslať…“"
+                                                  : pending
+                                                    ? "Ukladám…"
+                                                    : "Uložiť kontakt a krok"}
+                                    </Button>
+                                    {!replan && (
+                                        <Button
+                                            variant="ghost"
+                                            className="w-full"
+                                            onClick={() => {
+                                                if (contact === "ANSWERED" || contact === "REPLIED") {
+                                                    if (replyChoice === "WANTS") {
+                                                        setAskedDraft(asked);
+                                                        setStep("wants");
+                                                    } else setStep("reply");
+                                                } else setStep("contact");
+                                            }}
+                                        >
+                                            <ArrowLeft className="mr-2 h-4 w-4" /> Späť
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
                         )}
 
                         {step === "snooze" && (
-                            <>
+                            <div className="space-y-5">
                                 {cancelBox}
                                 {dropBox}
-                                {[2, 4, 6].map((m) => (
-                                    <Button
-                                        key={m}
-                                        variant="outline"
-                                        className={big}
-                                        disabled={pending || cancelMissing || dropMissing}
-                                        onClick={() => send("SNOOZE", `O ${m} mesiace`, { schedule: { kind: "monthsFromToday", months: m } })}
-                                    >
-                                        O {m} {m === 6 ? "mesiacov" : "mesiace"}
-                                    </Button>
-                                ))}
-                                <div className="flex gap-2">
-                                    <div className="flex-1">
-                                        <DateTimeInput date={date} time="" onDate={setDate} onTime={() => {}} withTime={false} />
+                                <div className="space-y-2">
+                                    <SectionLabel>Kedy sa ozvať</SectionLabel>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {[2, 4, 6].map((m) => (
+                                            <Button
+                                                key={m}
+                                                variant="outline"
+                                                className="h-12"
+                                                disabled={pending || cancelMissing || dropMissing}
+                                                onClick={() => send("SNOOZE", `O ${m} mesiace`, { schedule: { kind: "monthsFromToday", months: m } })}
+                                            >
+                                                {m} {m === 6 ? "mesiacov" : "mesiace"}
+                                            </Button>
+                                        ))}
                                     </div>
-                                    <Button
-                                        className="h-12"
-                                        disabled={pending || !date || cancelMissing || dropMissing}
-                                        onClick={() => send("SNOOZE", "Vlastný termín", { schedule: { kind: "day", date } })}
-                                    >
-                                        OK
-                                    </Button>
+                                </div>
+                                <div className="space-y-3 rounded-xl bg-muted/55 p-3">
+                                    <SectionLabel>Vlastný termín</SectionLabel>
+                                    <div className="flex gap-2">
+                                        <div className="flex-1">
+                                            <DateTimeInput date={date} time="" onDate={setDate} onTime={() => {}} withTime={false} />
+                                        </div>
+                                        <Button
+                                            className="h-12 px-5"
+                                            disabled={pending || !date || cancelMissing || dropMissing}
+                                            onClick={() => send("SNOOZE", "Vlastný termín", { schedule: { kind: "day", date } })}
+                                        >
+                                            Odložiť
+                                        </Button>
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <SectionLabel>Poznámka z kontaktu</SectionLabel>
+                                    <Textarea
+                                        data-vaul-no-drag
+                                        placeholder="Prečo sa ozvať neskôr (nepovinné)"
+                                        value={note}
+                                        onChange={(e) => setNote(e.target.value)}
+                                        className="min-h-[72px] text-[16px] md:text-sm"
+                                    />
                                 </div>
                                 {ackBox}
-                                <Button variant="ghost" className="w-full" onClick={() => setStep("contact")}>
-                                    ← Späť
+                                <Button variant="ghost" className="w-full" onClick={backToContact}>
+                                    <ArrowLeft className="mr-2 h-4 w-4" /> Späť
                                 </Button>
-                            </>
+                            </div>
                         )}
 
                         {step === "lost" && (
-                            <>
+                            <div className="space-y-5">
                                 {locked && D.task && (
-                                    <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-                                        Zruší sa aj úloha pre {D.task.assignee} ({taskLabel}) – obchod uzavretý.
-                                    </p>
+                                    <InfoPanel icon={Lock} tone="warning">
+                                        Zruší sa aj úloha pre {D.task.assignee} ({taskLabel}), pretože obchod bude uzavretý.
+                                    </InfoPanel>
                                 )}
                                 {D.pending.length > 0 && (
-                                    <p className="text-xs text-muted-foreground">Neposlané výsledky sa zapíšu ako neposielané („obchod uzavretý“).</p>
+                                    <InfoPanel>Vrátené výsledky, ktoré sa neposlali klientovi, sa uzavrú spolu s obchodom.</InfoPanel>
                                 )}
-                                <Input data-vaul-no-drag placeholder="Dôvod (nepovinné)" value={reason} onChange={(e) => setReason(e.target.value)} className="text-base" />
-                                <Button
-                                    variant="destructive"
-                                    className="h-12 w-full"
-                                    disabled={pending}
-                                    onClick={() => send("NOT_INTERESTED", "Nemajú záujem", { lostReason: reason.trim() || undefined })}
-                                >
-                                    Potvrdiť – nemajú záujem
-                                </Button>
-                                <Button variant="ghost" className="w-full text-muted-foreground" disabled={pending} onClick={() => send("BAD_NUMBER", "Zlé číslo")}>
-                                    Zlé / nefunkčné číslo
-                                </Button>
-                                <Button variant="ghost" className="w-full" onClick={() => setStep("contact")}>
-                                    ← Späť
-                                </Button>
-                            </>
-                        )}
-
-                        {contact !== "NONE" && step !== "contact" && (
-                            <Textarea
-                                data-vaul-no-drag
-                                placeholder={contact === "SMS" ? "Text SMS" : "Čo povedali (do histórie kontaktu)"}
-                                value={note}
-                                onChange={(e) => setNote(e.target.value)}
-                                className="mt-1 min-h-[60px] text-base"
-                            />
+                                <div className="space-y-2">
+                                    <SectionLabel>Dôvod</SectionLabel>
+                                    <Input
+                                        data-vaul-no-drag
+                                        placeholder="Napr. už majú dodávateľa (nepovinné)"
+                                        value={reason}
+                                        onChange={(e) => setReason(e.target.value)}
+                                        className="h-11 text-[16px] md:text-sm"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Button
+                                        variant="destructive"
+                                        className="h-12 w-full text-base"
+                                        disabled={pending}
+                                        onClick={() => send("NOT_INTERESTED", "Nemajú záujem", { lostReason: reason.trim() || undefined })}
+                                    >
+                                        {pending ? "Ukladám…" : "Potvrdiť – nemajú záujem"}
+                                    </Button>
+                                    <Button variant="outline" className="h-11 w-full" disabled={pending} onClick={() => send("BAD_NUMBER", "Zlé číslo")}> 
+                                        Zlé / nefunkčné číslo
+                                    </Button>
+                                    <Button variant="ghost" className="w-full" onClick={backToContact}> 
+                                        <ArrowLeft className="mr-2 h-4 w-4" /> Späť
+                                    </Button>
+                                </div>
+                            </div>
                         )}
                     </>
                 )}
