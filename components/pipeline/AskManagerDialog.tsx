@@ -45,9 +45,9 @@ const HANDOVER_CHIPS = ["stránka", "eshop", "katalóg", "admin systém", "EN ja
 // Rovnaký farebný jazyk ako v akčnom okne (components/pipeline/InteractionSheet.tsx): zelená = peniaze,
 // fialová = návrh, sivá = neutrálne. Farbu nesie len ikona, nie celá karta.
 const CONTENT_TONE: Record<DealTaskContent, string> = {
-    PRICE: "bg-emerald-500/12 text-emerald-600 dark:bg-emerald-400/15 dark:text-emerald-300",
-    DESIGN: "bg-violet-500/12 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300",
-    OTHER: "bg-muted text-muted-foreground",
+    PRICE: "bg-emerald-600 text-white",
+    DESIGN: "bg-violet-500 text-white",
+    OTHER: "bg-slate-500 text-white dark:bg-slate-600",
 };
 
 const CONTENT_OPTIONS: { value: DealTaskContent; icon: typeof Euro; hint: string; placeholder: string }[] = [

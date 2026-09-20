@@ -209,15 +209,23 @@ bottom edge. **Nothing is centred horizontally** — the text stays left-aligned
 **Colour carries meaning, and only the icon is coloured.** Card text and borders stay neutral, so a screen full of
 cards does not turn into a rainbow; the selected state is still the primary border + ring. One tone per meaning:
 
-| Tone | Means | Used by |
-|---|---|---|
-| sky | contact / information | Dovolal/a som sa, Odpísali, Zavolať, Info / ukážky, Chcú niečo poslať, Majú poradu |
-| teal | waiting, general price list | Čakáme na klienta, Cenník, Poslali sme SMS, Ozvú sa sami |
-| emerald | money, a win | Konkrétna cena, Cena v hovore, Poslali sme ponuku, Chcú objednať, Cena (úloha) |
-| violet | návrh / design | Návrh, Pozreli chcú zmeny, Ozvať sa o pár mesiacov, Návrh (úloha) |
-| amber | attention, something is off | Rozbor webu, Neprišlo im to, Cena je vysoká |
-| rose | the end | reserved for Nemajú záujem / zlé číslo |
-| neutral | no signal | Nezdvihli, Iná odpoveď, Vlastný krok, Iné (úloha) |
+**The tile is the colour, the icon is white** (Michal, 2026-09-21: *"the whole area around the icon should be the
+contrasty colour and the icon itself white"* — a pale tint behind a coloured glyph looked washed out). The shades are
+the ones shadcn uses in its themes, picked so white keeps enough contrast in light and dark mode.
+
+| Tone | Class | Means | Used by |
+|---|---|---|---|
+| blue | `bg-blue-500` | contact / information | Dovolal/a som sa, Odpísali, Zavolať, Info / ukážky, Chcú niečo poslať, Majú poradu |
+| teal | `bg-teal-600` | waiting, general price list | Čakáme na klienta, Cenník, Poslali sme SMS, Ozvú sa sami |
+| green | `bg-emerald-600` | money, a win | Konkrétna cena, Cena v hovore, Poslali sme ponuku, Chcú objednať, Cena (úloha) |
+| violet | `bg-violet-500` | návrh / design | Návrh, Pozreli chcú zmeny, Ozvať sa o pár mesiacov, Návrh (úloha) |
+| orange | `bg-orange-500` | attention, something is off | Rozbor webu, Neprišlo im to, Cena je vysoká |
+| rose | `bg-rose-500` | the end | reserved for Nemajú záujem / zlé číslo |
+| slate | `bg-slate-500` | no signal | Nezdvihli, Iná odpoveď, Vlastný krok, Iné (úloha) |
 
 The same tones are used in **"Požiadať manažéra"**, so the two dialogs agree: Cena is emerald, Návrh is violet, Iné
 is neutral. Every tone has a dark-mode pair.
+
+**Quick dates.** "Zavolať" (and every step that takes a date) now has one-click presets above the date field —
+**Zajtra · O 3 dni · O týždeň · O 2 týždne**, in business calendar days, the same arithmetic the answer defaults use.
+Clicking the active one clears it, and the manual date picker stays underneath for anything else.

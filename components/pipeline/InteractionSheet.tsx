@@ -108,23 +108,25 @@ const CARD_OFF = "hover:border-primary/30 hover:bg-muted/50";
 // Farba ikony nesie význam a je jediné miesto, kde je karta farebná – text a rámik ostávajú neutrálne, takže sa
 // obrazovka nerozpadne na dúhu. Jeden odtieň na jeden zmysel: modrá = kontakt / informácia, zelená = peniaze,
 // fialová = návrh, jantárová = pozor / čaká sa, červená = koniec, sivá = neutrálne.
-type Tone = "sky" | "teal" | "emerald" | "violet" | "amber" | "rose" | "neutral";
+type Tone = "blue" | "teal" | "green" | "violet" | "orange" | "rose" | "slate";
 
+// Plná farba na dlaždici, biela ikona. Odtiene sú tie, ktoré používa shadcn vo svojich témach; sú volené tak, aby
+// biela na nich mala dosť kontrastu aj v svetlom aj v tmavom režime.
 const TONE: Record<Tone, string> = {
-    sky: "bg-sky-500/12 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300",
-    teal: "bg-teal-500/12 text-teal-600 dark:bg-teal-400/15 dark:text-teal-300",
-    emerald: "bg-emerald-500/12 text-emerald-600 dark:bg-emerald-400/15 dark:text-emerald-300",
-    violet: "bg-violet-500/12 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300",
-    amber: "bg-amber-500/15 text-amber-600 dark:bg-amber-400/15 dark:text-amber-300",
-    rose: "bg-rose-500/12 text-rose-600 dark:bg-rose-400/15 dark:text-rose-300",
-    neutral: "bg-muted text-muted-foreground",
+    blue: "bg-blue-500 text-white",
+    teal: "bg-teal-600 text-white",
+    green: "bg-emerald-600 text-white",
+    violet: "bg-violet-500 text-white",
+    orange: "bg-orange-500 text-white",
+    rose: "bg-rose-500 text-white",
+    slate: "bg-slate-500 text-white dark:bg-slate-600",
 };
 
 function OptionCard({
     label,
     hint,
     icon: Icon,
-    tone = "neutral",
+    tone = "slate",
     on = false,
     disabled,
     onClick,
@@ -192,30 +194,30 @@ function InfoPanel({ icon: Icon = Info, children, tone = "neutral" }: { icon?: L
 }
 
 const REQUEST_CARD: Record<RequestContent, { icon: LucideIcon; hint: string; tone: Tone }> = {
-    INFO: { icon: PanelsTopLeft, hint: "Kto sme a ukážky našej práce", tone: "sky" },
+    INFO: { icon: PanelsTopLeft, hint: "Kto sme a ukážky našej práce", tone: "blue" },
     PRICELIST: { icon: ReceiptText, hint: "Všeobecný prehľad cien", tone: "teal" },
-    PRICE: { icon: BadgeEuro, hint: "Cena pripravená pre tohto klienta", tone: "emerald" },
+    PRICE: { icon: BadgeEuro, hint: "Cena pripravená pre tohto klienta", tone: "green" },
     DESIGN: { icon: Palette, hint: "Grafický návrh webu", tone: "violet" },
-    REVIEW: { icon: ScanSearch, hint: "Čo sa dá zlepšiť na ich webe", tone: "amber" },
+    REVIEW: { icon: ScanSearch, hint: "Čo sa dá zlepšiť na ich webe", tone: "orange" },
 };
 
 const REPLY_CARD: Record<string, { icon: LucideIcon; tone: Tone }> = {
-    NOT_LOOKED_YET: { icon: EyeOff, tone: "neutral" },
+    NOT_LOOKED_YET: { icon: EyeOff, tone: "slate" },
     WANTS_CHANGES: { icon: RefreshCw, tone: "violet" },
-    RESEND: { icon: MailWarning, tone: "amber" },
+    RESEND: { icon: MailWarning, tone: "orange" },
     WILL_CONTACT_US: { icon: Clock3, tone: "teal" },
-    DECIDING: { icon: CalendarClock, tone: "sky" },
-    PRICE_HIGH: { icon: BadgeEuro, tone: "amber" },
-    WANTS_TO_ORDER: { icon: Handshake, tone: "emerald" },
+    DECIDING: { icon: CalendarClock, tone: "blue" },
+    PRICE_HIGH: { icon: BadgeEuro, tone: "orange" },
+    WANTS_TO_ORDER: { icon: Handshake, tone: "green" },
 };
 
 const NEXT_CARD: Record<FollowUpNextKind, { icon: LucideIcon; tone: Tone }> = {
-    CALL: { icon: Phone, tone: "sky" },
+    CALL: { icon: Phone, tone: "blue" },
     WAITING_FOR_CLIENT: { icon: Clock3, tone: "teal" },
-    SEND_QUOTE: { icon: BadgeEuro, tone: "emerald" },
+    SEND_QUOTE: { icon: BadgeEuro, tone: "green" },
     SEND_DESIGN: { icon: Palette, tone: "violet" },
-    SEND_EMAIL: { icon: Mail, tone: "sky" },
-    CUSTOM: { icon: CircleEllipsis, tone: "neutral" },
+    SEND_EMAIL: { icon: Mail, tone: "blue" },
+    CUSTOM: { icon: CircleEllipsis, tone: "slate" },
 };
 
 function nextStepCopy(kind: FollowUpNextKind, reply: string | null): { label: string; hint: string } {
@@ -265,6 +267,14 @@ const REFRESH_CODES = new Set([
 // hovor, čakanie na klienta alebo vlastný krok.
 const PLANNABLE_KINDS: FollowUpNextKind[] = ["CALL", "WAITING_FOR_CLIENT", "CUSTOM"];
 const NEXT_STEPS = NEXT_STEP_OPTIONS.filter((o) => PLANNABLE_KINDS.includes(o.kind as FollowUpNextKind));
+
+// Termíny, ktoré sa v hovoroch opakujú. Obchodné kalendárne dni – to isté, čo používajú predvoľby odpovedí.
+const DATE_PRESETS: { label: string; days: number }[] = [
+    { label: "Zajtra", days: 1 },
+    { label: "O 3 dni", days: 3 },
+    { label: "O týždeň", days: 7 },
+    { label: "O 2 týždne", days: 14 },
+];
 
 function newKey() {
     return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -711,7 +721,7 @@ export default function InteractionSheet({
                                             label="Dovolal/a som sa"
                                             hint="Hovor prebehol – zapíš, čo povedali"
                                             icon={Phone}
-                                            tone="sky"
+                                            tone="blue"
                                             disabled={pending || !canWork}
                                             onClick={() => startContact("ANSWERED", locked ? "reply" : "price")}
                                         />
@@ -719,7 +729,7 @@ export default function InteractionSheet({
                                             label="Nezdvihli"
                                             hint="Zaznamenať pokus a naplánovať ďalší"
                                             icon={PhoneMissed}
-                                            tone="neutral"
+                                            tone="slate"
                                             disabled={pending || !canWork}
                                             onClick={() => {
                                                 startContact("NO_ANSWER", locked ? "sms" : "next");
@@ -735,7 +745,7 @@ export default function InteractionSheet({
                                             label="Odpísali / ozvali sa"
                                             hint="Správa, email alebo spätný kontakt"
                                             icon={MessageCircle}
-                                            tone="sky"
+                                            tone="blue"
                                             disabled={pending || !canWork}
                                             onClick={() => startContact("REPLIED", "reply")}
                                         />
@@ -758,7 +768,7 @@ export default function InteractionSheet({
                                                 label="Poslali sme ponuku"
                                                 hint="Zaznamenať, čo klient dostal"
                                                 icon={Send}
-                                                tone="emerald"
+                                                tone="green"
                                                 disabled={pending || !canWork}
                                                 onClick={onRecordOffer}
                                             />
@@ -768,7 +778,7 @@ export default function InteractionSheet({
                                                 label="Iba zmeniť ďalší krok"
                                                 hint={locked ? "Bez kontaktu – zruší otvorenú úlohu" : "Bez nového kontaktu s klientom"}
                                                 icon={CalendarClock}
-                                                tone="neutral"
+                                                tone="slate"
                                                 disabled={pending || !canWork}
                                                 onClick={() => startContact("NONE", "next")}
                                             />
@@ -828,7 +838,7 @@ export default function InteractionSheet({
                                                     : "Info, cenník, cenu, návrh alebo rozbor"
                                             }
                                             icon={PackageCheck}
-                                            tone="sky"
+                                            tone="blue"
                                             role="radio"
                                             on={replyChoice === "WANTS"}
                                             disabled={pending || blockedHere}
@@ -895,7 +905,7 @@ export default function InteractionSheet({
                                             label="Povedal/a som konkrétnu cenu"
                                             hint="Zapíše sa, že klient túto sumu už pozná"
                                             icon={BadgeEuro}
-                                            tone="emerald"
+                                            tone="green"
                                             role="checkbox"
                                             on={toldPrice}
                                             disabled={pending}
@@ -1148,6 +1158,25 @@ export default function InteractionSheet({
 
                                 <div className="space-y-3 rounded-xl bg-muted/55 p-3">
                                     <SectionLabel>Termín a poznámka ku kroku</SectionLabel>
+                                    {/* Najčastejšie termíny jedným klikom – ručný dátum ostáva pod nimi. */}
+                                    <div className="flex flex-wrap gap-2">
+                                        {DATE_PRESETS.map((preset) => {
+                                            const value = addBusinessCalendarDays(businessDate(new Date()), preset.days);
+                                            return (
+                                                <Button
+                                                    key={preset.label}
+                                                    type="button"
+                                                    size="sm"
+                                                    variant={date === value ? "default" : "outline"}
+                                                    className="h-9 rounded-full px-3.5"
+                                                    disabled={pending}
+                                                    onClick={() => setDate(date === value ? "" : value)}
+                                                >
+                                                    {preset.label}
+                                                </Button>
+                                            );
+                                        })}
+                                    </div>
                                     <DateTimeInput date={date} time={time} onDate={setDate} onTime={setTime} />
                                     <p className="text-xs text-muted-foreground">
                                         {stepOption?.date === "required"
