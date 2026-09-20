@@ -65,17 +65,20 @@ export function fmtProgress(iso: string | null, now: Date = new Date()): string 
 //   0 = urgentné (termín meškáš/dnes/blíži sa)
 //   1 = rozpracované (IN_PROGRESS – návrhy)
 //   2 = budúce naplánované (termín v budúcnosti)
-//   3 = čaká sa / bez termínu (krok bez dátumu)
+//   3 = čaká sa / bez termínu (krok bez dátumu; aj krok zamknutý úlohou pre manažéra – wave 3 §5.3)
 //   4 = žiadny ďalší krok
 // Druhotne (tie-break) vraciame čas v ms: pri urgentných/budúcich najskôr najbližší
 // termín, pri rozpracovaných najskôr najstaršie (najdlhšie trvá).
+// SQL dvojča je DEAL_RANK_SQL v lib/queries/pipeline/index.ts (test r02PipelineOrder).
 export function nextActionSort(
     mode: "SCHEDULED" | "IN_PROGRESS",
     kind: string | null,
     at: string | null,
     hasTime: boolean,
     now: Date = new Date(),
+    locked = false,
 ): { rank: number; tie: number } {
+    if (locked) return { rank: 3, tie: 0 };
     if (!kind) return { rank: 4, tie: 0 };
     if (mode === "IN_PROGRESS") {
         // najstaršie začaté = najvyššie v rámci skupiny

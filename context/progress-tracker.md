@@ -496,3 +496,192 @@ and a fresh world built **through the app's own commands** (claims, first calls,
 Michal via "Obchod", Tereza → Jana via "Tím Jana"). All accounts: password123. Round-1 backfill `--verify`: clean,
 0 CONFLICT. The concurrency suite creates its own fixtures and is unaffected; the HTTP role script's accounts exist.
 
+
+## Wave 3: manager tasks, step lock, handover, História, counters (DONE on the test branch, 2026-09-19)
+
+Design: `context/features/01-salesrep/wave-3-task-proposal-final.md` (official). Order: its §10 steps 0–6.
+Database: Neon **test** endpoint `…nhww8x` only; production `…m0xyun` (commented out in `.env`) never touched.
+
+| Step | Scope | Status |
+|---|---|---|
+| 0 | Wipe test DB + minimal seed (users + ~50 scout contacts) | DONE |
+| 1 | Schema (`DealTask`, `DealOwnership`, `Activity.taskId`, enum changes) via reviewed SQL | DONE |
+| 2 | Domain (`tasks.ts`, `taskMutations.ts`, lock, owner transition, section rule + SQL twin) | DONE, tested |
+| 3 | Commands + actions (tasks, freshness/keys on manager commands, fact-only / overlap / cancel+change, D14 refusal, bulk op id) | DONE, tested |
+| 4 | Queries (rows, detail, pending items, pills + counts, História, dashboard) | DONE, tested |
+| 5 | UI | DONE; Michal's first click-through → feedback round below (DONE) |
+| 6 | Docs, checks, HTTP role checks | DONE |
+| – | Michal's click-through feedback (ask dialog, automatic step, default manager, UI polish) | DONE, see log |
+
+Log:
+
+- **Step 0 (2026-09-19).** `prisma/dummySeeds/seedTestWorld.ts` got a `--minimal` mode (same triple guard; the schema
+  fingerprint now accepts `DealRequest` **or** `DealTask` next to `Lead.hadLegacySends`, so the guard still works after
+  wave 3; the wipe truncates only tables that exist). Run: identity OK (`…nhww8x` ≠ production), all app tables
+  truncated, seeded users `admin` (ADMIN), `sales` (SALES_REP), `manager` (MANAGER, leads team "Obchod"), `telesales`
+  (TELESALES, member of "Obchod" → its positive calls route to `manager`), `scout` (SCOUT, member of "Skauti"),
+  `scoutleader` (SCOUT_LEADER, leads and is a member of "Skauti"); password `password123`. 50 contacts by `scout`, all
+  NEW and unclaimed; 0 activities, 0 deals. The full-world mode still exists (its old accounts `t_*` are gone now).
+- **Step 1 (2026-09-19).** Pre-check on test: `DealRequest` rows 0, `REQUEST_*` activities 0, leads with
+  `nextActionKind = ORDER` 0. Schema edited (S-08…S-11); `prisma migrate diff` SQL generated outside the repo and
+  reviewed statement by statement: `ActivityType` recreated with all 22 remaining values + 7 `TASK_*` (no default on
+  the column, cast via text, 0 affected rows), `NextActionKind` recreated without `ORDER` (no default), `DealRequest` +
+  its two enums dropped (0 rows, test-only), new `DealTask`, `DealOwnership`, 4 enums, `Activity.taskId` (nullable, FK
+  `ON DELETE SET NULL`, indexed). Endpoint re-verified (`…nhww8x`), applied with `prisma db execute`; `prisma db push`
+  → "already in sync"; `prisma generate` OK. No `--accept-data-loss`. The partial unique index "one OPEN task per deal"
+  was **not** added: Prisma cannot declare it, so `db push` would treat it as drift; the rule is enforced in the command
+  under the Lead lock (design §4.1 allowed either).
+- **Steps 2–5 (2026-09-19), code written; `tsc` clean for the app, `eslint` only the known `MobileNav.tsx` error.**
+  Domain: `lib/domain/tasks.ts` (pure), `lib/domain/taskMutations.ts` (lock guard, pending items, I10, dismissals,
+  cancel, `fulfils` validation, `recordOwnership`, the shared owner transition, create / message / finish / decline /
+  reassign), `lib/domain/leadWrites.ts` (`updateLead` / `hadNextAction` moved here so the two mutation modules do not
+  import each other; `dealMutations` re-exports them). `ORDER` removed from `nextStepOptions` / `leadFlow` /
+  dictionaries; "Chcú objednať" is an ordinary reply; `WANTS_DESIGN` no longer creates anything (D9); F1 `stepNote`.
+  Deleted: `lib/domain/dealRequests.ts`, `lib/queries/pipeline/requests.ts`, `components/pipeline/RequestsCard.tsx`,
+  the request commands/actions, `ClosedPolicy "reopenRequestOnly"`. Commands: new `lib/commands/tasks.ts`;
+  `logFollowUpAs` (fact-only, overlap, cancel + change, dismissals, F1, full fingerprint), `recordOfferSentAs`
+  (fact-only while locked, overlap, `fulfils`, dismissals, full fingerprint), manager status / lost / reopen / owner
+  with `expectedRevision` + key, bulk transfer with `operationId` + `bulkFp` + per-lead transition, first-call handoff
+  and revert write `DealOwnership`, deactivation / role change refused with held deals or tasks. Queries: one predicate
+  per pill for list and count, `STEP_LOCKED_SQL`, rows/detail carry the task, lock and pending items, "Pre mňa",
+  "Čakám na manažéra", História, dashboard "Čaká na mňa". UI: `AskManagerDialog`, `TaskCard`, `FinishTaskDialog`,
+  `TakeoverDialog`, reworked `InteractionSheet`, `OfferSentDialog`, `DealList`, `DealFilters`, `DealDetail`,
+  `TransferDealsDialog`, dashboard, `/dashboard/pipeline/historia`, `DesignTrackingCard` (R17).
+- **Tests for steps 2–5 (2026-09-19).** `check-concurrency.ts`: existing tests adapted (handoff writes
+  `DealOwnership`, `dealLifecycle` replaces the request test, revision steps include the task commands, inbox, today
+  parity, W2 order reply, W3a legacy, W3b replan with `stepNote`, W3c last-touch rules) and new wave 3 tests `w3Create`,
+  `w3Lock`, `w3Overlap`, `w3Finish`, `w3Results`, `w3Handover`, `w3OwnerTransition`, `w3Deactivation` (staggered race so
+  both orders are exercised), `w3Freshness`, `w3LockParity` (TS ↔ `STEP_LOCKED_SQL`), `w3History`, `w3Fingerprints`,
+  `w3InboxHref`, `w3TaskRowsNotLastTouch`, `w3SheetNotes`. `check-client-sections.ts` updated to `stepLocked`.
+  `check-backfill-delta.ts` got `--caller-username` (the minimal seed has no `t_timea`).
+- **Michal's click-through feedback (2026-09-19)** — fixed:
+  1. *The ask dialog's note looked like the company note.* It was pre-filled with the last call note. Now it is an
+     empty **"Správa pre manažéra"** that belongs only to the task (placeholder by content, "Vidí ju manažér pri úlohe.
+     Poznámku klienta nemení."). It never wrote `Lead.note`; it is `DealTask.text` (verified in `createTask`).
+  2. *Manager chosen from nothing every time.* New `getResolverOptions(viewerId)` marks the rep's default manager
+     (`mine`): the leader of her team, else the manager she asked last. The dialog shows it as a line ("NM Nikolas
+     Manažér · tvoj manažér · Zmeniť"); "Zmeniť" reveals the list. Seed: `sales` is now a member of "Obchod"
+     (`seedTestWorld.ts --minimal`); on test the same was set directly (`User.teamId` of `sales`, endpoint checked).
+  3. *Next step chosen in the dialog, buggy on a second ask (only "Poslať cenu / Poslať návrh").* The step is no longer
+     chosen: new pure `stepAfterTask` (`lib/domain/tasks.ts`) — Cena → "Poslať cenu", Návrh → "Poslať návrh", Iné → the
+     current step stays (optional "Zmeniť"); the note stays when the kind does not change; a pending návrh narrows to
+     "Poslať návrh" (I10). The server derives the same step when the client sends none; a `step` is accepted only for
+     "Iné" (I10-checked) or when it equals the derived kind (else `STALE`). `allowedFollowUpKinds` /
+     `defaultFollowUpKind` removed. The "second ask" symptom was I10 narrowing the old two-button picker; the dialog now
+     explains it ("Ešte neposlané: cena 1 285 € – krok ostáva „Poslať…“").
+  4. *Content = one choice now; price + návrh together is wave 4.* The dialog is a 3-tile single choice. Marked
+     `[WAVE 4]` in `AskManagerDialog.tsx` and at `stepAfterTask`; backlog BL-12; `app-workflow.md` §6.1.
+  5. *UI polish.* `AskManagerDialog` rewritten (section labels, tiles with icons, stable primary button "Odoslať –
+     Nikolas" with the missing-field hint under it, derived step as a summary card, no appearing/disappearing buttons).
+     `TaskCard` rewritten (status badge "čaká na manažéra · Nikolas", request in a quote box, "Po vybavení: Poslať
+     cenu", chat-style message thread with a send button, actions in one row — "Presunúť…" hidden behind a button,
+     returned items as a list with icons and a direct **"Poslať klientovi…"** that opens "Čo sme poslali"; manager sees
+     them as "Vrátené obchodníkovi – ešte neposlané klientovi"; closed tasks under "História úloh"). `FinishTaskDialog`
+     restyled (request shown on top, € suffix, "Hotovo – odoslať výsledok"). Labels no longer build Slovak datives from
+     names ("Hotovo – vrátiť Jana" → "Hotovo…"). "Vybavil som to sám…" → "Poslal som to sám…".
+  - New test `w3AutoStep` (5 checks: the pure matrix, price keeps "Poslať cenu" + note, call → "Poslať cenu", design,
+    other keeps step + note, other with a chosen step, price with a different step refused, pending návrh narrows,
+    default manager = team leader / last asked / none).
+  - Browser check (dev server, desktop and 375 px phone, as `sales` and `manager`): ask with Cena (step shown fixed),
+    Návrh, Iné (+ step change), manager "Zmeniť"; task card as rep and manager; manager "Hotovo" with 1 285 € → the rep
+    sees "Od manažéra – ešte neposlané klientovi" with "Poslať klientovi…"; a second ask with the price pending shows
+    "Poslať cenu" and the explanation. Fixture deal removed afterwards.
+- **Step 6 — docs (2026-09-19).** `context/domain/database-map.md` (DealTask, DealOwnership, `Activity.taskId`, task rows
+  and their meta, `OFFER_SENT.fulfils` / `fp`, keyed main rows, locked step, invariants; DealRequest / ORDER /
+  `REQUEST_*` removed), `context/domain/operations.md` (task domain / commands / queries, keyed manager commands,
+  `runKeyed`, `ownerTransition`, `getResolverOptions`, `getHandedOverHistory`, seed script; request operations removed),
+  `context/domain/db-changes.md` **rebuilt from zero** as the net delta baseline `7beb689` → current test schema,
+  regenerated offline with `prisma migrate diff --from-schema … --to-schema …` (0 `DROP`, 0 retype: all additive;
+  DealRequest / `REQUEST_*` / ORDER listed as "added on test and removed again — nothing owed"; wave 3 data step: none),
+  `context/app-workflow.md` (wave 3 shipped, §6 rewritten, `[WAVE 4]` marker), `project-overview.md` (roles,
+  permissions, História route), `ui-context.md` (counts on every pill, dialog conventions), `architecture.md`
+  (`tasks.ts` split, wave 3 error codes), `features/backlog.md` (BL-01 / BL-09 past tense, BL-12 new). The feature design
+  file was not edited.
+- **Checks (final, 2026-09-19, after the feedback round).** DB identity: `…nhww8x`, database `neondb` (production
+  `…m0xyun` untouched). `npx tsc --noEmit` clean. `npx eslint .` → only the known `MobileNav.tsx`
+  `react-hooks/set-state-in-effect` error (pre-existing). `next build --webpack` OK, 20 routes incl.
+  `/dashboard/pipeline/historia` (built in a scratch copy so Michal's running dev server was not disturbed; the Turbopack
+  build refused the copy's junctioned `node_modules`; the earlier Turbopack build of steps 2–5 passed). Business time
+  local + `TZ=UTC`: passed. Client sections: passed. `check-concurrency --iterations 100`: **139/139**.
+  `check-backfill-delta --expect-db neondb --owner-username admin --caller-username telesales`: 6/6. HTTP role checks
+  (`.claude/http-roles.ts`, signed local sessions, all six roles): **30/30** — counts are now read from the DB (the test
+  data may contain Michal's own tasks) and the "not found" checks read the raw HTML (Next streams `notFound()` after
+  `loading.tsx`, so the status stays 200; the page carries the 404 marker and no deal name).
+
+- **Implementation review R01 (`.ai/reviews/01-sales-rep/W3/implementations/R01.md`, 2026-09-19)** — all five
+  findings accepted and fixed:
+  1. *Embedded dismissals bypassed the owner rule.* New `assertDecidesResults(lead, actor)` (`taskMutations.ts`) is
+     called before every user dismissal: `dismissResultsAs`, `recordOfferSentAs`, `logFollowUpAs` (closing a deal
+     stays a system dismissal). Client: `OfferSentDialog` / `InteractionSheet` send dismissals only when the viewer
+     decides (owner, or manager on an ownerless deal) — a manager on a rep's deal records the fact, older / leftover
+     items stay with the owner, "Neposielam" and "Beriem na vedomie" are hidden for him, and a step other than
+     "Poslať…" is blocked with "Rozhoduje vlastník".
+  2. *"Poslal som to sám" without the follow-up left "Poslať cenu" due today.* The follow-up call is now mandatory
+     (`followUp` only `true`; the checkbox is gone, the day stays editable). Found while fixing: if an **older**
+     returned price / návrh is still unsent, a call would violate I10 — then no call is planned and the step stays
+     "Poslať…" for that item (the dialog says so).
+  3. *Reopen could make a deactivated / demoted user own a live deal.* Reopen (`reopenDealAs` and the status select)
+     now locks the retained owner before the Lead (`manageWithOwner`) and, if the owner is deactivated or lost
+     `deals.receive`, hands the deal to the reopening manager (or to nobody if he cannot own deals) through
+     `ownerTransition` — `OWNER_CHANGED` + `DealOwnership(CHANGE)`, same transaction and revision. **Confirmed by Michal
+     (2026-09-19):** the reopening manager gets it and can transfer it (review offered three options); a concurrent deactivation waits on the owner lock and then sees the open deal.
+  4. *Spec vs shipped.* The official `wave-3-task-proposal-final.md` now carries dated "decision update 2026-09-19"
+     entries in D3 (derived step) and D4 (one content now, both = wave 4), §1 situation 3, the §1d note pre-fill and
+     the §6.1 mock-up / follow-up rule; `round2-deal-workspace.md` §2b summary says "implemented" and points to the
+     update. Original texts are kept as history.
+  5. *Send with `KEEP_OPEN` could still cancel the task.* `recordOfferSentAs` now requires `cancelTask` ⇔
+     `overlap: CANCEL_TASK`, with a non-empty reason (no silent "už to netreba").
+  - New test `w3R01` (4 checks: embedded dismissals by a manager refused / plain call + send allowed / owner allowed;
+    finish-and-send opt-out refused, default call, older návrh keeps "Poslať návrh"; reopen with a deactivated and a
+    demoted owner → the manager owns it with ownership rows, a valid owner stays, pure "nobody eligible" case; three
+    invalid overlap / cancel payloads refused, task stays open). Docs: `operations.md`, `app-workflow.md`.
+
+- **Implementation review R02 (`.ai/reviews/01-sales-rep/W3/implementations/R02.md`, 2026-09-19)** — R01 fixes
+  verified by the reviewer; new findings:
+  1. *Stale role in a profile save.* `updateUserProfileAs` now locks the User row (`SELECT … FOR UPDATE`) before reading
+     the old role, and checks held deals / tasks against the **new** role's permissions whatever the old role was — a
+     stale form can no longer leave work on a user who cannot do it.
+  2. *Hidden overlap choice made "Čo sme poslali" unsaveable.* `OfferSentDialog` and `InteractionSheet` use the choice
+     only while the contents (or the told phone price) still overlap the task; otherwise nothing is sent and the
+     choice reappears if the content is ticked again.
+  3. *"N. pokus" tie order.* `noAnswerStreaks` orders by `(createdAt, id)` and treats an empty outcome like the detail
+     does; the list's "Naposledy" query also got the `id` tie-breaker. (Call-stage lists — `queries/calls`,
+     `queries/contacts` — still order by `createdAt` only; out of wave-3 scope.)
+  4. *Spec leftovers.* `wave-3-task-proposal-final.md`: "chosen" → derived step, finish-and-send fingerprint without a
+     follow-up choice, reopen's fixed step, §6.11 invalid-owner rule, §6.12 race rule.
+  5. *Backup folder deleted.* Michal deleted `context/features/01-salesrep/backup/` himself (no longer needed) — not
+     restored; the wave-3 spec header says so.
+  - New test `w3R02` (2 checks). The UI state fix (2) has no automated component test (no component test setup);
+    it is a derived value in both dialogs.
+- **`[WAVE 4]` markers in code** (comments only): `AskManagerDialog.tsx`, `tasks.ts` (`stepAfterTask`,
+  `returnedItems`), `taskMutations.ts` (`pendingByLead`), `OfferSentDialog.tsx`, `FinishTaskDialog.tsx`.
+- **Implementation review R03 (`.ai/reviews/01-sales-rep/W3/implementations/R03.md`, 2026-09-19)** — R02 fixes
+  verified by the reviewer. Fixed the one wave-3 bug (R03-1): with a returned price and návrh, sending the návrh first
+  and the price last defaulted to keeping "Poslať návrh" although nothing was left to send. New pure
+  `sendCompletesStep` (`lib/domain/tasks.ts`): a send also completes a "Poslať…" step when it consumes (sends or
+  dismisses) the last pending returned price / návrh; `OfferSentDialog` uses it for the default. The server already
+  accepted the follow-up in both orders. New test `w3R03` (2 checks: pure matrix; both orders on the DB → CALL).
+  Checks: tsc clean, eslint only `MobileNav.tsx`, client sections OK, `check-concurrency --iterations 100` 147/147.
+  (Findings 2–6 are wave-4 design, handled in the feature files.)
+
+### Wave 3 — not resolved / to do later
+
+- **Human click-through still owed** for the rest of wave 3 on a phone and desktop: overlap choice in "Čo sme poslali"
+  and in the call sheet, cancel + replan / snooze / close, handover accept / decline, takeover, owner change with a task,
+  bulk transfer with tasks, História, deactivation refusal.
+- **Send dialog with items left over:** when some returned items stay unsent, the kept "Poslať…" step's date and note
+  cannot be edited in the same dialog (it points to "Zmeniť krok").
+- **Reopen has no step choice** (always "Zavolať" today, `REOPEN_STEP_NOTE`).
+- **A manager cannot cancel + replan** another rep's task (only by closing the deal) — as designed (the owner decides);
+  revisit if it is annoying in practice.
+- **"Pre mňa" / counts cost:** `getDealCounts` runs one id query per counted pill (13 per page load). Fine at today's
+  volume; measure before production volumes grow.
+- `getResolverOptions` "last asked" reads `DealTask` by `requestedById` without an index — fine now; add
+  `(requestedById, createdAt)` in a later schema change if the table grows.
+- The **full-world seed** mode (`seedTestWorld.ts` without `--minimal`) was not re-run after wave 3.
+- Pre-existing, not wave 3: hydration warning from `DarkModeToggle` (`aria-label` differs server vs client) shows as
+  "1 Issue" in the dev overlay; `MobileNav.tsx` eslint error.
+- `DealTask.contents` accepts several contents while the UI sends one — keep until wave 4 (BL-12) decides the combined
+  step.
+- **Production owes everything** (`context/domain/db-changes.md`): the §1 schema, the §2 data steps, the §3.3 old-send
+  conversion. Nothing was applied there.

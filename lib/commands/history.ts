@@ -4,8 +4,8 @@ import { AccessError, FORBIDDEN, toActionError, type ActionError } from "@/lib/a
 import { lockLeadWithUsers } from "@/lib/access/leads";
 import { withLockTx } from "@/lib/access/locks";
 import type { AccessUser } from "@/lib/access/user";
-import { resolveOpenRequests } from "@/lib/domain/dealRequests";
 import { bump, markLeadBumped } from "@/lib/domain/revision";
+import { recordOwnership } from "@/lib/domain/taskMutations";
 import { can } from "@/lib/permissions";
 
 // Stav leadu musí zodpovedať tomu, čo hovor vytvoril (§5.4 krok 3, obrana do hĺbky).
@@ -117,7 +117,11 @@ export async function revertCallResultAs(
                 },
             });
             markLeadBumped(tx, lead.id);
-            await resolveOpenRequests(tx, lead.id, "ALL", "CANCELLED", actor.id, "Výsledok hovoru vrátený", "CALL_QUEUE");
+            // Po úlohe sa vrátiť nedá (úloha zvýši revíziu – §6.12). Zrušené odovzdanie sa zapíše do histórie vlastníctva;
+            // História obchodníka riadky REVERT nezobrazuje.
+            if (lead.ownerId) {
+                await recordOwnership(tx, { leadId: lead.id, fromUserId: lead.ownerId, toUserId: null, byUserId: actor.id, reason: "REVERT" });
+            }
             await tx.activity.create({
                 data: {
                     leadId: lead.id,

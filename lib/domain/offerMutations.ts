@@ -3,8 +3,9 @@ import type { ActivitySource } from "@/app/generated/prisma/enums";
 import { AccessError } from "@/lib/access/errors";
 import type { Tx } from "@/lib/access/locks";
 import { createPlanningActivity, describeNextAction, nextActionData } from "@/lib/activityLog";
-import { resolveOpenRequests } from "@/lib/domain/dealRequests";
 import { followUpInSevenDays, hadNextAction, saveQuote, updateLead, type DealActor } from "@/lib/domain/dealMutations";
+import { assertStepAllowed, loadPending, validateFulfils } from "@/lib/domain/taskMutations";
+import type { ItemRef } from "@/lib/domain/tasks";
 import {
     moneyToString,
     offerInstant,
@@ -86,6 +87,12 @@ export type RecordOfferInput = {
     followUpOn?: string; // iný deň pre ten hovor (YYYY-MM-DD, overený volajúcim)
     callActivityId?: string;
     idempotencyKey?: string;
+    // Wave 3: ktoré vrátené položky toto odoslanie použilo (§6.4) + položky odmietnuté v tom istom uložení (pre I10).
+    fulfils?: ItemRef[];
+    dismissedInSave?: ItemRef[];
+    // Krok je zamknutý úlohou → odoslanie je len fakt, ďalší krok sa nemení (vynútené na serveri, §5.1).
+    factOnly?: boolean;
+    fp?: string; // odtlačok hlavného riadku (§5.5)
 };
 
 function followUpNote(contents: OfferContent[]): string {
@@ -142,6 +149,14 @@ export async function recordOffer(
         await baselineOldDesignDates(tx, lead.id, ids);
     }
 
+    const fulfils = input.fulfils ?? [];
+    if (fulfils.length) {
+        validateFulfils(fulfils, { contents, designIds: designs?.map((d) => d.id) ?? [], historical: input.historical }, await loadPending(tx, lead.id));
+        // Vrátený návrh bez odkazu sa nedá poslať ako „ten od manažéra" (dialóg to vysvetlí, server to vynúti).
+        const fulfilled = fulfils.filter((f) => f.kind === "DESIGN").map((f) => f.designId);
+        if (designs?.some((d) => fulfilled.includes(d.id) && !d.url)) throw new AccessError("FORBIDDEN", "Návrh nemá odkaz.");
+    }
+
     const meta: OfferMeta = {
         channel: input.channel,
         contents,
@@ -150,6 +165,8 @@ export async function recordOffer(
         sentOn: input.sentOn,
         historical: input.historical,
         ...(input.callActivityId ? { callActivityId: input.callActivityId } : {}),
+        ...(fulfils.length ? { fulfils: fulfils.map((f) => ({ taskId: f.taskId, kind: f.kind as "PRICE" | "DESIGN", ...(f.designId ? { designId: f.designId } : {}) })) } : {}),
+        ...(input.fp ? { fp: input.fp } : {}),
         correction: null,
     };
     const activity = await tx.activity.create({
@@ -168,9 +185,11 @@ export async function recordOffer(
 
     await recomputeOffers(tx, lead.id);
 
-    if (input.historical) return { activityId: activity.id };
+    if (input.historical || input.factOnly) return { activityId: activity.id };
 
     if (input.followUp) {
+        // I10: ak po tomto odoslaní ešte čaká vrátená cena / návrh, krok nesmie prejsť na „Zavolať, či prišlo".
+        await assertStepAllowed(tx, lead.id, "CALL", [...fulfils, ...(input.dismissedInSave ?? [])]);
         const at = input.followUpOn ? businessDayStart(input.followUpOn) : followUpInSevenDays(offerInstant(meta, activity.createdAt));
         const next = nextActionData("CALL", at, followUpNote(contents), false);
         await updateLead(tx, lead.id, next);
@@ -184,23 +203,13 @@ export async function recordOffer(
             }),
         });
     }
-
-    // Do wave 3 sa požiadavky uzatvárajú ako doteraz, keď práca prebehla (spätný záznam nikdy).
-    if (contents.includes("PRICE")) {
-        await resolveOpenRequests(tx, lead.id, ["PRICE"], "DONE", actor.id, "Cena poslaná klientovi", source);
-    }
-    if (contents.includes("ABOUT_US") || contents.includes("PRICELIST")) {
-        await resolveOpenRequests(tx, lead.id, ["EMAIL"], "DONE", actor.id, "Email poslaný", source);
-    }
-    if (contents.includes("DESIGN")) {
-        await resolveOpenRequests(tx, lead.id, ["DESIGN"], "DONE", actor.id, "Návrh odoslaný", source);
-    }
     return { activityId: activity.id };
 }
 
 export const CORRECTABLE_TYPES = ["OFFER_SENT", "SMS_SENT", "CLIENT_REPLIED"] as const;
 
-// Prečiarknutie záznamu: opraví to, čo klient vie; ďalší krok ani požiadavky sa nemenia (§2c 5.4).
+// Prečiarknutie záznamu: opraví to, čo klient vie; ďalší krok sa nemení (§2c 5.4). Prečiarknuté odoslanie, ktoré
+// použilo vrátený výsledok úlohy (meta.fulfils), ho tým znova sprístupní (wave 3 §6.13) – nič iné netreba.
 export async function correctRecord(
     tx: Tx,
     actor: DealActor,

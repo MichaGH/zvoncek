@@ -10,8 +10,8 @@ import { lockLeadWithUsers, requireCallLead } from "@/lib/access/leads";
 import { lockTeams, lockUsers, withLockTx, type Tx } from "@/lib/access/locks";
 import type { AccessUser } from "@/lib/access/user";
 import { createAuditActivity, createPlanningActivity, describeNextAction } from "@/lib/activityLog";
-import { ensureOpenRequest } from "@/lib/domain/dealRequests";
 import { resolveDealOwner } from "@/lib/domain/dealRouting";
+import { recordOwnership } from "@/lib/domain/taskMutations";
 import { FIRST_CALL_OUTCOMES, isHandoffOutcome, leadStateForOutcome } from "@/lib/domain/leadFlow";
 import { bump, markLeadBumped } from "@/lib/domain/revision";
 import { isDayOnlySnooze, resolveSchedule, scheduleSchema } from "@/lib/domain/schedule";
@@ -137,9 +137,9 @@ export async function logCallAs(user: AccessUser, raw: LogCallInput): Promise<Lo
                             note: `Priradené automaticky: ${recipient.name}`,
                         }),
                     });
-                }
-                if (outcome === "WANTS_DESIGN") {
-                    await ensureOpenRequest(tx, lead.id, "DESIGN", caller, callbackNote, "CALL_QUEUE");
+                    // História vlastníctva (wave 3, I6): odovzdanie po prvom hovore = jeden riadok. Nič sa nezakladá
+                    // automaticky – ani pri „chcú návrh" (D9); o návrh požiada obchodník sám.
+                    await recordOwnership(tx, { leadId: lead.id, fromUserId: null, toUserId: recipient.id, byUserId: user.id, reason: "HANDOFF" });
                 }
             }
 

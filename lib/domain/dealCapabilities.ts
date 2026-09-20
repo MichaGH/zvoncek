@@ -6,11 +6,11 @@ import { can } from "@/lib/permissions";
 // Skryté tlačidlo nie je ochrana; ochrana je guard v príkaze.
 
 export type DealCapabilities = {
-    work: boolean; // ďalší krok, interakcia, cena, údaje, požiadavky
-    manage: boolean; // stav, vlastník, typ projektu, WON, reopen, návrhy, vybavenie požiadaviek, hromadný presun
+    work: boolean; // ďalší krok, interakcia, cena, údaje, „Požiadať manažéra"
+    manage: boolean; // stav, vlastník, typ projektu, WON, reopen, návrhy, prevzatie, hromadný presun
     seeOthers: boolean; // vidí aj cudzie obchody → zobrazí sa filter vlastníka a stĺpec „Rieši"
-    createRequests: boolean;
-    resolveRequests: boolean;
+    askManager: boolean; // môže požiadať manažéra (úloha) – obchodník, nikdy manažér na vlastnom obchode (D7)
+    resolver: boolean; // vybavuje úlohy („Pre mňa") – manažér / admin
     manageDesigns: boolean;
     transferDeals: boolean;
 };
@@ -21,9 +21,9 @@ export function dealCapabilities(viewer: Pick<AccessUser, "id" | "role">): DealC
         work: can(viewer, "deals.work") || manage,
         manage,
         seeOthers: can(viewer, "deals.viewAll") || can(viewer, "deals.viewTeam"),
-        // Požiadavky podáva ten, kto ich sám nevybavuje (obchodník → manažér). Neskôr pribudne adresát (D-15).
-        createRequests: can(viewer, "deals.work") && !can(viewer, "requests.resolve"),
-        resolveRequests: can(viewer, "requests.resolve"),
+        // Úlohu zadáva ten, kto ju sám nevybavuje (obchodník → manažér); telesales obchody nemajú (wave 3, D7/D9).
+        askManager: can(viewer, "deals.work") && !can(viewer, "requests.resolve"),
+        resolver: can(viewer, "requests.resolve") && manage,
         manageDesigns: manage,
         transferDeals: manage,
     };

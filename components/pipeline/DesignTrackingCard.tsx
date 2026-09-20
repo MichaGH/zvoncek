@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
     AlertTriangle,
     Check,
@@ -102,15 +103,25 @@ export default function DesignTrackingCard({
     const anySent = designs.some((d) => d.sentAt);
     const designNoPrice = anySent && !priceSent;
 
-    async function run(fn: () => Promise<unknown>) {
+    // Každý výsledok príkazu sa skontroluje (wave 3, R17): chyba sa ukáže a formulár ostane otvorený s tým, čo bolo
+    // napísané – nič sa nezahodí potichu. Vráti true len pri úspechu.
+    async function run(fn: () => Promise<{ success: true } | { error: string }>): Promise<boolean> {
         setBusy(true);
-        await fn();
+        let ok = false;
+        try {
+            const r = await fn();
+            if ("error" in r) toast.error(r.error);
+            else ok = true;
+        } catch {
+            toast.error("Chyba siete – skús znova.");
+        }
         setBusy(false);
         router.refresh();
+        return ok;
     }
 
     async function create() {
-        await run(() =>
+        const ok = await run(() =>
             createDesign({
                 leadId,
                 label: newLabel.trim() || null,
@@ -118,6 +129,7 @@ export default function DesignTrackingCard({
                 repoUrl: newRepo.trim() || null,
             }),
         );
+        if (!ok) return;
         setNewUrl("");
         setNewLabel("");
         setNewRepo("");
@@ -125,15 +137,11 @@ export default function DesignTrackingCard({
     }
 
     async function saveVersion(id: string) {
-        await run(() => addDesignVersion(id, { url: vUrl.trim() || null, note: vNote.trim() || null }));
-        setForm(null);
+        if (await run(() => addDesignVersion(id, { url: vUrl.trim() || null, note: vNote.trim() || null }))) setForm(null);
     }
 
     async function saveMeta(id: string) {
-        await run(() =>
-            updateDesignMeta(id, { label: mLabel.trim() || null, repoUrl: mRepo.trim() || null }),
-        );
-        setForm(null);
+        if (await run(() => updateDesignMeta(id, { label: mLabel.trim() || null, repoUrl: mRepo.trim() || null }))) setForm(null);
     }
 
     async function copyForEmail(design: DesignView) {
@@ -271,8 +279,9 @@ export default function DesignTrackingCard({
                                     </Button>
                                 </div>
                             ) : (
-                                <p className="text-xs text-muted-foreground">
-                                    Bez URL — pridaj adresu cez „Aktualizovať&quot;.
+                                <p className="text-xs text-amber-700 dark:text-amber-400">
+                                    Bez URL — pridaj adresu cez „Aktualizovať“. Bez nej sa návrh nedá vrátiť v úlohe („Hotovo“) ani
+                                    poslať klientovi.
                                 </p>
                             )}
 

@@ -5,9 +5,12 @@
 // Trojitá poistka pred mazaním:
 //   1. endpoint v DATABASE_URL = --confirm (a musí končiť na suffix testovacej vetvy),
 //   2. endpoint sa LÍŠI od zakomentovanej produkčnej URL v .env (porovnáva sa v pamäti, nič sa nevypisuje),
-//   3. databáza má tabuľky/stĺpce, ktoré produkcia nemá (DealRequest, Lead.hadLegacySends) – produkcia je na starej schéme.
+//   3. databáza má tabuľky/stĺpce, ktoré produkcia nemá (Lead.hadLegacySends + DealRequest alebo DealTask) – produkcia je
+//      na starej schéme.
 //
-//   npx tsx prisma/dummySeeds/seedTestWorld.ts --confirm ep-xxxx            # vymaže + nasadí
+//   npx tsx prisma/dummySeeds/seedTestWorld.ts --confirm ep-xxxx            # vymaže + nasadí celý svet
+//   npx tsx prisma/dummySeeds/seedTestWorld.ts --confirm ep-xxxx --minimal  # vymaže + len účty a ~50 kontaktov od skauta
+//                                                                           # (wave 3 §10 krok 0: žiadne hovory ani obchody)
 // Všetky účty majú heslo password123.
 import "dotenv/config";
 import { readFileSync } from "node:fs";
@@ -27,7 +30,22 @@ import { businessDate } from "../../lib/domain/businessTime";
 import type { FirstCallOutcome } from "../../lib/domain/leadFlow";
 
 const TEST_SUFFIX = "nhww8x";
-const TABLES = ["TrackerEvent", "Tracker", "DesignVersion", "Design", "DealRequest", "Activity", "Lead", "Invite", "Team", "User"];
+// Mažú sa všetky tabuľky aplikácie, ktoré v schéme existujú (pred aj po wave 3).
+const TABLES = [
+    "TrackerEvent",
+    "Tracker",
+    "DesignVersion",
+    "Design",
+    "DealRequest",
+    "DealTask",
+    "DealOwnership",
+    "Activity",
+    "Lead",
+    "Invite",
+    "Team",
+    "User",
+];
+const MINIMAL = process.argv.includes("--minimal");
 
 function fail(message: string): never {
     console.error(`ABORT: ${message}`);
@@ -59,11 +77,11 @@ async function guard() {
     const c = new Client({ connectionString: current });
     await c.connect();
     const r = await c.query<{ ok: boolean }>(`SELECT
-        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'DealRequest')
+        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name IN ('DealRequest', 'DealTask'))
         AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'Lead' AND column_name = 'hadLegacySends') AS ok`);
     if (!r.rows[0]?.ok) {
         await c.end();
-        fail("schéma nevyzerá ako testovacia vetva (chýba DealRequest / Lead.hadLegacySends).");
+        fail("schéma nevyzerá ako testovacia vetva (chýba DealRequest/DealTask / Lead.hadLegacySends).");
     }
     console.log(`identity OK: endpoint=…${ep.slice(-6)} (≠ produkcia), schéma testovacej vetvy`);
     return c;
@@ -78,9 +96,15 @@ function ok(label: string, r: unknown) {
 
 async function main() {
     const c = await guard();
-    await c.query(`TRUNCATE ${TABLES.map((t) => `"${t}"`).join(", ")} RESTART IDENTITY CASCADE`);
+    const present = await c.query<{ table_name: string }>(
+        `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY($1)`,
+        [TABLES],
+    );
+    const names = TABLES.filter((t) => present.rows.some((r) => r.table_name === t));
+    await c.query(`TRUNCATE ${names.map((t) => `"${t}"`).join(", ")} RESTART IDENTITY CASCADE`);
     await c.end();
-    console.log("vymazané: všetky tabuľky aplikácie");
+    console.log(`vymazané: ${names.join(", ")}`);
+    if (MINIMAL) return seedMinimal();
 
     const password = await bcrypt.hash("password123", 10);
     const mk = async (username: string, firstName: string, lastName: string, role: Role, extra: { teamId?: string; deletedAt?: Date } = {}) =>
@@ -178,7 +202,7 @@ async function main() {
     ok("price", await saveQuoteAs(michal, m1, { price: 890, priceNote: "Web 690 € · jazyk 200 €" }));
     await send(michal, m1, ["PRICE"]);
     await follow(michal, m2, { reply: "DECIDING", nextKind: "CALL", schedule: { kind: "daysFromToday", days: 7 } });
-    if (m3) ok("won", await changeStatusAs(michal, m3, "WON"));
+    if (m3) ok("won", await changeStatusAs(michal, m3, { status: "WON", expectedRevision: await rev(m3), idempotencyKey: key() }));
 
     const [s1, s2] = sDeals;
     await send(sales, s1, ["ABOUT_US", "PRICELIST"]);
@@ -193,6 +217,56 @@ async function main() {
     console.log("sales = Samo (SALES_REP), t_timea (TELESALES → Michal), t_tereza (TELESALES → Jana), t_odisla (deaktivovaná),");
     console.log("t_simon (SCOUT_LEADER), t_jano, t_lukas (SCOUT).");
 }
+
+// Wave 3 §10 krok 0: len účty, tímy a kontakty od skauta (NEW, nikto ich nemá, žiadne hovory, obchody ani odoslania).
+async function seedMinimal() {
+    const password = await bcrypt.hash("password123", 10);
+    const mk = (username: string, firstName: string, lastName: string, role: Role, teamId?: string) =>
+        prisma.user.create({ data: { username, firstName, lastName, role, password, ...(teamId ? { teamId } : {}) }, select: { id: true } });
+    const admin = await mk("admin", "Michal", "Admin", "ADMIN");
+    const sales = await mk("sales", "Jana", "Obchodníková", "SALES_REP");
+    const manager = await mk("manager", "Nikolas", "Manažér", "MANAGER");
+    const scoutleader = await mk("scoutleader", "Šimon", "Vedúci", "SCOUT_LEADER");
+    const obchod = await prisma.team.create({ data: { name: "Obchod", leaderId: manager.id } });
+    // Obchodníčka je v tíme Obchod → jej predvolený manažér pri úlohách je vedúci tímu (Nikolas).
+    await prisma.user.update({ where: { id: sales.id }, data: { teamId: obchod.id } });
+    const skauti = await prisma.team.create({ data: { name: "Skauti", leaderId: scoutleader.id } });
+    await prisma.user.update({ where: { id: scoutleader.id }, data: { teamId: skauti.id } });
+    await mk("telesales", "Timea", "Volajúca", "TELESALES", obchod.id);
+    const scout = await mk("scout", "Jano", "Skaut", "SCOUT", skauti.id);
+    void admin;
+
+    const now = Date.now();
+    const total = 50;
+    for (let i = 0; i < total; i++) {
+        const name = `${FIRM_PREFIX[i % FIRM_PREFIX.length]} ${FIRM_SUFFIX[Math.floor(i / FIRM_PREFIX.length) % FIRM_SUFFIX.length]}`;
+        await prisma.lead.create({
+            data: {
+                companyName: name,
+                phone: `+421 9${String(10 + i).padStart(2, "0")} ${String(100000 + i * 7919).slice(0, 3)} ${String(100 + i).slice(-3)}`,
+                website: `${name.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z]+/g, "")}.sk`,
+                note: i % 5 === 0 ? "stránka im občas nejde" : i % 7 === 0 ? "čítal som o nich v novinách" : null,
+                createdById: scout.id,
+                createdAt: new Date(now - (total - i) * 3_600_000),
+            },
+        });
+    }
+    const counts = {
+        users: await prisma.user.count(),
+        teams: await prisma.team.count(),
+        leads: await prisma.lead.count(),
+        newUnclaimed: await prisma.lead.count({ where: { status: "NEW", assignedCallerId: null, pipelineEnteredAt: null, createdById: scout.id } }),
+        activities: await prisma.activity.count(),
+    };
+    console.log("minimálny svet:", JSON.stringify(counts));
+    console.log("\nÚčty (heslo password123): admin (ADMIN), sales (SALES_REP, člen Obchod), manager (MANAGER, vedie Obchod),");
+    console.log("telesales (TELESALES, člen Obchod → pozitívne hovory idú manažérovi), scout (SCOUT, člen Skauti), scoutleader (SCOUT_LEADER, vedie Skauti).");
+}
+
+const FIRM_PREFIX = [
+    "Pekáreň", "Autoservis", "Kaderníctvo", "Stolárstvo", "Kvetinárstvo", "Veterina", "Pizzeria", "Cukráreň", "Optika", "Penzión",
+];
+const FIRM_SUFFIX = ["Kvások", "Breza", "Luna", "Dub", "Sokol"];
 
 main()
     .catch((error) => {

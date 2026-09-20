@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, BookOpen, Euro, Info, Paintbrush, Phone } from "lucide-react";
+import { AlertTriangle, BookOpen, Euro, Info, Lock, MessageSquare, Paintbrush, Phone } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import UrgencyLabel from "@/components/shared/UrgencyLabel";
+import AskManagerDialog from "@/components/pipeline/AskManagerDialog";
 import InteractionSheet from "@/components/pipeline/InteractionSheet";
 import OfferSentDialog from "@/components/pipeline/OfferSentDialog";
 import {
@@ -15,9 +16,9 @@ import {
     NEXT_ACTION_LABEL,
     OUTCOME_LABEL,
     PROJECT_TYPE_LABEL,
-    REQUEST_KIND_LABEL,
     STATUS_LABEL,
     STATUS_VARIANT,
+    TASK_CONTENT_LABEL,
 } from "@/lib/dictionaries";
 import { businessDayMonth, businessDaysBetween, businessHm, businessInputParts } from "@/lib/domain/businessTime";
 import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
@@ -46,16 +47,28 @@ function formatDate(iso: string | null) {
 
 const NBSP = " ";
 
-function RequestBadges({ row }: { row: DealRow }) {
-    if (!row.openRequests.length) return null;
+function dayWord(n: number) {
+    return n === 1 ? "deň" : n >= 2 && n <= 4 ? "dni" : "dní";
+}
+
+// Otvorená úloha na riadku (wave 3 §6.1): „⏳ čaká na Michala (2 dni)"; v „Pre mňa" aj čo sa žiada a kto napísal naposledy.
+function TaskLine({ row, dense, inbox }: { row: DealRow; dense?: boolean; inbox?: boolean }) {
+    if (!row.task) return null;
+    const t = row.task;
+    const what = t.type === "HANDOVER" ? "Odovzdanie" : t.contents.map((c) => TASK_CONTENT_LABEL[c]).join(" + ");
     return (
-        <>
-            {row.openRequests.map((r) => (
-                <Badge key={r.id} variant="destructive" className="font-normal">
-                    {REQUEST_KIND_LABEL[r.kind]}
-                </Badge>
-            ))}
-        </>
+        <div className="flex min-w-0 flex-col">
+            <span className={cn("text-xs", t.overdue && inbox ? "font-medium text-destructive" : "text-amber-700 dark:text-amber-400", dense && "truncate")}>
+                ⏳ {inbox ? `${what} · od ${t.requestedBy}` : `čaká na ${t.assignee}`} ({t.ageDays} {dayWord(t.ageDays)})
+            </span>
+            {inbox && <span className={cn("text-xs text-muted-foreground", dense && "truncate")}>„{t.text}“</span>}
+            {t.lastMessageBy && (
+                <span className={cn("flex items-center gap-1 text-xs text-muted-foreground", dense && "truncate")}>
+                    <MessageSquare className="h-3 w-3 shrink-0" />
+                    Posledná správa: {t.lastMessageBy}
+                </span>
+            )}
+        </div>
     );
 }
 
@@ -133,27 +146,41 @@ function LastActivityContent({ row, dense }: { row: DealRow; dense?: boolean }) 
     );
 }
 
-function NextActionContent({ row, dense }: { row: DealRow; dense?: boolean }) {
+function NextActionContent({ row, dense, inbox }: { row: DealRow; dense?: boolean; inbox?: boolean }) {
+    const pendingLine = row.pendingText && (
+        <span className={cn("text-xs font-medium text-emerald-700 dark:text-emerald-400", dense && "truncate")}>{row.pendingText}</span>
+    );
     if (!row.nextActionKind) {
         return (
-            <span className="text-muted-foreground">
-                {row.badge ? <Badge variant="destructive" className="font-normal">{row.badge}</Badge> : "—"}
-            </span>
+            <div className="flex min-w-0 flex-col">
+                <span className="text-muted-foreground">
+                    {row.locked && <Lock className="mr-1 inline h-3 w-3" />}
+                    {row.badge ? <Badge variant="destructive" className="font-normal">{row.badge}</Badge> : "—"}
+                </span>
+                <TaskLine row={row} dense={dense} inbox={inbox} />
+                {pendingLine}
+            </div>
         );
     }
     return (
         <div className="flex min-w-0 flex-col">
             <span className={cn("flex min-w-0 items-center gap-1.5", dense && "truncate")}>
+                {row.locked && <Lock className="h-3 w-3 shrink-0 text-amber-600" />}
                 {NEXT_ACTION_LABEL[row.nextActionKind]}
-                {(row.nextActionAt || row.nextActionMode === "IN_PROGRESS") && (
+                {!row.locked && (row.nextActionAt || row.nextActionMode === "IN_PROGRESS") && (
                     <UrgencyLabel at={row.nextActionAt} hasTime={row.nextActionHasTime} mode={row.nextActionMode} />
                 )}
             </span>
-            {(row.nextActionNote || dense) && (
-                <span className={cn("text-xs font-normal text-muted-foreground", dense && "truncate")}>
-                    {row.nextActionNote || NBSP}
-                </span>
+            {row.locked ? (
+                <TaskLine row={row} dense={dense} inbox={inbox} />
+            ) : (
+                (row.nextActionNote || (dense && !row.pendingText)) && (
+                    <span className={cn("text-xs font-normal text-muted-foreground", dense && "truncate")}>
+                        {row.nextActionNote || NBSP}
+                    </span>
+                )
             )}
+            {pendingLine}
         </div>
     );
 }
@@ -196,18 +223,25 @@ export default function DealList({
     caps,
     showStatus = false,
     showOwner = false,
+    inbox = false,
     viewerId,
+    resolvers,
 }: {
     rows: DealRow[];
     caps: DealCapabilities;
     showStatus?: boolean;
     showOwner?: boolean;
+    inbox?: boolean; // „Pre mňa" – riadok ukazuje, čo sa žiada, od koho a ako dlho to čaká
     viewerId: string;
+    resolvers: { id: string; firstName: string; lastName: string }[];
 }) {
     const router = useRouter();
     const [open, setOpen] = useState<DealRow | null>(null);
     // „Poslali sme ponuku" otvára dialóg priamo tu – bez presmerovania do detailu (round 2 §2d).
     const [offerFor, setOfferFor] = useState<DealRow | null>(null);
+    // „Požiadať / Odovzdať manažérovi" z akčného okna – drží sa len id, riadok (aj revízia) sa berie z aktuálnych dát.
+    const [askFor, setAskFor] = useState<{ id: string; type: "HELP" | "HANDOVER" } | null>(null);
+    const askRow = askFor ? rows.find((r) => r.id === askFor.id) : undefined;
 
     // Zoznam sa sám obnoví – termíny („dnes", „po termíne") starnú v reálnom čase.
     useEffect(() => {
@@ -219,14 +253,46 @@ export default function DealList({
         <>
             <InteractionSheet
                 key={open ? `${open.id}-${open.revision}` : "closed"}
-                target={open}
+                target={
+                    open
+                        ? {
+                              ...open,
+                              ownerId: open.ownerId,
+                              priceNote: open.dialog.priceNote,
+                              task: open.dialog.openTask,
+                              pending: open.pending,
+                          }
+                        : null
+                }
                 caps={caps}
+                viewerId={viewerId}
                 onClose={() => setOpen(null)}
                 onRecordOffer={() => {
                     setOfferFor(open);
                     setOpen(null);
                 }}
+                onAsk={(type) => {
+                    if (open) setAskFor({ id: open.id, type });
+                    setOpen(null);
+                }}
             />
+            {askFor && askRow && (
+                <AskManagerDialog
+                    key={`ask-${askRow.id}-${askRow.revision}`}
+                    target={{
+                        id: askRow.id,
+                        revision: askRow.revision,
+                        name: askRow.name,
+                        status: askRow.status,
+                        nextActionKind: askRow.nextActionKind,
+                        nextActionNote: askRow.nextActionNote,
+                        pending: askRow.pending,
+                    }}
+                    type={askFor.type}
+                    resolvers={resolvers}
+                    onClose={() => setAskFor(null)}
+                />
+            )}
             {offerFor && (
                 <OfferSentDialog
                     key={`offer-${offerFor.id}-${offerFor.revision}`}
@@ -291,7 +357,7 @@ export default function DealList({
                             <div>
                                 <div className="mb-0.5 text-xs uppercase tracking-wide text-muted-foreground">Ďalší krok</div>
                                 <div className="text-sm">
-                                    <NextActionContent row={row} />
+                                    <NextActionContent row={row} inbox={inbox} />
                                 </div>
                             </div>
                             <div>
@@ -306,8 +372,7 @@ export default function DealList({
                             <span className="font-medium">
                                 <PriceWithEye row={row} />
                             </span>
-                            {showOwner && <span className="truncate text-muted-foreground">· Rieši {row.owner ?? "nikto"}</span>}
-                            <RequestBadges row={row} />
+                            {(showOwner || inbox) && <span className="truncate text-muted-foreground">· Rieši {row.owner ?? "nikto"}</span>}
                         </div>
                     </div>
                 ))}
@@ -324,7 +389,7 @@ export default function DealList({
                         <col className="w-[20%]" />
                         <col className="w-[20%]" />
                         <col className="w-[8%]" />
-                        {showOwner && <col className="w-[9%]" />}
+                        {(showOwner || inbox) && <col className="w-[9%]" />}
                         <col className="w-[7%]" />
                     </colgroup>
                     <TableHeader>
@@ -336,7 +401,7 @@ export default function DealList({
                             <TableHead>Ďalší krok</TableHead>
                             <TableHead>Naposledy</TableHead>
                             <TableHead className="text-right">Cena</TableHead>
-                            {showOwner && <TableHead>Rieši</TableHead>}
+                            {(showOwner || inbox) && <TableHead>Rieši</TableHead>}
                             <TableHead className="text-right pr-4">Akcie</TableHead>
                         </TableRow>
                     </TableHeader>
@@ -378,7 +443,7 @@ export default function DealList({
                                     </TableCell>
                                 )}
                                 <TableCell className="max-w-0 align-middle text-sm">
-                                    <NextActionContent row={row} dense />
+                                    <NextActionContent row={row} dense inbox={inbox} />
                                 </TableCell>
                                 <TableCell className="max-w-0 align-middle text-sm">
                                     <LastActivityContent row={row} dense />
@@ -388,12 +453,9 @@ export default function DealList({
                                         <PriceWithEye row={row} />
                                     </div>
                                 </TableCell>
-                                {showOwner && (
+                                {(showOwner || inbox) && (
                                     <TableCell className="max-w-0 align-middle text-muted-foreground">
-                                        <div className="flex min-w-0 flex-wrap items-center gap-1">
-                                            <span className="truncate">{row.owner ?? "—"}</span>
-                                            <RequestBadges row={row} />
-                                        </div>
+                                        <span className="block truncate">{row.owner ?? "—"}</span>
                                     </TableCell>
                                 )}
                                 <TableCell className="align-middle pr-2">

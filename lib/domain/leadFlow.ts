@@ -6,7 +6,7 @@ import {
     NextActionMode,
 } from "@/app/generated/prisma/enums";
 import { businessTodayStart, nextBusinessWorkingDayStart } from "@/lib/domain/businessTime";
-import { nextStepOption } from "@/lib/domain/nextStepOptions";
+import { defaultStepNote, nextStepOption } from "@/lib/domain/nextStepOptions";
 
 // Prechody stavov – čisté funkcie bez DB. Kontrola prístupu, zámky a revízia sú v akciách.
 
@@ -165,25 +165,25 @@ export const FOLLOW_UP_OUTCOMES = [
 
 export type FollowUpOutcome = (typeof FOLLOW_UP_OUTCOMES)[number];
 
-// Kroky, ktoré sa dajú vybrať po hovore. ORDER tu zámerne nie je – objednávku rieši výsledok
-// WANTS_TO_ORDER (vytvorí požiadavku), nech existuje jedna cesta, nie dve.
+// Kroky, ktoré sa dajú vybrať po hovore (= všetky druhy kroku; ORDER wave 3 zrušila – D15).
 export const FOLLOW_UP_NEXT_KINDS = ["CALL", "WAITING_FOR_CLIENT", "SEND_QUOTE", "SEND_DESIGN", "SEND_EMAIL", "CUSTOM"] as const;
 export type FollowUpNextKind = (typeof FOLLOW_UP_NEXT_KINDS)[number];
 
 export type DealFollowUpState = {
     status: LeadStatus;
-    closes: boolean; // LOST/UNREACHABLE → closedAt = now + zavrieť požiadavky
+    closes: boolean; // LOST/UNREACHABLE → closedAt = now
     lostReason?: string | null;
-    request?: "DESIGN" | "ORDER";
 } & NextActionFields;
 
 // Predpoklad: aktuálny stav ACTIVE alebo SNOOZED. Uzavreté obchody sa tu nikdy neotvárajú.
+// `stepNote` = „Poznámka ku kroku" (wave 3, F1) – ide LEN do Lead.nextActionNote; prázdna = predvolený text kroku.
+// Čo klient povedal, ide do histórie kontaktu v príkaze, nie sem.
 export function dealStateForFollowUp(
     outcome: FollowUpOutcome,
     input: {
         when: { at: Date; hasTime: boolean } | null;
         nextKind?: FollowUpNextKind | null;
-        note?: string | null;
+        stepNote?: string | null;
         lostReason?: string | null;
     },
     current: { status: LeadStatus },
@@ -192,8 +192,10 @@ export function dealStateForFollowUp(
     if (current.status !== "ACTIVE" && current.status !== "SNOOZED") {
         throw new Error("Follow-up je možný len na otvorenom obchode");
     }
-    const note = input.note?.trim() || null;
+    const note = input.stepNote?.trim() || null;
     switch (outcome) {
+        // „Chcú objednať" je obyčajná odpoveď s vybraným krokom (wave 3, D15) – rovnako ako posun.
+        case "WANTS_TO_ORDER":
         case "POSITIVE": {
             const kind = input.nextKind;
             if (!kind) throw new Error("Vyber ďalší krok");
@@ -208,7 +210,7 @@ export function dealStateForFollowUp(
                 nextActionAt: input.when?.at ?? (startsToday ? businessTodayStart(now) : null),
                 nextActionHasTime: input.when?.hasTime ?? false,
                 nextActionMode: option?.mode ?? "SCHEDULED",
-                nextActionNote: note,
+                nextActionNote: note ?? defaultStepNote(kind),
             };
         }
         case "NO_ANSWER": {
@@ -247,30 +249,18 @@ export function dealStateForFollowUp(
                 nextActionAt: businessTodayStart(now),
                 nextActionHasTime: false,
                 nextActionMode: "SCHEDULED",
-                nextActionNote: "Poslať cenu",
+                nextActionNote: note ?? "Poslať cenu",
             };
         case "WANTS_DESIGN":
+            // Návrh robí manažér – obchodník o neho požiada sám („Požiadať manažéra"); nič sa nezakladá automaticky (D9).
             return {
                 status: "ACTIVE",
                 closes: false,
-                request: "DESIGN",
                 nextActionKind: "SEND_DESIGN",
                 nextActionAt: businessTodayStart(now),
                 nextActionHasTime: false,
                 nextActionMode: "IN_PROGRESS",
-                nextActionNote: "Vytvoriť a poslať dizajnový návrh",
-            };
-        case "WANTS_TO_ORDER":
-            // Nečaká sa na klienta, ale na manažéra – vlastný krok ORDER to na zozname aj povie (round 2, B-07).
-            return {
-                status: "ACTIVE",
-                closes: false,
-                request: "ORDER",
-                nextActionKind: "ORDER",
-                nextActionAt: null,
-                nextActionHasTime: false,
-                nextActionMode: "SCHEDULED",
-                nextActionNote: "Čaká na potvrdenie manažéra",
+                nextActionNote: note ?? "Vytvoriť a poslať dizajnový návrh",
             };
         case "SNOOZE":
             if (!input.when || input.when.hasTime) throw new Error("Odloženie vyžaduje deň");

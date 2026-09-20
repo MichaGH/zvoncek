@@ -3,8 +3,10 @@ import {
     ActivitySource,
     ActivityType,
     CallOutcome,
-    DealRequestKind,
-    DealRequestStatus,
+    DealOwnershipReason,
+    DealTaskContent,
+    DealTaskStatus,
+    DealTaskType,
     LeadStatus,
     NextActionKind,
     ProjectType,
@@ -69,11 +71,16 @@ export const ACTIVITY_LABEL: Record<ActivityType, string> = {
     CALLER_ASSIGNED: "Presunuté volanie",
     CALLER_RELEASED: "Uvoľnené do fronty",
     CALL_REVERTED: "Výsledok hovoru vrátený",
-    REQUEST_CREATED: "Požiadavka",
-    REQUEST_RESOLVED: "Požiadavka vybavená",
     DEAL_REOPENED: "Obchod znovu otvorený",
     OFFER_SENT: "Poslali sme",
     CLIENT_REPLIED: "Odpísali",
+    TASK_CREATED: "Úloha pre manažéra",
+    TASK_MESSAGE: "Správa k úlohe",
+    TASK_DONE: "Úloha vybavená",
+    TASK_DECLINED: "Úloha zamietnutá",
+    TASK_CANCELLED: "Úloha zrušená",
+    TASK_REASSIGNED: "Úloha presunutá",
+    TASK_RESULT_DISMISSED: "Výsledok sa neposiela",
 };
 
 export const ACTIVITY_CATEGORY_LABEL: Record<ActivityCategory, string> = {
@@ -151,21 +158,33 @@ export const NEXT_ACTION_LABEL: Record<NextActionKind, string> = {
     SEND_DESIGN: "Poslať návrh",
     SEND_EMAIL: "Poslať úvodný email",
     WAITING_FOR_CLIENT: "Čakáme na klienta",
-    ORDER: "Objednávka – potvrdiť",
     CUSTOM: "Vlastný krok",
 };
 
-export const REQUEST_KIND_LABEL: Record<DealRequestKind, string> = {
+// Úlohy pre manažéra (wave 3). Slovo „požiadavka" sa v UI nepoužíva.
+export const TASK_CONTENT_LABEL: Record<DealTaskContent, string> = {
     PRICE: "Cena",
     DESIGN: "Návrh",
-    EMAIL: "Email",
-    ORDER: "Objednávka",
-    REOPEN: "Znovu otvoriť",
     OTHER: "Iné",
 };
 
-export const REQUEST_STATUS_LABEL: Record<DealRequestStatus, string> = {
+export const TASK_TYPE_LABEL: Record<DealTaskType, string> = {
+    HELP: "Pomoc",
+    HANDOVER: "Odovzdanie klienta",
+};
+
+export const TASK_STATUS_LABEL: Record<DealTaskStatus, string> = {
     OPEN: "Otvorená",
     DONE: "Vybavená",
-    CANCELLED: "Zamietnutá",
+    DECLINED: "Zamietnutá",
+    CANCELLED: "Zrušená",
+};
+
+export const OWNERSHIP_REASON_LABEL: Record<DealOwnershipReason, string> = {
+    HANDOFF: "odovzdané po prvom hovore",
+    CHANGE: "presunuté",
+    BULK: "hromadne presunuté",
+    TAKEOVER: "prevzaté",
+    HANDOVER: "odovzdané manažérovi",
+    REVERT: "hovor vrátený",
 };

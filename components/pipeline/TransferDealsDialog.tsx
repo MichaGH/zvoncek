@@ -24,32 +24,57 @@ const STATUS_OPTIONS: { key: DealStatusKey; label: string }[] = [
 
 const selectCls = "h-9 w-full rounded-md border border-input bg-background px-3 text-sm";
 
+function newKey() {
+    return typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 // „Presunúť obchody" (§5.5): napr. všetky otvorené obchody z Timeiných hovorov, Michal → nový obchodník.
-export default function TransferDealsDialog({ owners, callers }: { owners: DealUserOption[]; callers: Person[] }) {
+// Wave 3 (§6.10): každý obchod ide cez spoločný prechod vlastníka – úloha u obchodníka ostáva (prípadne ide inému
+// manažérovi), u manažéra skončí. Jedno odoslanie = jedno operationId; po chybe „Skúsiť znova" pokračuje tým istým.
+export default function TransferDealsDialog({
+    owners,
+    callers,
+    resolvers,
+}: {
+    owners: DealUserOption[];
+    callers: Person[];
+    resolvers: Person[];
+}) {
     const router = useRouter();
     const [open, setOpen] = useState(false);
     const [from, setFrom] = useState("");
     const [handedOffBy, setHandedOffBy] = useState("");
     const [to, setTo] = useState("");
+    const [taskAssignee, setTaskAssignee] = useState("");
     const [statuses, setStatuses] = useState<DealStatusKey[]>(["ACTIVE", "SNOOZED"]);
+    const [operationId, setOperationId] = useState(newKey);
     const [pending, start] = useTransition();
 
     function submit() {
         if (!from || !to) return;
-        start(async () => {
-            const r = await transferDeals({
-                fromOwnerId: from === "unassigned" ? null : from,
-                handedOffById: handedOffBy || null,
-                toOwnerId: to,
-                statuses,
+        const run = () =>
+            start(async () => {
+                const r = await transferDeals({
+                    operationId,
+                    fromOwnerId: from === "unassigned" ? null : from,
+                    handedOffById: handedOffBy || null,
+                    toOwnerId: to,
+                    taskAssigneeId: taskAssignee || null,
+                    statuses,
+                });
+                if ("error" in r) {
+                    toast.error(r.error, r.code === "RETRYABLE" ? { action: { label: "Skúsiť znova", onClick: run } } : undefined);
+                    if (r.code === "IDEMPOTENCY_CONFLICT") setOperationId(newKey());
+                } else {
+                    toast.success(`Presunuté: ${r.moved}${r.skipped ? ` · nepresunuté (práve sa upravujú): ${r.skipped}` : ""}`);
+                    setOperationId(newKey());
+                    setOpen(false);
+                }
+                router.refresh();
             });
-            if ("error" in r) toast.error(r.error);
-            else {
-                toast.success(`Presunuté: ${r.moved}${r.skipped ? ` · nepresunuté (práve sa upravujú): ${r.skipped}` : ""}`);
-                setOpen(false);
-            }
-            router.refresh();
-        });
+        run();
     }
 
     if (!open) {
@@ -69,7 +94,14 @@ export default function TransferDealsDialog({ owners, callers }: { owners: DealU
             <CardContent className="grid gap-3 sm:grid-cols-2">
                 <div className="grid gap-1.5">
                     <Label className="text-xs text-muted-foreground">Od (vlastník)</Label>
-                    <select className={selectCls} value={from} onChange={(e) => setFrom(e.target.value)}>
+                    <select
+                        className={selectCls}
+                        value={from}
+                        onChange={(e) => {
+                            setFrom(e.target.value);
+                            setOperationId(newKey());
+                        }}
+                    >
                         <option value="">— vyber —</option>
                         <option value="unassigned">nepriradené</option>
                         {owners.map((u) => (
@@ -81,7 +113,14 @@ export default function TransferDealsDialog({ owners, callers }: { owners: DealU
                 </div>
                 <div className="grid gap-1.5">
                     <Label className="text-xs text-muted-foreground">Komu</Label>
-                    <select className={selectCls} value={to} onChange={(e) => setTo(e.target.value)}>
+                    <select
+                        className={selectCls}
+                        value={to}
+                        onChange={(e) => {
+                            setTo(e.target.value);
+                            setOperationId(newKey());
+                        }}
+                    >
                         <option value="">— vyber —</option>
                         {owners.map((u) => (
                             <option key={u.id} value={u.id}>
@@ -92,7 +131,14 @@ export default function TransferDealsDialog({ owners, callers }: { owners: DealU
                 </div>
                 <div className="grid gap-1.5">
                     <Label className="text-xs text-muted-foreground">Z hovorov (nepovinné)</Label>
-                    <select className={selectCls} value={handedOffBy} onChange={(e) => setHandedOffBy(e.target.value)}>
+                    <select
+                        className={selectCls}
+                        value={handedOffBy}
+                        onChange={(e) => {
+                            setHandedOffBy(e.target.value);
+                            setOperationId(newKey());
+                        }}
+                    >
                         <option value="">ktokoľvek</option>
                         {callers.map((u) => (
                             <option key={u.id} value={u.id}>
@@ -102,15 +148,35 @@ export default function TransferDealsDialog({ owners, callers }: { owners: DealU
                     </select>
                 </div>
                 <div className="grid gap-1.5">
+                    <Label className="text-xs text-muted-foreground">Otvorené úlohy u nového obchodníka pôjdu</Label>
+                    <select
+                        className={selectCls}
+                        value={taskAssignee}
+                        onChange={(e) => {
+                            setTaskAssignee(e.target.value);
+                            setOperationId(newKey());
+                        }}
+                    >
+                        <option value="">doterajšiemu manažérovi</option>
+                        {resolvers.map((u) => (
+                            <option key={u.id} value={u.id}>
+                                {u.firstName} {u.lastName}
+                            </option>
+                        ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground">Presun na manažéra úlohy ukončí (odovzdanie sa prijme).</p>
+                </div>
+                <div className="grid gap-1.5">
                     <Label className="text-xs text-muted-foreground">Stavy</Label>
                     <div className="flex flex-wrap gap-3">
                         {STATUS_OPTIONS.map((s) => (
                             <label key={s.key} className="flex items-center gap-1.5 text-sm">
                                 <Checkbox
                                     checked={statuses.includes(s.key)}
-                                    onCheckedChange={(v) =>
-                                        setStatuses((cur) => (v === true ? [...cur, s.key] : cur.filter((x) => x !== s.key)))
-                                    }
+                                    onCheckedChange={(v) => {
+                                        setStatuses((cur) => (v === true ? [...cur, s.key] : cur.filter((x) => x !== s.key)));
+                                        setOperationId(newKey());
+                                    }}
                                 />
                                 {s.label}
                             </label>

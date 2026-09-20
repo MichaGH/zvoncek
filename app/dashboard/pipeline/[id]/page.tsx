@@ -4,7 +4,7 @@ import DealDetail from "@/components/pipeline/DealDetail";
 import { requireUser } from "@/lib/access/user";
 import { dealCapabilities } from "@/lib/domain/dealCapabilities";
 import { can } from "@/lib/permissions";
-import { getDealDetail, getDealOwnerOptions, getDealScope } from "@/lib/queries/pipeline";
+import { getDealDetail, getDealOwnerOptions, getDealScope, getResolverOptions } from "@/lib/queries/pipeline";
 import { getDesignsForLead } from "@/lib/queries/tracking";
 
 // Detail obchodu – rovnaká stránka pre vlastníka aj manažéra. Rozsah je v dotaze (getDealDetail),
@@ -21,14 +21,15 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
     const lead = await getDealDetail(id, scope, caps);
     if (!lead) notFound();
 
-    const [users, designs] = await Promise.all([
+    const [users, designs, resolvers] = await Promise.all([
         caps.manage ? getDealOwnerOptions(scope) : Promise.resolve([]),
         caps.manageDesigns ? getDesignsForLead(id) : Promise.resolve([]),
+        caps.work ? getResolverOptions(viewer.id) : Promise.resolve([]),
     ]);
 
     return (
         <DashboardPage>
-            <DealDetail lead={lead} caps={caps} viewerId={viewer.id} users={users} designs={designs} />
+            <DealDetail lead={lead} caps={caps} viewerId={viewer.id} users={users} designs={designs} resolvers={resolvers} />
         </DashboardPage>
     );
 }

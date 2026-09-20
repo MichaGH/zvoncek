@@ -5,8 +5,8 @@ Status: **the official wave-3 design (Michal, 2026-09-19); nothing implemented.*
 `context/app-workflow.md` §6 point here. Two external review rounds and Michal's answers are folded in; every finding
 and how it was resolved is logged in §13 (round 1, W3-R01…R18), §14 (round 2, W3-R2-01…15) and §15 (round 3,
 W3-R3-01…13). The earlier drafts
-(models v1/A, B, C, C′) were deleted on 2026-09-19; §1c keeps why each was rejected. Michal keeps copies in `backup/`
-(never edit or delete them without asking).
+(models v1/A, B, C, C′) were deleted on 2026-09-19; §1c keeps why each was rejected. Michal kept copies in `backup/`;
+he deleted that folder himself on 2026-09-19 (no longer needed — do not restore it).
 
 Audience: an AI implementing or reviewing this. Read `AGENTS.md`, `context/code-standards.md` (database rules),
 `context/domain/database-map.md`, `context/domain/operations.md` and `context/ui-context.md` first. The decisions in §2
@@ -23,7 +23,9 @@ An SR works her deals alone, except where she needs the manager:
 1. **Price.** She does not know how to price a complicated project → the manager calculates it → she sends it.
 2. **Návrh.** Only the manager can make a návrh (verified: `createDesignAs` and all design commands use
    `requireDealManage`, `lib/commands/tracking.ts`) → the manager makes it → she sends it.
-3. **Price and návrh together** (has happened) → both from the manager → she sends both at once.
+3. **Price and návrh together** (has happened) → both from the manager → she sends both at once. **Wave 4** (decision
+   update 2026-09-19, D4): until then she asks for them as two tasks, one after the other; nothing returned is lost
+   (§6.13).
 4. **Handover.** The client wants details / technical talk / is ready to go ahead → the deal should go to the manager
    completely; he talks to the client from then on.
 5. **Takeover.** The manager can take any deal at any time.
@@ -128,7 +130,8 @@ follow-up of the task (D3).
   ("she brought 14 deals" survives the takeover) and serves later rep → rep transfers.
 - **Counters on every pill** (Michal spent a session believing "Všetko" was empty), computed exactly like the list they
   open (§7).
-- **No automatic tasks**; the ask text is **pre-filled from the last call note** (Michal: *"the note is possibly
+- **No automatic tasks**; the ask text is ~~pre-filled from the last call note~~ **empty — a message for the manager
+  only for this task** (decision update 2026-09-19; the original reasoning was Michal: *"the note is possibly
   already after telesales call"*); the SR sees a prominent "Požiadať manažéra" where she needs it.
 - **"Chcú objednať" is not a kind of work** — it does not say what is being built. It is an ordinary reply; an explicit
   handover may follow (§6.8).
@@ -141,8 +144,8 @@ follow-up of the task (D3).
 |---|---|
 | D1 | A **task** = the SR asks the manager for something. It is its own table with history. It is **not** the SR's next step. |
 | D2 | **Step lock.** While a task is open, the deal's next step is frozen, enforced **on the server** (not only in the UI). To change the step, the task must be closed — in the same dialog and the same transaction (§5.1). |
-| D3 | The frozen step **is the follow-up of the task**: when asking, the SR chooses what she will do when the manager delivers. For a task with a price or a návrh this is the send step ("Poslať cenu" / "Poslať návrh" — kind fixed, note free), because what comes back must be sent or explicitly declined (§6.13, review W3-R3-01); only an "Iné"-only task allows any step kind, including a custom one. When the task closes, that step becomes active and due now. |
-| D4 | **One open task per deal.** Price and návrh needed together = one task with both contents ticked. Needed at different times = two tasks one after the other; results that were not sent yet stay visible side by side (§6.13). |
+| D3 | **Decision update 2026-09-19 (Michal, after the first click-through) — supersedes the text below:** the SR does **not** choose the step. The frozen step follows from what she asks for, because she asks precisely to be able to do her step: Cena → "Poslať cenu", Návrh → "Poslať návrh" (the step note stays when the kind does not change); Iné → her current step stays, and she may change it to any kind. Pending older results still narrow it (I10). The server derives the same step (`stepAfterTask`). *Original:* The frozen step **is the follow-up of the task**: when asking, the SR chooses what she will do when the manager delivers. For a task with a price or a návrh this is the send step ("Poslať cenu" / "Poslať návrh" — kind fixed, note free), because what comes back must be sent or explicitly declined (§6.13, review W3-R3-01); only an "Iné"-only task allows any step kind, including a custom one. When the task closes, that step becomes active and due now. |
+| D4 | **Decision update 2026-09-19 (Michal):** the ask dialog offers **one** content (Cena / Návrh / Iné). One task with price **and** návrh, with the step "Poslať návrh + cenu", is **wave 4** (backlog BL-12); until then "together" = two tasks one after the other. The schema and commands keep `contents[]` so wave 4 needs no migration; combined-content cases in §9 remain valid for the command layer. *Original:* **One open task per deal.** Price and návrh needed together = one task with both contents ticked. Needed at different times = two tasks one after the other; results that were not sent yet stay visible side by side (§6.13). |
 | D5 | The SR may still snooze, close ("nemajú záujem") or replan while a task is open — **her decision, no manager approval** (Michal: otherwise *"i will just be doing clicking for them"*). The dialog says which task it cancels, and cancel + change are one transaction. Recording a contact (call, reply, SMS) and a send remain allowed without cancelling; they are facts. A send that overlaps what the task is producing asks first (§5.1). |
 | D6 | Transferring the deal to another **SR** keeps the task; the new owner inherits it and its lock. Transferring it to a **manager** (a resolver) or to nobody ends the task and leaves the step as a plain step (§6.10). |
 | D7 | On the **manager's own deal** there are no tasks. He simply has the step "Poslať cenu" / "Poslať návrh" and does it himself. |
@@ -236,7 +239,8 @@ change is generated from the measured live schema to the final target, not by re
 ### 5.1 The lock (D2, D3, D5)
 
 - **Locked** ⇔ the deal has an OPEN task. A closed deal never has one (I7).
-- **While locked the step's date is empty.** The ask stores the chosen step kind + note with `nextActionAt = NULL`,
+- **While locked the step's date is empty.** The ask stores the derived step kind + note (D3 update: price / návrh →
+  the send step, Iné → the current or changed step) with `nextActionAt = NULL`,
   `nextActionMode = SCHEDULED`; any kind is allowed without a date (including `CALL`, which normally requires one) —
   the date is set when the lock ends: business today by default (D3), or the date picked in the cancel / takeover
   dialog. So a locked deal can never look overdue anywhere.
@@ -344,7 +348,7 @@ error; same key + different `fp` → `IDEMPOTENCY_CONFLICT` (`activityReplay` wi
 | ask | `TASK_CREATED` | type, sorted contents, assignee, text, locked step kind + note |
 | message | `TASK_MESSAGE` | text |
 | finish | `TASK_DONE` | price amount + note, sorted design ids + versions, answer |
-| "Vybavil som to sám" (finish + send) | `TASK_DONE` (the `OFFER_SENT` in the same transaction has no key) | the finish fields + send contents, `sentOn`, follow-up choice + date |
+| "Poslal som to sám" (finish + send) | `TASK_DONE` (the `OFFER_SENT` in the same transaction has no key) | the finish fields + send contents, `sentOn`, follow-up date (the follow-up call itself is not optional — R01-2) |
 | decline | `TASK_DECLINED` | reason |
 | cancel + change | the command's own row as today (contact or planning row), plus `TASK_CANCELLED` without a key | the command's fields + `cancelTask.taskId` + reason |
 | contact / step change with "Beriem na vedomie" or dismissals | the command's own row as today, plus `TASK_RESULT_DISMISSED` without a key | the command's fields + the dismissed items + reasons |
@@ -353,7 +357,7 @@ error; same key + different `fp` → `IDEMPOTENCY_CONFLICT` (`activityReplay` wi
 | handover accept / direct takeover | `OWNER_CHANGED` | new owner, the manager's step + date + note |
 | owner change (single) | `OWNER_CHANGED` | new owner, task assignee choice |
 | status change / "Stratené" | `STATUS_CHANGED` | new status, reason, `cancelTask` if any |
-| reopen | `DEAL_REOPENED` | the step chosen |
+| reopen | `DEAL_REOPENED` | the fixed step ("Zavolať" today, `REOPEN_STEP_NOTE`); there is no step picker yet |
 | send with overlap choice / `fulfils` | `OFFER_SENT` (as today) | the existing send fields + price amount + note + follow-up choice/date + overlap choice + `fulfils` |
 | bulk transfer | none per operation — see below | `bulkFp` |
 
@@ -398,14 +402,18 @@ On the SR's own deal, button **"Požiadať manažéra"** (prominent when the ste
 make a návrh; also offered after "Chcú cenu/návrh" replies; never created automatically):
 
 ```
-Čo potrebuješ?   ☑ Cena   ☐ Návrh   ☐ Iné
-Popis:           [e-shop, 200 produktov, SK+EN]           (pre-filled from the last call note, editable, required)
-Pre:             Michal                                   (pre-selected when one resolver)
-Keď Michal dodá: [Poslať cenu ▾]  poznámka [          ]   (Cena/Návrh: the send step, note free; Iné only: any step)
+Čo potrebuješ?   ◉ Cena   ○ Návrh   ○ Iné                (one choice; both together = wave 4)
+Správa pre manažéra: [e-shop, 200 produktov, SK+EN]      (empty, required; only for this task)
+Manažér:        Michal · tvoj manažér  [Zmeniť]           (team leader, else the last asked manager)
+Keď Michal dodá, tvoj krok bude: Poslať cenu            (derived; Iné: current step + [Zmeniť])
                  🔒 Krok bude zamknutý, kým úloha nie je vybavená.
 ```
 
-Follow-up step (D3): PRICE only → `SEND_QUOTE`; DESIGN (with or without PRICE) → `SEND_DESIGN` (these kinds are fixed;
+*Mock-up updated 2026-09-19 (D3/D4 decision update). The original mock-up had multi-select, a pre-filled
+description and a step picker.*
+
+Follow-up step (D3 as updated 2026-09-19): derived, not chosen — `stepAfterTask` in `lib/domain/tasks.ts`: PRICE →
+`SEND_QUOTE`, DESIGN → `SEND_DESIGN`, OTHER → the current step (changeable). *Original text:* PRICE only → `SEND_QUOTE`; DESIGN (with or without PRICE) → `SEND_DESIGN` (these kinds are fixed;
 with PRICE only, `SEND_DESIGN` may be chosen too); OTHER only → `CALL` by default, any kind allowed. If older returned
 items are still pending, the choice is limited by §5.1. No date field (§5.1). The send dialog completes a `SEND_DESIGN` step when a návrh is ticked and pre-ticks the
 price from the task result (§6.4), so price + návrh needs no new step kind.
@@ -527,8 +535,15 @@ retry with the same `operationId` (and the same `bulkFp`) continues (§5.5). Who
 
 ### 6.11 Reopen — not a task (D13)
 
-The manager reopens a closed deal with the existing "Znovu otvoriť" (`reopenDealAs`, now with `expectedRevision`). The
-SR has no in-app way to ask in wave 3; a future *request* covers it (backlog BL-01).
+The manager reopens a closed deal with the existing "Znovu otvoriť" (`reopenDealAs`, now with `expectedRevision`), or
+through the status select; the step becomes "Zavolať" today. The SR has no in-app way to ask in wave 3; a future
+*request* covers it (backlog BL-01).
+
+**Invalid retained owner (R01-3, confirmed by Michal 2026-09-19).** A closed deal keeps its owner even after that user
+is deactivated or loses `deals.receive` (D14 blocks only open deals). Reopen therefore locks the retained owner
+before the Lead; if the owner can no longer own deals, the **reopening manager becomes the owner** (he can transfer
+it later), or nobody if he cannot own deals himself — through the shared owner transition (`OWNER_CHANGED` +
+`DealOwnership(CHANGE)`), in the same transaction and revision. Every reopen entry point must do this.
 
 ### 6.12 Closing, deactivation, role change, revert
 
@@ -540,7 +555,10 @@ SR has no in-app way to ask in wave 3; a future *request* covers it (backlog BL-
 - **Deactivation and role change** (D14): `lib/commands/admin.ts` today releases only uncalled NEW contacts and merely
   *counts* deals. Wave 3 adds a refusal (locks: §5.5): the user owns open deals (ACTIVE/SNOOZED) → "Najprv presuň N
   obchodov"; the user is the assignee of OPEN tasks → "Najprv presuň N úloh" (reassign). The same for a role change that
-  removes `deals.receive` or `requests.resolve`. Closed deals keep their owner (history, statistics).
+  removes `deals.receive` or `requests.resolve`. Closed deals keep their owner (history, statistics); reopening such a
+  deal repairs the owner (§6.11). **Race rule (R02-1):** a profile save locks the User row first and checks held work
+  against the **new** role's permissions, whatever the old role was — a stale form can never leave work on a user who
+  cannot do it.
 - **First-call revert** cannot happen once a task exists: task creation bumps `Lead.revision`, and
   `revertCallResultAs` requires the CALL's `leadRevision == Lead.revision`. No task handling is added to revert; the
   revert itself writes `DealOwnership(REVERT)`.

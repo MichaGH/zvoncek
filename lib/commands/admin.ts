@@ -7,9 +7,12 @@ import { can } from "@/lib/permissions";
 
 // Deaktivácia / zmena roly (plán §9). Jedna transakcia s lock_timeout 10 s:
 // 1. UPDATE "User" zoberie riadok FOR UPDATE ako PRVÝ krok – počká na každú rozbehnutú prácu používateľa
-//    (logCall, revert, úprava kontaktu, follow-up, handoff na neho ako vedúceho – všetky držia FOR SHARE) a zablokuje nové.
-// 2. Ak už nemá calls.claim / calls.work: uvoľní VŠETKY jeho nevolané NEW (bez SKIP LOCKED) a overí, že ostalo 0.
-//    Inak ROLLBACK celého kroku vrátane deaktivácie → RETRYABLE. Retry, callbacky, snooze a obchody sa neposúvajú.
+//    (logCall, revert, úprava kontaktu, follow-up, handoff na neho ako vedúceho, úloha / presun obchodu na neho –
+//    všetky držia FOR SHARE) a zablokuje nové.
+// 2. Wave 3 (D14): kým vlastní otvorené obchody alebo má pridelené otvorené úlohy, deaktivácia (a zmena roly, ktorá mu
+//    berie deals.receive / requests.resolve) sa odmietne – admin ich najprv presunie. Počíta sa až pod zámkom.
+// 3. Ak už nemá calls.claim / calls.work: uvoľní VŠETKY jeho nevolané NEW (bez SKIP LOCKED) a overí, že ostalo 0.
+//    Inak ROLLBACK celého kroku vrátane deaktivácie → RETRYABLE. Retry, callbacky a snooze sa neposúvajú.
 
 export type RemainingWork = { retries: number; scheduled: number; snoozed: number; deals: number; released: number };
 
@@ -46,6 +49,25 @@ async function releaseNewIfNeeded(tx: Tx, actorId: string, userId: string, role:
     return released.length;
 }
 
+// Otvorené obchody vo vlastníctve a otvorené úlohy pridelené používateľovi (pod zámkom jeho User riadku).
+async function heldDealWork(tx: Tx, userId: string): Promise<{ deals: number; tasks: number }> {
+    const rows = await tx.$queryRaw<{ deals: number; tasks: number }[]>`
+        SELECT
+            (SELECT count(*)::int FROM "Lead"
+              WHERE "ownerId" = ${userId} AND "pipelineEnteredAt" IS NOT NULL AND "deletedAt" IS NULL
+                AND status IN ('ACTIVE', 'SNOOZED')) AS deals,
+            (SELECT count(*)::int FROM "DealTask" t JOIN "Lead" l ON l.id = t."leadId"
+              WHERE t."assigneeId" = ${userId} AND t.status = 'OPEN' AND l."deletedAt" IS NULL) AS tasks`;
+    return rows[0] ?? { deals: 0, tasks: 0 };
+}
+
+function refuseHeldWork(held: { deals: number; tasks: number }, what: { deals: boolean; tasks: boolean }) {
+    const parts: string[] = [];
+    if (what.deals && held.deals > 0) parts.push(`${held.deals} ${held.deals === 1 ? "obchod" : held.deals < 5 ? "obchody" : "obchodov"} (Pipeline → Presunúť obchody)`);
+    if (what.tasks && held.tasks > 0) parts.push(`${held.tasks} ${held.tasks === 1 ? "úlohu" : held.tasks < 5 ? "úlohy" : "úloh"} (Pre mňa → Presunúť)`);
+    if (parts.length) throw new AccessError("FORBIDDEN", `Najprv presuň ${parts.join(" a ")}.`);
+}
+
 export async function getRemainingWork(userId: string): Promise<Omit<RemainingWork, "released">> {
     const base = { assignedCallerId: userId, deletedAt: null, pipelineEnteredAt: null };
     const [retries, scheduled, snoozed, deals] = await Promise.all([
@@ -73,6 +95,7 @@ export async function deactivateUserAs(
                      WHERE id = ${userId}
                  RETURNING role`;
                 if (!updated[0]) throw new AccessError("NOT_FOUND", "Používateľ neexistuje.");
+                refuseHeldWork(await heldDealWork(tx, userId), { deals: true, tasks: true });
                 return releaseNewIfNeeded(tx, actor.id, userId, updated[0].role, true);
             },
             { lockTimeout: "10s", timeout: 30_000 },
@@ -103,15 +126,24 @@ export async function updateUserProfileAs(
     try {
         const released = await withLockTx(
             async (tx) => {
-                const before = await tx.user.findUnique({ where: { id: userId }, select: { role: true, deletedAt: true } });
+                // Zámok User riadku PRED čítaním pôvodnej roly (R02-1): súbežná zmena roly / pridelenie obchodu či úlohy
+                // (tie držia tento riadok FOR SHARE) sa dokončí skôr, alebo počká na nás – nikdy sa nerozhoduje podľa
+                // zastaralého čítania.
+                const locked = await tx.$queryRaw<{ role: Role }[]>`SELECT role FROM "User" WHERE id = ${userId} FOR UPDATE`;
+                const before = locked[0];
                 if (!before) throw new AccessError("NOT_FOUND", "Používateľ neexistuje.");
-                // UPDATE = zámok riadku ako prvý zápis v transakcii (čaká na rozbehnutú prácu používateľa).
                 const updated = await tx.$queryRaw<{ role: Role; deletedAt: Date | null }[]>`
                     UPDATE "User" SET "firstName" = ${data.firstName}, "lastName" = ${data.lastName}, username = ${data.username},
                            email = ${data.email}, phone = ${data.phone}, role = ${data.role}::"Role", note = ${data.note}
                      WHERE id = ${userId}
                  RETURNING role, "deletedAt"`;
                 if (!updated[0]) throw new AccessError("NOT_FOUND", "Používateľ neexistuje.");
+                // D14 podľa NOVEJ roly, bez ohľadu na pôvodnú: kto po uložení nemôže vlastniť obchody / riešiť úlohy, nesmie
+                // žiadne držať (aj keby ich dostal medzitým).
+                refuseHeldWork(await heldDealWork(tx, userId), {
+                    deals: !can({ role: data.role }, "deals.receive"),
+                    tasks: !can({ role: data.role }, "requests.resolve"),
+                });
                 if (before.role === data.role) return 0;
                 return releaseNewIfNeeded(tx, actor.id, userId, data.role, updated[0].deletedAt !== null);
             },

@@ -1,5 +1,7 @@
 // Chybové kódy akcií (plán §10.2). Klient obnoví stránku pri NOT_ASSIGNED / NOT_FOUND / STALE / DEAL_CLOSED /
-// IDEMPOTENCY_CONFLICT a ponúkne „Skúsiť znova" len pri RETRYABLE a chybe siete.
+// IDEMPOTENCY_CONFLICT / STEP_LOCKED a ponúkne „Skúsiť znova" len pri RETRYABLE a chybe siete.
+// Wave 3: STEP_LOCKED = krok čaká na úlohu pre manažéra; TASK_OVERLAP = odoslanie sa kryje s otvorenou úlohou a chýba
+// voľba; RESULT_PENDING = vrátená cena / návrh ešte nie je poslaná ani odmietnutá, krok musí ostať „Poslať …".
 export type ActionCode =
     | "UNAUTHENTICATED"
     | "NOT_ASSIGNED"
@@ -8,7 +10,10 @@ export type ActionCode =
     | "STALE"
     | "DEAL_CLOSED"
     | "IDEMPOTENCY_CONFLICT"
-    | "RETRYABLE";
+    | "RETRYABLE"
+    | "STEP_LOCKED"
+    | "TASK_OVERLAP"
+    | "RESULT_PENDING";
 
 export type ActionError = { error: string; code?: ActionCode };
 
@@ -21,6 +26,9 @@ const DEFAULT_MESSAGE: Record<ActionCode, string> = {
     DEAL_CLOSED: "Obchod je uzavretý.",
     IDEMPOTENCY_CONFLICT: "Kontakt sa medzitým zmenil – obnovujem.",
     RETRYABLE: "Niekto práve pracuje s tými istými dátami – skús znova o chvíľu.",
+    STEP_LOCKED: "Krok čaká na úlohu pre manažéra.",
+    TASK_OVERLAP: "Toto sa kryje s otvorenou úlohou pre manažéra – vyber, čo s ňou.",
+    RESULT_PENDING: "Vrátená cena / návrh ešte nie je poslaná – krok ostáva „Poslať…“, kým ju nepošleš alebo neodmietneš.",
 };
 
 export class AccessError extends Error {

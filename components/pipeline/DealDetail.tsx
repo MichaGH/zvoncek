@@ -3,15 +3,19 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Check, Copy, Pencil, Phone, PhoneCall, Send, XCircle } from "lucide-react";
-import { LeadStatus, ProjectType, type DealRequestKind } from "@/app/generated/prisma/enums";
+import { Check, Copy, Lock, Pencil, Phone, PhoneCall, Send, UserCheck, XCircle } from "lucide-react";
+import { LeadStatus, ProjectType } from "@/app/generated/prisma/enums";
 import { DashboardContent, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
+import AskManagerDialog from "@/components/pipeline/AskManagerDialog";
 import CenovaPonukaCard from "@/components/pipeline/CenovaPonukaCard";
 import DesignTrackingCard from "@/components/pipeline/DesignTrackingCard";
-import RequestsCard from "@/components/pipeline/RequestsCard";
+import FinishTaskDialog from "@/components/pipeline/FinishTaskDialog";
+import TakeoverDialog from "@/components/pipeline/TakeoverDialog";
+import TaskCard from "@/components/pipeline/TaskCard";
 import UrgencyLabel from "@/components/shared/UrgencyLabel";
 import InteractionSheet, { type InteractionTarget } from "@/components/pipeline/InteractionSheet";
 import OfferSentDialog from "@/components/pipeline/OfferSentDialog";
+import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { copyEmailLink } from "@/components/shared/copyEmailLink";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,12 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import type { ActionError } from "@/lib/access/errors";
-import {
-    cancelOwnDealRequest,
-    correctRecord,
-    createDealRequest,
-    updateDealContact,
-} from "@/lib/actions/pipeline";
+import { correctRecord, updateDealContact } from "@/lib/actions/pipeline";
 import { changeOwner, changeStatus, markLost, reopenDeal, setProjectType, updateLead } from "@/lib/actions/pipeline";
 import {
     ACTIVITY_CATEGORY_LABEL,
@@ -39,15 +38,14 @@ import {
     NEXT_ACTION_LABEL,
     OUTCOME_LABEL,
     PROJECT_TYPE_LABEL,
-    REQUEST_KIND_LABEL,
-    REQUEST_STATUS_LABEL,
     STATUS_LABEL,
 } from "@/lib/dictionaries";
 import { BUSINESS_TZ, businessDate, businessDayMonth, businessDayStart, businessInputParts } from "@/lib/domain/businessTime";
 import { CLIENT_SECTION_LABEL } from "@/lib/domain/clientSections";
 import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
+import type { DealStatus } from "@/lib/domain/dealMutations";
 import { FOLLOW_UP_NEXT_KINDS, type FollowUpNextKind } from "@/lib/domain/leadFlow";
-import type { DealDetailData, DealUserOption } from "@/lib/queries/pipeline";
+import type { DealDetailData, DealTaskView, DealUserOption } from "@/lib/queries/pipeline";
 import type { DesignView } from "@/lib/queries/tracking";
 import { fmtAgo } from "@/lib/utils";
 
@@ -58,18 +56,14 @@ import { fmtAgo } from "@/lib/utils";
 // Záznamy, ktoré sa dajú prečiarknuť (round 2 §2c 5.4) – autor alebo manažér, s dôvodom.
 const CORRECTABLE = new Set(["OFFER_SENT", "SMS_SENT", "CLIENT_REPLIED"]);
 
-const DEAL_STATUS_OPTIONS: LeadStatus[] = ["ACTIVE", "SNOOZED", "WON", "LOST", "UNREACHABLE"];
+const DEAL_STATUS_OPTIONS: DealStatus[] = ["ACTIVE", "SNOOZED", "WON", "LOST", "UNREACHABLE"];
 const CLOSED: LeadStatus[] = ["WON", "LOST", "UNREACHABLE"];
-const REP_REQUEST_KINDS: DealRequestKind[] = ["PRICE", "DESIGN", "EMAIL", "ORDER", "OTHER"];
-const REQUEST_NOTE_REQUIRED: DealRequestKind[] = ["ORDER", "DESIGN", "OTHER"];
-const REQUEST_PLACEHOLDER: Record<DealRequestKind, string> = {
-    PRICE: "Čo treba naceniť?",
-    DESIGN: "Čo má návrh obsahovať?",
-    EMAIL: "S čím pomôcť v emaili?",
-    ORDER: "Čo si objednávajú? (rozsah, doplnky, dohodnutá cena)",
-    REOPEN: "Prečo znovu otvoriť?",
-    OTHER: "Čo potrebuješ?",
-};
+
+function newKey() {
+    return typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 function formatDateTime(iso: string | null) {
     if (!iso) return "—";
@@ -98,12 +92,14 @@ export default function DealDetail({
     viewerId,
     users,
     designs,
+    resolvers,
 }: {
     lead: DealDetailData;
     caps: DealCapabilities;
     viewerId: string;
     users: DealUserOption[];
     designs: DesignView[];
+    resolvers: { id: string; firstName: string; lastName: string }[];
 }) {
     const router = useRouter();
     const [pending, startTransition] = useTransition();
@@ -121,10 +117,19 @@ export default function DealDetail({
     const [showAllHistory, setShowAllHistory] = useState(caps.manage);
     const [lostReason, setLostReason] = useState(lead.lostReason ?? "");
     const [savingLost, setSavingLost] = useState(false);
-    // Akčné okno: „contact" = Zaznamenať kontakt, „replan" = Zmeniť krok (rovno obrazovka ďalšieho kroku).
-    const [interaction, setInteraction] = useState<null | "contact" | "replan">(null);
-    const [requestKind, setRequestKind] = useState<DealRequestKind>("PRICE");
-    const [requestNote, setRequestNote] = useState("");
+    // Akčné okno: „contact" = Zaznamenať kontakt, „replan" = Zmeniť krok (rovno obrazovka ďalšieho kroku),
+    // „cancel" = Zrušiť úlohu (to isté okno, uloženie úlohu zruší – wave 3 §6.7).
+    const [interaction, setInteraction] = useState<null | "contact" | "replan" | "cancel">(null);
+    // Úlohy pre manažéra (wave 3): zadanie, vybavenie, prevzatie.
+    const [ask, setAsk] = useState<null | "HELP" | "HANDOVER">(null);
+    const [finish, setFinish] = useState<null | { task: DealTaskView; send: boolean }>(null);
+    const [takingOver, setTakingOver] = useState(false);
+    // Zmena stavu / vlastníka s otvorenou úlohou alebo neposlaným výsledkom sa najprv potvrdí (menuje, čo sa stane).
+    const [statusConfirm, setStatusConfirm] = useState<DealStatus | null>(null);
+    const [ownerConfirm, setOwnerConfirm] = useState<string | null | undefined>(undefined);
+    const [taskAssignee, setTaskAssignee] = useState("");
+    const [cancelNote, setCancelNote] = useState("");
+    const [actionKey, setActionKey] = useState(newKey);
     // Z akčného okna v zozname sa „Poslali sme ponuku" otvára tu (?zaznam=ponuka), lebo dialóg potrebuje návrhy a cenu.
     const [offerDialog, setOfferDialog] = useState<null | { historical: boolean; designId?: string }>(null);
     const [correcting, setCorrecting] = useState<string | null>(null);
@@ -135,8 +140,10 @@ export default function DealDetail({
     const editable = caps.work && (caps.manage || !isClosed);
     const businessActivities = lead.activities.filter((a) => a.category === "BUSINESS");
     const visibleActivities = showAllHistory ? lead.activities : businessActivities;
-    const openRequests = lead.requests.filter((r) => r.status === "OPEN");
-    const resolvedRequests = lead.requests.filter((r) => r.status !== "OPEN");
+    const openTask = lead.tasks.find((t) => t.status === "OPEN") ?? null;
+    const isOwner = lead.owner?.id === viewerId;
+    // Zamknutý krok mení len vlastník – zrušením úlohy (D5); manažér na cudzom obchode úlohu vybaví alebo prevezme klienta.
+    const canReplan = editable && (!openTask || isOwner);
     const phoneHref = lead.phone ? `tel:${lead.phone.replace(/\s/g, "")}` : null;
 
     // Manažér smie meniť aj uzavretý obchod (requireDealManage), vlastník len otvorený (requireDealWork).
@@ -181,11 +188,62 @@ export default function DealDetail({
     async function runBusiness(fn: () => Promise<{ success: true } | ActionError>) {
         setBusy(true);
         report(await fn());
+        setActionKey(newKey());
         setBusy(false);
         router.refresh();
     }
 
-    const requestNoteMissing = REQUEST_NOTE_REQUIRED.includes(requestKind) && !requestNote.trim();
+    // Zmena stavu z výberu: uzavretie / uspanie s otvorenou úlohou ju výslovne zruší; uzavretie odmietne neposlané výsledky.
+    function pickStatus(value: DealStatus) {
+        const closing = CLOSED.includes(value);
+        if ((openTask && (closing || value === "SNOOZED")) || (closing && lead.pending.length > 0)) {
+            setCancelNote("");
+            setStatusConfirm(value);
+            return;
+        }
+        void runBusiness(() => changeStatus(lead.id, { status: value, expectedRevision: lead.revision, idempotencyKey: actionKey }));
+    }
+
+    function confirmStatus() {
+        if (!statusConfirm) return;
+        const value = statusConfirm;
+        setStatusConfirm(null);
+        void runBusiness(() =>
+            changeStatus(lead.id, {
+                status: value,
+                expectedRevision: lead.revision,
+                idempotencyKey: actionKey,
+                ...(openTask ? { cancelTask: { taskId: openTask.id, reason: cancelNote.trim() || null } } : {}),
+            }),
+        );
+    }
+
+    // Zmena vlastníka ide cez spoločný prechod (§6.10); s otvorenou úlohou sa najprv ukáže, čo sa s ňou stane.
+    function pickOwner(value: string | null) {
+        if (openTask) {
+            setTaskAssignee("");
+            setOwnerConfirm(value);
+            return;
+        }
+        void runBusiness(() => changeOwner(lead.id, { ownerId: value, expectedRevision: lead.revision, idempotencyKey: actionKey }));
+    }
+
+    function confirmOwner() {
+        if (ownerConfirm === undefined) return;
+        const value = ownerConfirm;
+        setOwnerConfirm(undefined);
+        void runBusiness(() =>
+            changeOwner(lead.id, {
+                ownerId: value,
+                expectedRevision: lead.revision,
+                idempotencyKey: actionKey,
+                ...(taskAssignee ? { taskAssigneeId: taskAssignee } : {}),
+            }),
+        );
+    }
+
+    const ownerTarget = ownerConfirm === undefined ? undefined : ownerConfirm === null ? null : users.find((u) => u.id === ownerConfirm);
+    const ownerTargetIsResolver = ownerTarget ? resolvers.some((r) => r.id === ownerTarget.id) : false;
 
     const interactionTarget: InteractionTarget = {
         id: lead.id,
@@ -194,15 +252,19 @@ export default function DealDetail({
         phone: lead.phone,
         status: lead.status,
         revision: lead.revision,
+        ownerId: lead.owner?.id ?? null,
         noAnswerStreak: lead.noAnswerStreak,
         price: lead.price,
         priceNote: lead.priceNote,
+        nextActionKind: lead.nextActionKind,
+        nextActionNote: lead.nextActionNote,
         lastOffer: lead.lastOffer,
         lastActivity: lead.lastTouch,
-        openRequests: openRequests.map((r) => ({ id: r.id, kind: r.kind })),
+        task: lead.openTask,
+        pending: lead.pending,
     };
 
-    // Predvyplnenie „Zmeniť krok" z aktuálneho kroku (ORDER a iné mimo ponuky akčného okna → „Zavolať").
+    // Predvyplnenie „Zmeniť krok" z aktuálneho kroku (druh mimo ponuky akčného okna → „Zavolať").
     const replan = (() => {
         const kind = (FOLLOW_UP_NEXT_KINDS as readonly string[]).includes(lead.nextActionKind ?? "")
             ? (lead.nextActionKind as FollowUpNextKind)
@@ -258,12 +320,10 @@ export default function DealDetail({
                         {caps.manage && (
                             <>
                                 <Select
-                                    key={`status-${lead.status}`}
+                                    key={`status-${lead.status}-${lead.revision}`}
                                     defaultValue={lead.status}
-                                    onValueChange={async (value) => {
-                                        report(await changeStatus(lead.id, value as LeadStatus));
-                                        router.refresh();
-                                    }}
+                                    disabled={busy}
+                                    onValueChange={(value) => pickStatus(value as DealStatus)}
                                 >
                                     <SelectTrigger size="sm" className="w-auto gap-1.5 rounded-full">
                                         <SelectValue />
@@ -277,12 +337,10 @@ export default function DealDetail({
                                     </SelectContent>
                                 </Select>
                                 <Select
-                                    key={`owner-${lead.owner?.id ?? "none"}`}
+                                    key={`owner-${lead.owner?.id ?? "none"}-${lead.revision}`}
                                     defaultValue={lead.owner?.id ?? "none"}
-                                    onValueChange={async (value) => {
-                                        report(await changeOwner(lead.id, value === "none" ? null : value));
-                                        router.refresh();
-                                    }}
+                                    disabled={busy}
+                                    onValueChange={(value) => pickOwner(value === "none" ? null : value)}
                                 >
                                     <SelectTrigger size="sm" className="w-auto gap-1.5 rounded-full">
                                         <SelectValue placeholder="Rieši" />
@@ -322,6 +380,12 @@ export default function DealDetail({
                                 </Select>
                             </>
                         )}
+                        {caps.manage && !isClosed && !isOwner && (
+                            <Button size="sm" variant="outline" onClick={() => setTakingOver(true)}>
+                                <UserCheck className="mr-1.5 h-4 w-4" />
+                                Preberám klienta
+                            </Button>
+                        )}
                         {!caps.manage && lead.projectType && (
                             <Badge variant="outline">{PROJECT_TYPE_LABEL[lead.projectType]}</Badge>
                         )}
@@ -341,7 +405,17 @@ export default function DealDetail({
                 <div className="grid items-start gap-6 lg:grid-cols-3">
                     {/* HLAVNÝ STĹPEC — priebeh obchodu */}
                     <div className="order-2 space-y-6 lg:order-none lg:col-span-2">
-                        {caps.resolveRequests && <RequestsCard leadId={lead.id} requests={openRequests} />}
+                        <TaskCard
+                            lead={lead}
+                            caps={caps}
+                            viewerId={viewerId}
+                            resolvers={resolvers}
+                            onAsk={(type) => setAsk(type)}
+                            onCancel={() => setInteraction("cancel")}
+                            onFinish={(task, send) => setFinish({ task, send })}
+                            onTakeover={() => setTakingOver(true)}
+                            onSend={editable ? () => setOfferDialog({ historical: false }) : undefined}
+                        />
 
                         {/* Ďalší krok · Naposledy – jedna karta, jedno tlačidlo na záznam kontaktu (round 2 §2d) */}
                         <Card>
@@ -359,8 +433,15 @@ export default function DealDetail({
                                     <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Ďalší krok</p>
                                     {lead.nextActionKind ? (
                                         <>
-                                            <p className="font-medium">{NEXT_ACTION_LABEL[lead.nextActionKind]}</p>
-                                            <UrgencyLabel at={lead.nextActionAt} hasTime={lead.nextActionHasTime} mode={lead.nextActionMode} />
+                                            <p className="flex items-center gap-1.5 font-medium">
+                                                {openTask && <Lock className="h-3.5 w-3.5 text-amber-600" />}
+                                                {NEXT_ACTION_LABEL[lead.nextActionKind]}
+                                            </p>
+                                            {openTask ? (
+                                                <p className="text-xs text-amber-700 dark:text-amber-400">⏳ čaká na {openTask.assignee.firstName}</p>
+                                            ) : (
+                                                <UrgencyLabel at={lead.nextActionAt} hasTime={lead.nextActionHasTime} mode={lead.nextActionMode} />
+                                            )}
                                             {lead.nextActionNote && (
                                                 <p className="whitespace-pre-wrap text-muted-foreground">{lead.nextActionNote}</p>
                                             )}
@@ -368,10 +449,13 @@ export default function DealDetail({
                                     ) : (
                                         <p className="text-muted-foreground">Bez ďalšieho kroku.</p>
                                     )}
-                                    {editable && (
-                                        <Button size="sm" variant="ghost" className="-ml-2 h-7" onClick={() => setInteraction("replan")}>
+                                    {lead.pendingText && (
+                                        <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">{lead.pendingText}</p>
+                                    )}
+                                    {canReplan && (
+                                        <Button size="sm" variant="ghost" className="-ml-2 h-7" onClick={() => setInteraction(openTask ? "cancel" : "replan")}>
                                             <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                                            Zmeniť krok
+                                            {openTask ? "Zmeniť krok (zruší úlohu)" : "Zmeniť krok"}
                                         </Button>
                                     )}
                                 </div>
@@ -471,103 +555,6 @@ export default function DealDetail({
                             </Card>
                         )}
 
-                        {/* Požiadavky – zoznam pre každého, formulár pre toho, kto ich podáva */}
-                        {(caps.createRequests || lead.requests.length > 0) && (
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle className="text-base">Požiadavky</CardTitle>
-                                </CardHeader>
-                                <CardContent className="space-y-3">
-                                    {lead.requests.length === 0 && <p className="text-sm text-muted-foreground">Žiadne požiadavky.</p>}
-                                    {[...openRequests, ...resolvedRequests].map((r) => (
-                                        <div key={r.id} className="space-y-1 rounded-lg border p-3 text-sm">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <Badge variant={r.status === "OPEN" ? "destructive" : "outline"}>
-                                                    {REQUEST_KIND_LABEL[r.kind]}
-                                                </Badge>
-                                                <span className="text-muted-foreground">
-                                                    {REQUEST_STATUS_LABEL[r.status]} · {r.createdBy} · {fmtAgo(r.createdAt)}
-                                                </span>
-                                                {r.status === "OPEN" && r.createdById === viewerId && caps.work && (
-                                                    <Button
-                                                        size="sm"
-                                                        variant="ghost"
-                                                        className="ml-auto h-7"
-                                                        disabled={pending}
-                                                        onClick={() =>
-                                                            startTransition(async () => {
-                                                                report(await cancelOwnDealRequest(r.id, null));
-                                                                router.refresh();
-                                                            })
-                                                        }
-                                                    >
-                                                        Zrušiť
-                                                    </Button>
-                                                )}
-                                            </div>
-                                            {r.note && <p className="whitespace-pre-wrap text-muted-foreground">{r.note}</p>}
-                                            {r.resolutionNote && (
-                                                <p className="text-muted-foreground">
-                                                    <span className="font-medium text-foreground">{r.resolvedBy ?? "Manažér"}:</span>{" "}
-                                                    {r.resolutionNote}
-                                                </p>
-                                            )}
-                                        </div>
-                                    ))}
-                                    {caps.createRequests && (
-                                        <div className="space-y-2 border-t pt-3">
-                                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                                Nová požiadavka
-                                            </p>
-                                            {!isClosed && (
-                                                <div className="flex flex-wrap gap-1">
-                                                    {REP_REQUEST_KINDS.map((k) => (
-                                                        <Button
-                                                            key={k}
-                                                            size="sm"
-                                                            variant={requestKind === k ? "default" : "outline"}
-                                                            onClick={() => setRequestKind(k)}
-                                                        >
-                                                            {REQUEST_KIND_LABEL[k]}
-                                                        </Button>
-                                                    ))}
-                                                </div>
-                                            )}
-                                            <Textarea
-                                                placeholder={isClosed ? REQUEST_PLACEHOLDER.REOPEN : REQUEST_PLACEHOLDER[requestKind]}
-                                                value={requestNote}
-                                                onChange={(e) => setRequestNote(e.target.value)}
-                                            />
-                                            <Button
-                                                size="sm"
-                                                disabled={pending || (!isClosed && requestNoteMissing)}
-                                                onClick={() =>
-                                                    startTransition(async () => {
-                                                        const r = await createDealRequest(
-                                                            lead.id,
-                                                            isClosed ? "REOPEN" : requestKind,
-                                                            requestNote.trim() || null,
-                                                        );
-                                                        if (report(r)) {
-                                                            toast.success(
-                                                                "created" in r && !r.created
-                                                                    ? "Požiadavka už existuje – doplnená poznámka"
-                                                                    : "Požiadavka odoslaná",
-                                                            );
-                                                            setRequestNote("");
-                                                        }
-                                                        router.refresh();
-                                                    })
-                                                }
-                                            >
-                                                {isClosed ? "Požiadať o znovuotvorenie" : "Požiadať manažéra"}
-                                            </Button>
-                                        </div>
-                                    )}
-                                </CardContent>
-                            </Card>
-                        )}
-
                         {/* Výsledok – zatvorenie/otvorenie robí manažér */}
                         {caps.manage && (
                             <Card>
@@ -585,7 +572,12 @@ export default function DealDetail({
                                                 </span>
                                             </div>
                                             {lead.lostReason && <p className="text-sm text-muted-foreground">{lead.lostReason}</p>}
-                                            <Button size="sm" variant="outline" disabled={busy} onClick={() => runBusiness(() => reopenDeal(lead.id))}>
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                disabled={busy}
+                                                onClick={() => runBusiness(() => reopenDeal(lead.id, { expectedRevision: lead.revision, idempotencyKey: actionKey }))}
+                                            >
                                                 Znovu otvoriť
                                             </Button>
                                         </div>
@@ -597,6 +589,11 @@ export default function DealDetail({
                                                 onChange={(e) => setLostReason(e.target.value)}
                                                 className="min-h-[72px]"
                                             />
+                                            {openTask && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    Zruší sa aj otvorená úloha pre {openTask.assignee.firstName} (obchod uzavretý).
+                                                </p>
+                                            )}
                                             <Button
                                                 size="sm"
                                                 variant="outline"
@@ -604,7 +601,15 @@ export default function DealDetail({
                                                 disabled={savingLost}
                                                 onClick={async () => {
                                                     setSavingLost(true);
-                                                    report(await markLost(lead.id, lostReason || null));
+                                                    report(
+                                                        await markLost(lead.id, {
+                                                            reason: lostReason || null,
+                                                            expectedRevision: lead.revision,
+                                                            idempotencyKey: actionKey,
+                                                            ...(openTask ? { cancelTask: { taskId: openTask.id, reason: null } } : {}),
+                                                        }),
+                                                    );
+                                                    setActionKey(newKey());
                                                     setSavingLost(false);
                                                     router.refresh();
                                                 }}
@@ -620,7 +625,8 @@ export default function DealDetail({
                         {!caps.manage && isClosed && (
                             <Card>
                                 <CardContent className="pt-6 text-sm text-muted-foreground">
-                                    Obchod je uzavretý ({STATUS_LABEL[lead.status]}){lead.lostReason ? ` – ${lead.lostReason}` : ""}. Úpravy robí manažér.
+                                    Obchod je uzavretý ({STATUS_LABEL[lead.status]}){lead.lostReason ? ` – ${lead.lostReason}` : ""}. Úpravy robí manažér –
+                                    ak ho treba znovu otvoriť, povedz mu.
                                 </CardContent>
                             </Card>
                         )}
@@ -783,13 +789,108 @@ export default function DealDetail({
                     key={`interaction-${lead.revision}-${interaction}`}
                     target={interactionTarget}
                     caps={caps}
-                    replan={interaction === "replan" ? replan : undefined}
+                    viewerId={viewerId}
+                    replan={interaction === "replan" ? replan : interaction === "cancel" ? { ...replan, cancel: true } : undefined}
                     onClose={() => setInteraction(null)}
                     onRecordOffer={() => {
                         setInteraction(null);
                         setOfferDialog({ historical: false });
                     }}
+                    onAsk={(type) => {
+                        setInteraction(null);
+                        setAsk(type);
+                    }}
                 />
+            )}
+            {ask && (
+                <AskManagerDialog
+                    key={`ask-${lead.revision}-${ask}`}
+                    target={{
+                        id: lead.id,
+                        revision: lead.revision,
+                        name: lead.name,
+                        status: lead.status,
+                        nextActionKind: lead.nextActionKind,
+                        nextActionNote: lead.nextActionNote,
+                        pending: lead.pending,
+                    }}
+                    type={ask}
+                    resolvers={resolvers}
+                    onClose={() => setAsk(null)}
+                />
+            )}
+            {finish && (
+                <FinishTaskDialog
+                    key={`finish-${lead.revision}-${finish.task.id}-${finish.send}`}
+                    lead={lead}
+                    task={finish.task}
+                    send={finish.send}
+                    onClose={() => setFinish(null)}
+                />
+            )}
+            {takingOver && <TakeoverDialog key={`takeover-${lead.revision}`} lead={lead} onClose={() => setTakingOver(false)} />}
+            {statusConfirm && (
+                <ResponsiveSheet open onOpenChange={(o) => !o && setStatusConfirm(null)} title={`Stav: ${STATUS_LABEL[statusConfirm]}`}>
+                    <div className="mx-auto w-full max-w-md space-y-3 px-4 pb-6 text-sm md:max-w-none md:px-0 md:pb-0">
+                        {openTask && (
+                            <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+                                Zruší sa otvorená úloha od {openTask.requestedBy.firstName} ({openTask.text}).
+                            </p>
+                        )}
+                        {CLOSED.includes(statusConfirm) && lead.pending.length > 0 && (
+                            <p className="text-muted-foreground">Neposlané výsledky ({lead.pendingText}) sa zapíšu ako neposielané – obchod uzavretý.</p>
+                        )}
+                        {openTask && (
+                            <Input value={cancelNote} onChange={(e) => setCancelNote(e.target.value)} placeholder="Dôvod (nepovinné)" />
+                        )}
+                        <Button className="h-11 w-full" disabled={busy} onClick={confirmStatus}>
+                            Potvrdiť
+                        </Button>
+                    </div>
+                </ResponsiveSheet>
+            )}
+            {ownerConfirm !== undefined && openTask && (
+                <ResponsiveSheet
+                    open
+                    onOpenChange={(o) => !o && setOwnerConfirm(undefined)}
+                    title={`Vlastník: ${ownerTarget ? `${ownerTarget.firstName} ${ownerTarget.lastName}` : "nepriradené"}`}
+                >
+                    <div className="mx-auto w-full max-w-md space-y-3 px-4 pb-6 text-sm md:max-w-none md:px-0 md:pb-0">
+                        {ownerTarget === null ? (
+                            <p className="rounded-lg border p-3">Úloha sa zruší (obchod bez vlastníka); krok ostane ako bežný krok na dnes.</p>
+                        ) : ownerTargetIsResolver ? (
+                            <p className="rounded-lg border p-3">
+                                {openTask.type === "HANDOVER"
+                                    ? "Odovzdanie sa prijme – manažér preberá klienta."
+                                    : `Úloha sa zruší (klienta prevezme ${ownerTarget?.firstName}); krok ostane ako jeho bežný krok na dnes.`}
+                            </p>
+                        ) : (
+                            <>
+                                <p className="rounded-lg border p-3">Úloha ostáva otvorená a krok zamknutý – nový vlastník ju zdedí.</p>
+                                <label className="flex items-center gap-3">
+                                    <span className="shrink-0 text-muted-foreground">Úlohy pôjdu</span>
+                                    <select
+                                        value={taskAssignee}
+                                        onChange={(e) => setTaskAssignee(e.target.value)}
+                                        className="h-10 flex-1 rounded-md border bg-background px-2"
+                                    >
+                                        <option value="">{openTask.assignee.firstName} (ostáva)</option>
+                                        {resolvers
+                                            .filter((r) => r.id !== openTask.assignee.id)
+                                            .map((r) => (
+                                                <option key={r.id} value={r.id}>
+                                                    {r.firstName} {r.lastName}
+                                                </option>
+                                            ))}
+                                    </select>
+                                </label>
+                            </>
+                        )}
+                        <Button className="h-11 w-full" disabled={busy} onClick={confirmOwner}>
+                            Potvrdiť
+                        </Button>
+                    </div>
+                </ResponsiveSheet>
             )}
             {offerDialog && (
                 <OfferSentDialog

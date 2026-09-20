@@ -12,7 +12,7 @@ import {
 
 export const CLIENT_SECTIONS = [
     "TODAY",
-    "WAITING_ON_US",
+    "WAITING_ON_MANAGER",
     "IN_PROGRESS",
     "PLANNED",
     "WAITING_ON_CLIENT",
@@ -24,7 +24,7 @@ export type ClientSection = (typeof CLIENT_SECTIONS)[number] | "ARCHIVED";
 
 export const CLIENT_SECTION_LABEL: Record<ClientSection, string> = {
     TODAY: "Na dnes",
-    WAITING_ON_US: "Čaká na nás",
+    WAITING_ON_MANAGER: "Čaká na manažéra",
     IN_PROGRESS: "Rozpracované",
     PLANNED: "Naplánované",
     WAITING_ON_CLIENT: "Čaká na klienta",
@@ -40,7 +40,7 @@ export type ClassifiableDeal = {
     nextActionHasTime: boolean;
     nextActionMode: NextActionMode;
     closedAt: Date | null;
-    openRequestCount: number;
+    stepLocked: boolean; // otvorená úloha pre manažéra (isStepLocked v lib/domain/tasks.ts, SQL STEP_LOCKED_SQL)
 };
 
 export type Classification = { section: ClientSection; badge?: string };
@@ -64,8 +64,8 @@ export function clientSection(deal: ClassifiableDeal, now: Date = new Date()): C
         if (process.env.NODE_ENV !== "production") throw new Error(`Neplatný stav obchodu: ${deal.status}`);
         return { section: "TODAY", badge: "neplatný stav" };
     }
-    // 2. otvorená požiadavka
-    if (deal.openRequestCount > 0) return { section: "WAITING_ON_US" };
+    // 2. krok čaká na úlohu pre manažéra (wave 3 §5.3) – nikde inde nie je na riešenie
+    if (deal.stepLocked) return { section: "WAITING_ON_MANAGER" };
     // 3. spiace
     if (deal.status === "SNOOZED") {
         if (deal.nextActionAt === null) return { section: "TODAY", badge: "chýba dátum" };

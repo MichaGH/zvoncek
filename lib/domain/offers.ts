@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { NextActionKind } from "@/app/generated/prisma/enums";
+import type { DealTaskContent, DealTaskType, NextActionKind } from "@/app/generated/prisma/enums";
+import type { PendingItem } from "@/lib/domain/tasks";
 import { businessDate, businessDayStart, isValidBusinessDate } from "@/lib/domain/businessTime";
 
 // Čo klient dostal (round 2, wave 3a – context/features/01-salesrep/round2-deal-workspace.md §2c).
@@ -32,6 +33,11 @@ const offerMetaSchema = z.object({
     historical: z.boolean(),
     callActivityId: z.string().optional(),
     migrated: z.boolean().optional(), // prevedené zo starého systému skriptom 2026-09-offer-migrate.ts (ak sa použije)
+    // Wave 3: ktoré vrátené výsledky úloh toto odoslanie použilo (lib/domain/tasks.ts) + odtlačok odoslania.
+    fulfils: z
+        .array(z.object({ taskId: z.string(), kind: z.enum(["PRICE", "DESIGN"]), designId: z.string().optional() }))
+        .optional(),
+    fp: z.string().optional(),
     correction: z.object({ reason: z.string(), byId: z.string(), at: z.string() }).nullable().optional(),
 });
 
@@ -164,22 +170,43 @@ export function clientKnowledge(k: KnowledgeInput): Record<OfferContent, Knowled
     };
 }
 
-// Odtlačok obsahu odoslania pre idempotentné opakovanie: ten istý kľúč musí niesť ten istý obsah.
+// Odtlačok odoslania pre idempotentné opakovanie: ten istý kľúč musí niesť ten istý obsah. Wave 3 (W3-R3-07): celý
+// odoslaný obsah – aj cena (suma + rozpis), voľba ďalšieho kroku a jeho deň, prekryv s úlohou, zrušenie úlohy,
+// použité a odmietnuté vrátené položky. Uloží sa do meta.fp a pri opakovaní sa porovná reťazec.
 export function offerFingerprint(x: {
     channel: OfferChannel;
     contents: readonly string[];
     sentOn: string;
     historical: boolean;
     designIds?: readonly string[];
+    price?: { amount: number; note?: string | null } | null;
+    followUp?: boolean;
+    followUpOn?: string | null;
+    overlap?: string | null;
+    cancelTask?: { taskId: string; reason?: string | null } | null;
+    fulfils?: readonly { taskId: string; kind: string; designId?: string }[];
+    dismiss?: { items: readonly { taskId: string; kind: string; designId?: string }[]; reason?: string | null } | null;
 }): string {
-    return JSON.stringify([x.channel, [...x.contents].sort(), x.sentOn, x.historical, [...(x.designIds ?? [])].sort()]);
+    const items = (list: readonly { taskId: string; kind: string; designId?: string }[] | undefined) =>
+        [...(list ?? [])].map((i) => `${i.taskId}:${i.kind}:${i.designId ?? ""}`).sort();
+    return JSON.stringify([
+        x.channel,
+        [...x.contents].sort(),
+        x.sentOn,
+        x.historical,
+        [...(x.designIds ?? [])].sort(),
+        x.price ? [moneyToString(x.price.amount), x.price.note === undefined ? "=" : (x.price.note?.trim() ?? "")] : null,
+        x.followUp ?? false,
+        x.followUpOn ?? null,
+        x.overlap ?? null,
+        x.cancelTask ? [x.cancelTask.taskId, x.cancelTask.reason?.trim() ?? ""] : null,
+        items(x.fulfils),
+        x.dismiss ? [items(x.dismiss.items), x.dismiss.reason?.trim() ?? ""] : null,
+    ]);
 }
 
 export function offerFingerprintOfMeta(meta: unknown): string {
-    const m = parseOfferMeta(meta);
-    return m
-        ? offerFingerprint({ channel: m.channel, contents: m.contents, sentOn: m.sentOn, historical: m.historical, designIds: m.designs?.map((d) => d.id) })
-        : "";
+    return parseOfferMeta(meta)?.fp ?? "";
 }
 
 export function isValidSentOn(value: string, today: string): boolean {
@@ -198,6 +225,9 @@ export type OfferDialogDeal = {
     priceNote: string | null;
     nextActionKind: NextActionKind | null;
     nextActionAt: string | null;
+    // Wave 3: otvorená úloha (zámok → odoslanie je len fakt; prekryv sa pýta) a vrátené položky na „použitie".
+    openTask: { id: string; type: DealTaskType; contents: DealTaskContent[]; assignee: string } | null;
+    pending: PendingItem[];
     offers: KnowledgeInput & {
         legacy: { quoteSentAt: string | null; aboutUsSentAt: string | null; priceDisclosed: boolean };
     };

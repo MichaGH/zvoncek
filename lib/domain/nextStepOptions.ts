@@ -22,7 +22,6 @@ export const NEXT_STEP_OPTIONS: NextStepOption[] = [
     { kind: "SEND_QUOTE", date: "today" },
     { kind: "SEND_DESIGN", date: "today", mode: "IN_PROGRESS", hint: "Rozpracované – počíta dni" },
     { kind: "SEND_EMAIL", date: "today" },
-    { kind: "ORDER", date: "optional", hint: "Čaká sa na potvrdenie manažéra" },
     { kind: "CUSTOM", date: "optional" },
 ];
 
@@ -34,4 +33,16 @@ export function nextStepOption(kind: NextActionKind): NextStepOption | undefined
 
 export function requiresDate(kind: NextActionKind): boolean {
     return nextStepOption(kind)?.date === "required";
+}
+
+// Predvolený text „Poznámky ku kroku" (wave 3, F1): použije sa, keď používateľ pole nechá prázdne, a predvyplní sa,
+// keď sa krok mení na iný druh. Odosielacie kroky majú text, ostatné nie (hovor bez poznámky je v poriadku).
+const DEFAULT_STEP_NOTE: Partial<Record<NextActionKind, string>> = {
+    SEND_QUOTE: "Poslať cenu",
+    SEND_DESIGN: "Poslať návrh",
+    SEND_EMAIL: "Poslať úvodný email (o nás + cenník)",
+};
+
+export function defaultStepNote(kind: NextActionKind | null | undefined): string | null {
+    return kind ? (DEFAULT_STEP_NOTE[kind] ?? null) : null;
 }

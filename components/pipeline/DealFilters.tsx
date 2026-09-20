@@ -7,23 +7,24 @@ import { Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { REQUEST_KIND_LABEL } from "@/lib/dictionaries";
-import { DEAL_STATUS_TABS, DEAL_VIEWS, dealsHref, NO_VIEW, type DealFilterParams } from "@/lib/domain/dealFilters";
-import type { DealUserOption } from "@/lib/queries/pipeline";
+import { DEAL_STATUS_TABS, DEAL_VIEWS, dealsHref, inboxHref, NO_VIEW, type DealFilterParams } from "@/lib/domain/dealFilters";
+import type { DealCounts, DealUserOption } from "@/lib/queries/pipeline";
 import { cn } from "@/lib/utils";
 
 // Tri úrovne filtrov, rovnaké pre obchodníka aj manažéra (round 2, D-02/D-12):
-//   1. kto to rieši (len ak vidím aj cudzie obchody)  2. stav  3. druh ďalšieho kroku + Požiadavky
-// Server rozhoduje, čo je v rozsahu; tu sa len skladajú odkazy.
+//   1. kto to rieši (len ak vidím aj cudzie obchody)  2. stav  3. pilulky (úlohy, druh kroku, čo klient dostal)
+// Každá pilulka má počet z toho istého predikátu ako jej zoznam (wave 3 §7). Server rozhoduje, čo je v rozsahu;
+// tu sa len skladajú odkazy.
 
 const PILL = "rounded-md px-3 py-1.5 text-sm transition-colors";
 const PILL_ON = "bg-background font-medium shadow-sm";
 const PILL_OFF = "text-muted-foreground hover:text-foreground";
 
-function Pill({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
+function Pill({ href, active, children, count }: { href: string; active: boolean; children: React.ReactNode; count?: number }) {
     return (
         <Link href={href} className={cn(PILL, active ? PILL_ON : PILL_OFF)}>
             {children}
+            {count !== undefined && <span className="tabular-nums"> ({count})</span>}
         </Link>
     );
 }
@@ -34,15 +35,17 @@ export default function DealFilters({
     owners,
     handoffs,
     showOwner,
-    showRequests,
+    showInbox,
+    showWaiting,
     showLegacy,
 }: {
     params: DealFilterParams;
-    counts: { today: number; requests: number };
+    counts: DealCounts;
     owners: DealUserOption[];
     handoffs: DealUserOption[];
     showOwner: boolean;
-    showRequests: boolean;
+    showInbox: boolean; // „Pre mňa" – len ten, kto úlohy vybavuje
+    showWaiting: boolean; // „Čakám na manažéra"
     showLegacy: boolean; // „Neoverené" – staré obchody na overenie, len manažér
 }) {
     const router = useRouter();
@@ -50,6 +53,7 @@ export default function DealFilters({
     const todo = DEAL_VIEWS.filter((v) => v.group === "todo");
     const running = DEAL_VIEWS.filter((v) => v.group === "running");
     const legacy = DEAL_VIEWS.filter((v) => v.group === "legacy");
+    const count = (key: string) => counts[key as keyof DealCounts];
 
     function go(patch: Partial<DealFilterParams>) {
         router.push(dealsHref(params, patch));
@@ -150,29 +154,41 @@ export default function DealFilters({
 
             {/* 3. druh ďalšieho kroku */}
             <div className="flex flex-wrap items-center gap-1 rounded-lg bg-muted p-1">
-                {showRequests && (
+                {(showInbox || showWaiting) && (
                     <>
-                        <Pill href={dealsHref(params, { view: "requests" })} active={params.view === "requests"}>
-                            Požiadavky ({counts.requests})
-                        </Pill>
+                        {/* „Pre mňa" je schránka – odkaz ruší vlastníka, stav, „Od:" aj stránkovanie (W3-R3-10). */}
+                        {showInbox && (
+                            <Pill href={inboxHref(params)} active={params.view === "inbox"} count={counts.inbox}>
+                                Pre mňa
+                            </Pill>
+                        )}
+                        {showWaiting && (
+                            <Pill
+                                href={dealsHref(params, { view: "waiting_manager" })}
+                                active={params.view === "waiting_manager"}
+                                count={counts.waiting_manager}
+                            >
+                                Čakám na manažéra
+                            </Pill>
+                        )}
                         <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden />
                     </>
                 )}
-                <Pill href={dealsHref(params, { view: "today" })} active={params.view === "today"}>
-                    Na dnes <span className="tabular-nums">({counts.today})</span>
+                <Pill href={dealsHref(params, { view: "today" })} active={params.view === "today"} count={counts.today}>
+                    Na dnes
                 </Pill>
-                <Pill href={dealsHref(params, { view: NO_VIEW })} active={params.view === NO_VIEW}>
+                <Pill href={dealsHref(params, { view: NO_VIEW })} active={params.view === NO_VIEW} count={counts.all}>
                     Všetko
                 </Pill>
                 <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden />
                 {todo.map((v) => (
-                    <Pill key={v.key} href={dealsHref(params, { view: v.key })} active={params.view === v.key}>
+                    <Pill key={v.key} href={dealsHref(params, { view: v.key })} active={params.view === v.key} count={count(v.key)}>
                         {v.label}
                     </Pill>
                 ))}
                 <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden />
                 {running.map((v) => (
-                    <Pill key={v.key} href={dealsHref(params, { view: v.key })} active={params.view === v.key}>
+                    <Pill key={v.key} href={dealsHref(params, { view: v.key })} active={params.view === v.key} count={count(v.key)}>
                         {v.label}
                     </Pill>
                 ))}
@@ -180,27 +196,12 @@ export default function DealFilters({
                     legacy.map((v) => (
                         <span key={v.key} className="flex items-center gap-1">
                             <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden />
-                            <Pill href={dealsHref(params, { view: v.key })} active={params.view === v.key}>
+                            <Pill href={dealsHref(params, { view: v.key })} active={params.view === v.key} count={count(v.key)}>
                                 {v.label}
                             </Pill>
                         </span>
                     ))}
             </div>
-
-            {/* druh požiadavky – len v pohľade Požiadavky */}
-            {params.view === "requests" && (
-                <div className="flex flex-wrap items-center gap-1">
-                    <span className="mr-1 text-xs text-muted-foreground">Druh:</span>
-                    <Pill href={dealsHref(params, { kind: undefined })} active={!params.kind}>
-                        všetky
-                    </Pill>
-                    {(["PRICE", "DESIGN", "EMAIL", "ORDER", "REOPEN", "OTHER"] as const).map((k) => (
-                        <Pill key={k} href={dealsHref(params, { kind: k })} active={params.kind === k}>
-                            {REQUEST_KIND_LABEL[k]}
-                        </Pill>
-                    ))}
-                </div>
-            )}
         </div>
     );
 }

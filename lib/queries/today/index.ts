@@ -111,11 +111,13 @@ export async function getDealsToday(user: AccessUser) {
         status: { in: ["ACTIVE" as const, "SNOOZED" as const] },
         ...(all ? {} : { ownerId: user.id }),
     };
+    // Zamknutý krok (čaká na úlohu pre manažéra) nie je na riešenie nikde – ani v zozname na dnes, ani v kalendári (§5.3).
+    const actionable = { ...scope, tasks: { none: { status: "OPEN" as const } } };
     const { start, end: calEnd } = calendarWindow(now);
 
     const [due, openCount, planned] = await Promise.all([
         prisma.lead.findMany({
-            where: { ...scope, nextActionMode: "SCHEDULED", nextActionAt: { lte: end } },
+            where: { ...actionable, nextActionMode: "SCHEDULED", nextActionAt: { lte: end } },
             select: {
                 id: true,
                 number: true,
@@ -132,7 +134,7 @@ export async function getDealsToday(user: AccessUser) {
         }),
         prisma.lead.count({ where: scope }),
         prisma.lead.findMany({
-            where: { ...scope, nextActionAt: { gte: start, lt: calEnd } },
+            where: { ...actionable, nextActionAt: { gte: start, lt: calEnd } },
             select: { nextActionAt: true },
         }),
     ]);

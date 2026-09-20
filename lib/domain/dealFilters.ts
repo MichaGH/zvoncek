@@ -1,4 +1,4 @@
-import type { DealRequestKind, LeadStatus } from "@/app/generated/prisma/enums";
+import type { LeadStatus } from "@/app/generated/prisma/enums";
 
 // Jeden model filtrov obrazovky obchodov – používa ho stránka (server) aj ovládacie prvky (klient),
 // takže odkazy a dotaz sa nemôžu rozísť. Rozsah (koho obchody vôbec vidím) tu NIE JE – ten rieši dealScope().
@@ -17,9 +17,13 @@ export const DEFAULT_VIEW = "today"; // „Na dnes" je to, s čím sa ráno zač
 export const DEFAULT_OWNER = "me"; // vždy najprv moja práca; prepnutie na iných rieši filter (v rámci rozsahu)
 export const NO_VIEW = "all";
 
-// Pilulky pohľadov. „today" a „requests" platia naprieč stavmi (stavová záložka sa pri nich ignoruje).
+// Pilulky pohľadov. „today", „waiting_manager", „inbox" a „unverified" platia naprieč stavmi (stavová záložka sa pri
+// nich ignoruje). Každá pilulka má počet, ktorý počíta ten istý predikát ako jej zoznam (lib/queries/pipeline – wave 3 §7).
 // Žije tu (nie v queries), aby to mohli importovať klientske komponenty bez ťahania Prisma klienta.
 export const DEAL_VIEWS = [
+    // Úlohy pre manažéra (wave 3): „Pre mňa" = moja schránka (len manažér), „Čakám na manažéra" = moje obchody so zámkom.
+    { key: "inbox", label: "Pre mňa", group: "tasks" },
+    { key: "waiting_manager", label: "Čakám na manažéra", group: "tasks" },
     { key: "today", label: "Na dnes", group: "focus" },
     { key: "call", label: "Volať", group: "todo" },
     { key: "quote", label: "Poslať cenu", group: "todo" },
@@ -34,10 +38,12 @@ export const DEAL_VIEWS = [
     { key: "unverified", label: "Neoverené", group: "legacy" },
 ] as const;
 
-export type DealViewKey = (typeof DEAL_VIEWS)[number]["key"] | "requests";
+export type DealViewKey = (typeof DEAL_VIEWS)[number]["key"];
 
-const VIEW_KEYS = new Set<string>([...DEAL_VIEWS.map((v) => v.key), "requests"]);
-const CROSS_STATUS_VIEWS = new Set<string>(["requests", "today", "unverified"]);
+const VIEW_KEYS = new Set<string>(DEAL_VIEWS.map((v) => v.key));
+const CROSS_STATUS_VIEWS = new Set<string>(["today", "unverified", "waiting_manager", "inbox"]);
+// Pilulky podľa druhu kroku – zamknutý obchod v nich nie je (je v „Čakám na manažéra", §5.3).
+export const STEP_KIND_VIEWS = new Set<string>(["call", "quote", "email", "design", "waiting"]);
 
 export function isDealView(value: string | undefined): value is DealViewKey {
     return Boolean(value && VIEW_KEYS.has(value));
@@ -53,7 +59,6 @@ export type DealFilterParams = {
     owner: string;
     q?: string;
     from?: string; // handedOffById – „od koho obchod prišiel"
-    kind?: string; // druh požiadavky (len pri view=requests)
     limit?: number;
 };
 
@@ -63,12 +68,10 @@ type RawParams = {
     owner?: string;
     q?: string;
     from?: string;
-    kind?: string;
     limit?: string;
 };
 
 const STATUS_KEYS = new Set<string>(DEAL_STATUS_TABS.map((t) => t.key));
-const REQUEST_KINDS = new Set<string>(["PRICE", "DESIGN", "EMAIL", "ORDER", "REOPEN", "OTHER"]);
 
 export function parseDealParams(raw: RawParams): DealFilterParams {
     const limit = Number(raw.limit);
@@ -78,7 +81,6 @@ export function parseDealParams(raw: RawParams): DealFilterParams {
         owner: raw.owner ?? DEFAULT_OWNER,
         q: raw.q?.trim() || undefined,
         from: raw.from || undefined,
-        kind: raw.kind && REQUEST_KINDS.has(raw.kind) ? raw.kind : undefined,
         limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
     };
 }
@@ -92,10 +94,6 @@ export function viewOf(params: DealFilterParams): string | undefined {
     return params.view === NO_VIEW ? undefined : params.view;
 }
 
-export function requestKindOf(params: DealFilterParams): DealRequestKind | undefined {
-    return params.kind as DealRequestKind | undefined;
-}
-
 // Odkaz na obrazovku obchodov so zmenenými parametrami. Zmena filtra vždy ruší stránkovanie (limit).
 export function dealsHref(current: DealFilterParams, patch: Partial<DealFilterParams> = {}): string {
     const next = { ...current, ...patch };
@@ -106,8 +104,13 @@ export function dealsHref(current: DealFilterParams, patch: Partial<DealFilterPa
     if (next.owner !== DEFAULT_OWNER) params.set("owner", next.owner);
     if (next.q) params.set("q", next.q);
     if (next.from) params.set("from", next.from);
-    if (next.kind && next.view === "requests") params.set("kind", next.kind);
     if (next.limit) params.set("limit", String(next.limit));
     const qs = params.toString();
     return qs ? `/dashboard/pipeline?${qs}` : "/dashboard/pipeline";
+}
+
+// „Pre mňa" je schránka, nie výsek mojich obchodov: odkaz výslovne ruší filtre, ktoré schránka ignoruje – vlastníka,
+// stav, „Od:" aj stránkovanie (W3-R3-10). Hľadanie ostáva.
+export function inboxHref(current: DealFilterParams): string {
+    return dealsHref(current, { view: "inbox", owner: DEFAULT_OWNER, filter: DEFAULT_STATUS_KEY, from: undefined });
 }

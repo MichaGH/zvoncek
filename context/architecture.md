@@ -43,8 +43,13 @@ prisma/schema.prisma      the schema; prisma/backfill/** = backfill + all check 
 - `lib/commands/pipeline.ts` — manager only (`requireDealManage`), any deal state
 - `lib/commands/offers.ts` — what the client received ("Čo sme poslali", corrections, legacy review); bodies in
   `lib/domain/offerMutations.ts`
+- `lib/commands/tasks.ts` — manager tasks (wave 3): ask / message / finish / decline / reassign / dismiss / takeover;
+  each has one keyed main row (`runKeyed`). Bodies in `lib/domain/taskMutations.ts`, pure rules in
+  `lib/domain/tasks.ts`. The owner change used by takeover, owner pick and bulk transfer is one function,
+  `ownerTransition`
 
-All three are exposed through one actions file, `lib/actions/pipeline/index.ts`.
+`lib/domain/leadWrites.ts` holds `updateLead` / `hadNextAction` so `dealMutations` and `taskMutations` do not import
+each other. All four command files are exposed through one actions file, `lib/actions/pipeline/index.ts`.
 
 Some older contact, team and admin actions still write directly in the action file (e.g. team create/rename). That is
 existing code, not the pattern for new business operations.
@@ -73,6 +78,9 @@ example, a claimed or transferred count). When present, the error code tells the
 | `STALE`, `NOT_ASSIGNED`, `IDEMPOTENCY_CONFLICT`, `DEAL_CLOSED`, `NOT_FOUND` | show the message and refresh — the data moved |
 | `RETRYABLE` (deadlock, lock timeout) | offer "Skúsiť znova" with the **same** idempotency key |
 | `FORBIDDEN`, `UNAUTHENTICATED` | show the message |
+| `STEP_LOCKED` (an open task locks the step) | show the message and refresh |
+| `TASK_OVERLAP` (a send / phone price overlaps the open task) | show the message; the dialogs ask up front ("Úloha ostáva otvorená" / "Už to netreba – zrušiť úlohu") and send the choice as `overlap` |
+| `RESULT_PENDING` (a returned price / návrh is not sent yet — I10) | show the message; the step must stay "Poslať…" |
 
 Out-of-scope deal reads and writes return `NOT_FOUND`, never `FORBIDDEN` — a rep must not learn that a deal exists.
 Domain invariants and concurrency rules: `context/project-overview.md` §1 and §5.

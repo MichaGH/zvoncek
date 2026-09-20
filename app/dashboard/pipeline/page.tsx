@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { TriangleAlert } from "lucide-react";
+import { History, TriangleAlert } from "lucide-react";
 import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import RefreshButton from "@/components/dashboard/RefreshButton";
 import DealFilters from "@/components/pipeline/DealFilters";
@@ -10,9 +10,10 @@ import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/access/user";
 import { dealCapabilities } from "@/lib/domain/dealCapabilities";
 import {
+    DEFAULT_OWNER,
+    DEFAULT_STATUS_KEY,
     dealsHref,
     parseDealParams,
-    requestKindOf,
     statusOf,
     viewOf,
     type DealFilterParams,
@@ -27,6 +28,7 @@ import {
     getDealOwnerOptions,
     getDealScope,
     getHandoffOptions,
+    getResolverOptions,
 } from "@/lib/queries/pipeline";
 
 // Jedna obrazovka obchodov pre obchodníka aj manažéra (round 2, D-01). Rozsah rieši dealScope() na serveri,
@@ -35,32 +37,39 @@ import {
 export default async function DealsPage({
     searchParams,
 }: {
-    searchParams: Promise<{ filter?: string; view?: string; owner?: string; q?: string; from?: string; kind?: string; limit?: string }>;
+    searchParams: Promise<{ filter?: string; view?: string; owner?: string; q?: string; from?: string; limit?: string }>;
 }) {
     const viewer = await requireUser();
     if (!viewer) redirect("/login?deactivated=1");
     if (!can(viewer, "deals.view")) redirect("/dashboard");
 
-    const raw = parseDealParams(await searchParams);
+    const parsed = parseDealParams(await searchParams);
     const caps = dealCapabilities(viewer);
+    // „Pre mňa" je len pre toho, kto úlohy vybavuje, a ignoruje vlastníka, stav aj „Od:" (schránka, wave 3 §7).
+    const raw: DealFilterParams =
+        parsed.view === "inbox"
+            ? caps.resolver
+                ? { ...parsed, owner: DEFAULT_OWNER, filter: DEFAULT_STATUS_KEY, from: undefined }
+                : { ...parsed, view: "today" }
+            : parsed;
     const scope = await getDealScope(viewer);
     const ownerFilter = resolveOwnerFilter(raw.owner, viewer, scope);
     // Parametre normalizujeme na to, čo server naozaj použil – odkazy potom nikdy neukazujú niečo iné než zoznam.
     const params: DealFilterParams = { ...raw, owner: ownerFilterParam(ownerFilter, viewer.id) };
     const take = params.limit ?? DEAL_PAGE_SIZE;
+    // Zoznam aj počty dostanú tie isté vstupy (jeden predikát na pilulku).
+    const filters = {
+        scope,
+        owner: ownerFilter,
+        status: statusOf(params),
+        query: params.q,
+        handedOffBy: params.from,
+        viewerId: viewer.id,
+    };
 
-    const [{ rows, hasMore }, counts, owners, handoffs, callers] = await Promise.all([
-        getDealList({
-            scope,
-            owner: ownerFilter,
-            status: statusOf(params),
-            view: viewOf(params),
-            query: params.q,
-            handedOffBy: params.from,
-            requestKind: requestKindOf(params),
-            take,
-        }),
-        getDealCounts({ scope, owner: ownerFilter, handedOffBy: params.from }),
+    const [{ rows, hasMore }, counts, owners, handoffs, callers, resolvers] = await Promise.all([
+        getDealList({ ...filters, view: viewOf(params), take }),
+        getDealCounts(filters),
         caps.seeOthers ? getDealOwnerOptions(scope) : Promise.resolve([]),
         caps.seeOthers ? getHandoffOptions(scope) : Promise.resolve([]),
         caps.transferDeals
@@ -70,6 +79,7 @@ export default async function DealsPage({
                   orderBy: { firstName: "asc" },
               })
             : Promise.resolve([]),
+        caps.work ? getResolverOptions(viewer.id) : Promise.resolve([]),
     ]);
 
     const showOwner = caps.seeOthers && ownerFilter === "all";
@@ -78,10 +88,16 @@ export default async function DealsPage({
         <DashboardPage>
             <DashboardPageHeader
                 title="Pipeline"
-                description={`${counts.open} otvorených · ${counts.today} na dnes${counts.requests ? ` · ${counts.requests} požiadaviek` : ""}`}
+                description={`${counts.open} otvorených · ${counts.today} na dnes${caps.resolver && counts.inbox ? ` · ${counts.inbox} pre mňa` : ""}`}
                 actions={
                     <>
-                        {caps.transferDeals && <TransferDealsDialog owners={owners} callers={callers} />}
+                        {caps.transferDeals && <TransferDealsDialog owners={owners} callers={callers} resolvers={resolvers} />}
+                        <Button asChild variant="ghost" size="sm">
+                            <Link href="/dashboard/pipeline/historia">
+                                <History className="mr-1.5 h-4 w-4" />
+                                História
+                            </Link>
+                        </Button>
                         <RefreshButton />
                     </>
                 }
@@ -98,11 +114,12 @@ export default async function DealsPage({
                     )}
                     <DealFilters
                         params={params}
-                        counts={{ today: counts.today, requests: counts.requests }}
+                        counts={counts}
                         owners={owners}
                         handoffs={handoffs}
                         showOwner={caps.seeOthers}
-                        showRequests={caps.resolveRequests || caps.createRequests}
+                        showInbox={caps.resolver}
+                        showWaiting={caps.work}
                         showLegacy={caps.manage}
                     />
                 </div>
@@ -112,7 +129,15 @@ export default async function DealsPage({
                 {rows.length} {hasMore ? "+ záznamov" : "záznamov"}
             </div>
 
-            <DealList rows={rows} caps={caps} showStatus={params.filter === "all"} showOwner={showOwner} viewerId={viewer.id} />
+            <DealList
+                rows={rows}
+                caps={caps}
+                showStatus={params.filter === "all"}
+                showOwner={showOwner}
+                inbox={params.view === "inbox"}
+                viewerId={viewer.id}
+                resolvers={resolvers}
+            />
 
             {hasMore && (
                 <div className="mt-4 flex justify-center">

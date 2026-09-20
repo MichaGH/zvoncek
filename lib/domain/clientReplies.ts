@@ -28,7 +28,8 @@ export const CLIENT_REPLIES: ClientReply[] = [
     { key: "WANTS_INFO", label: "Chcú info (o nás, cenník)", outcome: "POSITIVE", nextKind: "SEND_EMAIL" },
     { key: "WANTS_QUOTE", label: "Chcú konkrétnu cenu", outcome: "WANTS_QUOTE", terminal: true },
     { key: "WANTS_DESIGN", label: "Chcú návrh", outcome: "WANTS_DESIGN", terminal: true },
-    { key: "WANTS_TO_ORDER", label: "Chcú objednať", outcome: "WANTS_TO_ORDER", terminal: true },
+    // Obyčajná odpoveď (wave 3, D15): zapíše sa, ďalší krok vyberá obchodník; odovzdanie manažérovi je samostatná akcia.
+    { key: "WANTS_TO_ORDER", label: "Chcú objednať", outcome: "WANTS_TO_ORDER", nextKind: "CALL", days: 1, needsDate: true },
 ];
 
 export const REPLY_KEYS = CLIENT_REPLIES.map((r) => r.key);

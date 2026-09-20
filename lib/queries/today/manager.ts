@@ -1,7 +1,8 @@
 import prisma from "@/lib/db";
 import type { AccessUser } from "@/lib/access/user";
 import type { Role } from "@/app/generated/prisma/enums";
-import { businessDayStart, businessTodayStart, isOverdue } from "@/lib/domain/businessTime";
+import { businessDaysBetween, businessDayStart, businessTodayStart, isOverdue } from "@/lib/domain/businessTime";
+import { TASK_AGE_ALERT_DAYS } from "@/lib/domain/tasks";
 import { ROLE_PERMISSIONS } from "@/lib/permissions";
 import { weekStartKey } from "@/lib/queries/today";
 
@@ -17,23 +18,29 @@ export async function getManagerToday(viewer: Pick<AccessUser, "id">) {
     const weekStart = businessDayStart(weekStartKey(now));
     const dayAgo = new Date(now.getTime() - 24 * 3_600_000);
 
-    const openRequestWhere = { status: "OPEN" as const, lead: { deletedAt: null } };
-    const [requests, requestCount, reps, unassigned, staleBatches, orphanWork] = await Promise.all([
+    // „Čaká na mňa" = ten istý dopyt ako „Pre mňa" (wave 3 §7): otvorené úlohy pridelené MNE, akýkoľvek vlastník.
+    const inboxWhere = {
+        status: "OPEN" as const,
+        assigneeId: viewer.id,
+        lead: { deletedAt: null, pipelineEnteredAt: { not: null } },
+    };
+    const [tasks, taskCount, reps, unassigned, staleBatches, orphanWork] = await Promise.all([
         // náhľad (najstaršie) + samostatný presný počet pre titulok
-        prisma.dealRequest.findMany({
-            where: openRequestWhere,
+        prisma.dealTask.findMany({
+            where: inboxWhere,
             orderBy: [{ createdAt: "asc" }, { id: "asc" }],
             take: 10,
             select: {
                 id: true,
-                kind: true,
-                note: true,
+                type: true,
+                contents: true,
+                text: true,
                 createdAt: true,
-                createdBy: { select: { firstName: true, lastName: true } },
+                requestedBy: { select: { firstName: true, lastName: true } },
                 lead: { select: { id: true, number: true, companyName: true, website: true } },
             },
         }),
-        prisma.dealRequest.count({ where: openRequestWhere }),
+        prisma.dealTask.count({ where: inboxWhere }),
         prisma.user.findMany({
             where: { deletedAt: null, role: { in: rolesWith("deals.receive") }, id: { not: viewer.id } },
             select: { id: true, firstName: true, lastName: true },
@@ -70,7 +77,13 @@ export async function getManagerToday(viewer: Pick<AccessUser, "id">) {
     const [openDeals, followUpsToday, newThisWeek, callbacks, lastActivity] = await Promise.all([
         prisma.lead.findMany({
             where: { deletedAt: null, pipelineEnteredAt: { not: null }, status: { in: ["ACTIVE", "SNOOZED"] }, ownerId: { in: repIds } },
-            select: { ownerId: true, nextActionAt: true, nextActionHasTime: true, nextActionMode: true },
+            select: {
+                ownerId: true,
+                nextActionAt: true,
+                nextActionHasTime: true,
+                nextActionMode: true,
+                _count: { select: { tasks: { where: { status: "OPEN" } } } },
+            },
         }),
         prisma.activity.groupBy({
             by: ["userId"],
@@ -102,8 +115,13 @@ export async function getManagerToday(viewer: Pick<AccessUser, "id">) {
             id: r.id,
             name: `${r.firstName} ${r.lastName}`.trim(),
             openDeals: deals.length,
+            // Zamknutý krok (čaká na úlohu pre manažéra) nie je meškanie obchodníka (§5.3).
             overdue: deals.filter(
-                (d) => d.nextActionMode === "SCHEDULED" && d.nextActionAt && isOverdue(d.nextActionAt, d.nextActionHasTime, now),
+                (d) =>
+                    d._count.tasks === 0 &&
+                    d.nextActionMode === "SCHEDULED" &&
+                    d.nextActionAt &&
+                    isOverdue(d.nextActionAt, d.nextActionHasTime, now),
             ).length,
             followUpsToday: followUpsToday.find((f) => f.userId === r.id)?._count ?? 0,
             newThisWeek: newThisWeek.find((n) => n.ownerId === r.id)?._count ?? 0,
@@ -124,17 +142,19 @@ export async function getManagerToday(viewer: Pick<AccessUser, "id">) {
     };
 
     return {
-        requests: requests.map((r) => ({
-            id: r.id,
-            kind: r.kind,
-            note: r.note,
-            createdAt: r.createdAt.toISOString(),
-            requester: `${r.createdBy.firstName} ${r.createdBy.lastName}`.trim(),
-            leadId: r.lead.id,
-            leadName: `#${r.lead.number} ${r.lead.companyName ?? r.lead.website ?? "—"}`,
+        tasks: tasks.map((t) => ({
+            id: t.id,
+            type: t.type,
+            contents: t.contents,
+            text: t.text,
+            createdAt: t.createdAt.toISOString(),
+            overdue: businessDaysBetween(t.createdAt, now) >= TASK_AGE_ALERT_DAYS,
+            requester: `${t.requestedBy.firstName} ${t.requestedBy.lastName}`.trim(),
+            leadId: t.lead.id,
+            leadName: `#${t.lead.number} ${t.lead.companyName ?? t.lead.website ?? "—"}`,
         })),
-        requestCount,
-        oldestRequestOverTwoDays: requests.length > 0 && now.getTime() - requests[0].createdAt.getTime() > 2 * 86_400_000,
+        taskCount,
+        oldestTaskOverdue: tasks.length > 0 && businessDaysBetween(tasks[0].createdAt, now) >= TASK_AGE_ALERT_DAYS,
         reps: repRows,
         unassigned,
         callers: {

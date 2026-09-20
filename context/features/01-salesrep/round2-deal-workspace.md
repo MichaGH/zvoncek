@@ -563,7 +563,7 @@ The wave-1 step (one read function for requests) and S-07 are retired with `Deal
 ## 2b. Wave 3: manager tasks, handover, história — `wave-3-task-proposal-final.md`
 
 **The official wave-3 design is `context/features/01-salesrep/wave-3-task-proposal-final.md`** (decided by Michal
-2026-09-19, reviewed externally, not implemented). This section is only the summary and the pointer; the task file wins
+2026-09-19, reviewed externally, **implemented on the test branch 2026-09-19**). This section is only the summary and the pointer; the task file wins
 wherever they differ.
 
 **Why** (task doc §1a–§1c): using waves 1–2 exposed that the round-1 requests did three jobs at once — a work item, a
@@ -575,7 +575,8 @@ the request and the step in sync; the task doc §1c says why each was dropped.
 
 **What** (task doc §2–§7), built on Michal's three situations — A price, B návrh, C details/technical questions:
 - a **task** = the SR asks the manager for a price, a návrh or something else ("Iné"); price and návrh together = one
-  task; one open task per deal; never created or closed automatically; telesales never create tasks;
+  task in **wave 4** (decision update 2026-09-19, task doc D4 — today one content per task; the step follows the
+  content, D3); one open task per deal; never created or closed automatically; telesales never create tasks;
 - while a task is open the SR's **step is locked on the server** — the locked step is the task's follow-up ("Poslať
   cenu"); the SR may still record contacts and sends, and may snooze / close / replan by cancelling the task in the same
   save;
@@ -592,7 +593,7 @@ the request and the step in sync; the task doc §1c says why each was dropped.
 
 Still wanted from the dropped first wave-3 design and carried into the task doc (§1d): takeover at any time with the rep
 losing access, História ("prevzaté 18. 9. · Michal"), ownership history for statistics and future rep → rep transfers,
-counters on every pill, no automatic tasks, the ask text pre-filled from the last call note, "Chcú objednať" as an
+counters on every pill, no automatic tasks, the ask text as a message only for the task (pre-fill dropped 2026-09-19), "Chcú objednať" as an
 ordinary reply after which an explicit handover may follow. Schema: task doc §4 (S-08…S-11); what production receives
 is decided in `context/domain/db-changes.md`.
 

@@ -74,7 +74,7 @@ export async function requireCallLead(
     return { lead, actor };
 }
 
-export type ClosedPolicy = "reject" | "reopenRequestOnly" | "allow";
+export type ClosedPolicy = "reject" | "allow";
 
 // Mutácia obchodu manažérom ALEBO vlastníkom. Zamkne User riadok aktéra FOR SHARE (deaktivácia čaká / blokuje),
 // voliteľne ďalšie User riadky (napr. cieľ zmeny vlastníka), potom Lead.
@@ -94,7 +94,6 @@ export async function requireDealWork(
 
     const policy = opts.closedPolicy ?? "reject";
     if (policy === "reject" && !isOpenDealStatus(lead.status)) throw new AccessError("DEAL_CLOSED");
-    if (policy === "reopenRequestOnly" && !isClosedDealStatus(lead.status)) throw new AccessError("FORBIDDEN");
     if (policy === "allow" && !isManager) throw new AccessError("FORBIDDEN");
 
     if (opts.expectedRevision !== undefined && lead.revision !== opts.expectedRevision) {
@@ -103,7 +102,7 @@ export async function requireDealWork(
     return { lead, actor, users, isManager };
 }
 
-// Len manažér (návrhy, tracking, stav, WON, reopen, vlastník, vybavenie požiadaviek). Akýkoľvek stav obchodu.
+// Len manažér (návrhy, tracking, stav, WON, reopen, vlastník, úlohy pre manažéra). Akýkoľvek stav obchodu.
 export async function requireDealManage(
     tx: Tx,
     user: AccessUser,

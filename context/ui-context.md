@@ -34,7 +34,7 @@ Conventions for building screens here. Behaviour lives in `context/app-workflow.
 - UI is Slovak, including Slovak typographic quotes („ ") — in `.tsx` string literals close them with the typographic
   character, not `"`, or the JSX string breaks.
 - General labels come from `lib/dictionaries.ts` (`STATUS_LABEL`, `NEXT_ACTION_LABEL`, `OUTCOME_LABEL`,
-  `REQUEST_KIND_LABEL`, …); pipeline section labels come from `lib/domain/clientSections.ts` (`CLIENT_SECTION_LABEL`).
+  `TASK_CONTENT_LABEL`, `TASK_STATUS_LABEL`, …); pipeline section labels come from `lib/domain/clientSections.ts` (`CLIENT_SECTION_LABEL`).
   Never hardcode a label that already exists in either place.
 - Dates are rendered in business time: `timeZone: BUSINESS_TZ`, or the helpers in `lib/domain/businessTime.ts`
   (`businessDayMonth`, `businessHm`). Relative wording ("Dnes", "Zajtra", "Včera") comes from `businessDaysBetween`.
@@ -53,6 +53,10 @@ Conventions for building screens here. Behaviour lives in `context/app-workflow.
 - Filter state lives in the URL through `lib/domain/dealFilters.ts` (`parseDealParams` / `dealsHref`), so links and the
   server query cannot disagree. Changing a filter resets paging.
 - Filter pills with a count compute it with the same predicate and filters as the list, so the number matches what a
-  click shows. **Today only "Na dnes" and "Požiadavky" on the pipeline have counts**; counts on every pill are
-  `[WAVE 3]` (`context/features/01-salesrep/wave-3-task-proposal-final.md` §7: one predicate per pill, shared by its
-  list and its count). Do not add them outside that wave.
+  click shows. On the pipeline **every pill has a count** (wave 3): one predicate per pill (`pillFilter` in
+  `lib/queries/pipeline`), shared by `getDealList` and `getDealCounts` (`COUNTED_VIEWS`). A new pill gets its count
+  from the same predicate, never from a second query written by hand.
+- Dialog forms (e.g. `AskManagerDialog`, `FinishTaskDialog`): small uppercase section labels, one decision per
+  section, a derived value shown as text with "Zmeniť" instead of an always-open picker, the primary button's label
+  stays stable and the reason it is disabled is shown under it. Slovak names are not declined in labels — write
+  "Odoslať – Nikolas", not a hand-built dative.

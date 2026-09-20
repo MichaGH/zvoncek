@@ -6,10 +6,12 @@ import type { AccessUser } from "@/lib/access/user";
 import { createAuditActivity } from "@/lib/activityLog";
 import { sourceFor } from "@/lib/commands/dealWork";
 import { businessDate, isValidBusinessDate } from "@/lib/domain/businessTime";
-import { updateLead } from "@/lib/domain/dealMutations";
+import { cancelTaskSchema, updateLead } from "@/lib/domain/dealMutations";
 import { activityReplay } from "@/lib/domain/idempotency";
 import { CORRECTABLE_TYPES, correctRecord, recordOffer } from "@/lib/domain/offerMutations";
 import { isValidSentOn, OFFER_CONTENTS, offerFingerprint, offerFingerprintOfMeta } from "@/lib/domain/offers";
+import { dismissInputSchema, fulfilsSchema, OVERLAP_CHOICES, overlapsTask, type ItemRef } from "@/lib/domain/tasks";
+import { assertDecidesResults, cancelOpenTask, dismissItems, loadPending, openTaskOf, requireOpenTask, unlockStep } from "@/lib/domain/taskMutations";
 import { can } from "@/lib/permissions";
 
 // „Čo sme poslali" + opravy + potvrdenie starých záznamov (round 2, wave 3a – §2c).
@@ -32,6 +34,12 @@ const recordSchema = z
         designIds: z.array(z.string().min(1)).max(10).optional(),
         followUp: z.boolean(),
         followUpOn: z.string().optional(),
+        // Wave 3 (§5.1, §6.4): voľba pri prekryve s otvorenou úlohou, zrušenie úlohy („už to netreba"),
+        // použité vrátené položky a položky, ktoré sa v tom istom uložení neposielajú (napr. staršia cena).
+        overlap: z.enum(OVERLAP_CHOICES).nullish(),
+        cancelTask: cancelTaskSchema.nullish(),
+        fulfils: fulfilsSchema.nullish(),
+        dismiss: dismissInputSchema.nullish(),
     })
     .strict();
 
@@ -44,6 +52,12 @@ export async function recordOfferSentAs(user: AccessUser, raw: RecordOfferSentIn
     const input = parsed.data;
     if (!isValidSentOn(input.sentOn, businessDate(new Date()))) return { error: "Neplatný dátum odoslania." };
     if (input.historical && (!can(user, "deals.manage") || input.followUp)) return { error: "Neplatné údaje." };
+    // Spätný záznam nikdy nevybavuje úlohy ani ich výsledky (§4.2).
+    if (input.historical && (input.overlap || input.cancelTask || input.fulfils?.length || input.dismiss)) return { error: "Neplatné údaje." };
+    // Voľba pri prekryve a zrušenie úlohy sa musia zhodovať (R01-5): „zrušiť" = presne jedno cancelTask s dôvodom,
+    // „ostáva otvorená" / žiadna voľba = žiadne cancelTask.
+    if ((input.overlap === "CANCEL_TASK") !== Boolean(input.cancelTask)) return { error: "Neplatné údaje." };
+    if (input.cancelTask && !input.cancelTask.reason?.trim()) return { error: "Napíš, prečo úlohu rušíš." };
     if (input.followUpOn && (!input.followUp || !isValidBusinessDate(input.followUpOn) || input.followUpOn < businessDate(new Date()))) {
         return { error: "Neplatný dátum hovoru." };
     }
@@ -53,7 +67,20 @@ export async function recordOfferSentAs(user: AccessUser, raw: RecordOfferSentIn
         leadId: input.leadId,
         types: ["OFFER_SENT"] as const,
         fingerprint: (row: { meta: unknown }) => offerFingerprintOfMeta(row.meta),
-        want: offerFingerprint({ channel: "EMAIL", contents: input.contents, sentOn: input.sentOn, historical: input.historical, designIds: input.designIds }),
+        want: offerFingerprint({
+            channel: "EMAIL",
+            contents: input.contents,
+            sentOn: input.sentOn,
+            historical: input.historical,
+            designIds: input.designIds,
+            price: input.price ?? null,
+            followUp: input.followUp,
+            followUpOn: input.followUpOn ?? null,
+            overlap: input.overlap ?? null,
+            cancelTask: input.cancelTask ?? null,
+            fulfils: input.fulfils ?? [],
+            dismiss: input.dismiss ?? null,
+        }),
     };
     const first = await activityReplay(input.idempotencyKey, replayKey);
     if (first) return first;
@@ -67,6 +94,25 @@ export async function recordOfferSentAs(user: AccessUser, raw: RecordOfferSentIn
             // Spätný záznam patrí len k starým obchodom, kým ich manažér nepotvrdí.
             if (input.historical && (!lead.hadLegacySends || lead.legacySendsReviewedAt)) {
                 throw new AccessError("FORBIDDEN", "Spätný záznam je len pre neoverené staré obchody.");
+            }
+            const source = sourceFor(user);
+            // Zamknutý krok (§5.1): odoslanie je len fakt, pokiaľ sa v tom istom uložení úloha neruší. Odoslanie toho,
+            // na čom manažér práve robí, bez voľby neprejde (W3-R2-05); „už to netreba" ruší len vlastník.
+            const open = input.historical ? null : await openTaskOf(tx, lead.id);
+            if (!open && input.cancelTask) throw new AccessError("STALE", "Úloha sa medzitým zmenila – obnovujem.");
+            if (open && overlapsTask(open, input.contents) && !input.overlap) throw new AccessError("TASK_OVERLAP");
+            let factOnly = Boolean(open);
+            if (open && input.cancelTask) {
+                const task = await requireOpenTask(tx, lead.id, input.cancelTask.taskId);
+                if (lead.ownerId !== actor.id) throw new AccessError("FORBIDDEN", "Úlohu ruší vlastník obchodu.");
+                await cancelOpenTask(tx, actor, task, input.cancelTask.reason!.trim(), source);
+                await unlockStep(tx, lead);
+                factOnly = false;
+            }
+            let dismissed: ItemRef[] = [];
+            if (input.dismiss) {
+                assertDecidesResults(lead, actor);
+                dismissed = await dismissItems(tx, actor, lead.id, input.dismiss, source, { pending: await loadPending(tx, lead.id) });
             }
             await recordOffer(
                 tx,
@@ -82,8 +128,12 @@ export async function recordOfferSentAs(user: AccessUser, raw: RecordOfferSentIn
                     followUp: input.followUp,
                     followUpOn: input.followUpOn,
                     idempotencyKey: input.idempotencyKey,
+                    fulfils: (input.fulfils ?? []).map((f) => ({ taskId: f.taskId, kind: f.kind, ...(f.designId ? { designId: f.designId } : {}) })),
+                    dismissedInSave: dismissed,
+                    factOnly,
+                    fp: replayKey.want,
                 },
-                sourceFor(user),
+                source,
             );
         });
         return { success: true };

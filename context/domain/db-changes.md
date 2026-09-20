@@ -18,14 +18,20 @@ change on test is later reverted or replaced before rollout (e.g. an enum value 
 next), only the end result matters. A change is **non-additive** only when it removes, renames or retypes something
 **production already has**, or adds a required column / constraint that existing production rows could violate.
 
+**Rebuilt from zero on 2026-09-19 (wave 3).** §1 was regenerated from the two schema files, not copied from earlier
+wave notes: `npx prisma migrate diff --from-schema <7beb689:prisma/schema.prisma> --to-schema prisma/schema.prisma
+--script` (offline, no database). The script has **no `DROP` and no retype** — every statement is `CREATE TYPE`,
+`ALTER TYPE … ADD VALUE`, `ADD COLUMN`, `CREATE TABLE`, `CREATE [UNIQUE] INDEX` or `ADD CONSTRAINT … FOREIGN KEY`.
+
 **Non-additive changes owed to production: none.** Keep this line true: any non-additive entry must be listed here by
-id, with its data plan, before it is applied on test.
+id, with its data plan, before it is applied on test. (The planned old-send contraction in §3.3 is not applied on test
+and therefore not listed here.)
 
 ## Environments
 
 | Name | Neon endpoint (suffix) | Role |
 |---|---|---|
-| test / development | `…nhww8x` | listed changes were applied here; endpoint was verified 2026-09-18 |
+| test / development | `…nhww8x` | listed changes were applied here; endpoint re-verified 2026-09-19 |
 | production | `…m0xyun` | commented out in `.env`; **never touched by a development session** |
 
 Full connection strings are never written into docs, logs or scripts. Database-touching backfill and concurrency
@@ -40,8 +46,8 @@ recorded here because the row is removed after rollout.
    Review the exact schema change and verify that `DATABASE_URL` points to the test endpoint.
 2. Edit `prisma/schema.prisma`, review the generated SQL diff, then run `npx prisma generate` and apply on **test**.
    Use `npx prisma db push`; never `--accept-data-loss` or `--force-reset`.
-3. If `db push` stops on a **data-loss warning for a genuinely additive change** (it does this for new unique indexes),
-   do not accept it. Generate the diff, read it, apply it, confirm:
+3. If `db push` stops on a **data-loss warning** (it does this for new unique indexes, and for any enum value or table
+   it would drop), do not accept it. Generate the diff, read it, apply it, confirm:
    ```bash
    npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script -o <file outside the repo>
    npx prisma db execute --file <that file>
@@ -51,131 +57,131 @@ recorded here because the row is removed after rollout.
    check as passed.
 5. **Production:** separately approved rollout only, after a backup and restore-point Neon branch. Compare the live
    production schema with the reviewed target; do not assume it matches a Git commit. Apply the reviewed diff and
-   backfill in the documented order (`context/features/01-salesrep/planning.md` §14).
+   backfill in the documented order (§4 below, `context/features/01-salesrep/planning.md` §14).
 
 ---
 
-## 1. Round 1 — caller assignment, SALES_REP, deals (applied to TEST, **owed to production**)
+## 1. Net schema delta: production baseline → current test schema (all TEST, all additive)
 
-Schema source: commit `9cc335e`, diff `git diff 7beb689 9cc335e -- prisma/schema.prisma`.
-All of it is **additive**: new nullable columns, one non-null column with a default, new enum values, new indexes, one
-new table. Nothing was renamed, retyped or dropped.
+"Came with" is only for tracing the design; the rollout applies the net result in one reviewed script.
 
-### 1.1 `Lead` — new columns
+### 1.1 New enum values on existing enums
 
-| Column | Type | Null | Default | Status |
-|---|---|---|---|---|
-| `assignedCallerId` | text, FK → `User.id` | yes | — | TEST |
-| `assignedCallerAt` | timestamp(3) without time zone | yes | — | TEST |
-| `pipelineEnteredAt` | timestamp(3) without time zone | yes | — | TEST |
-| `handedOffById` | text, FK → `User.id` | yes | — | TEST |
-| `closedAt` | timestamp(3) without time zone | yes | — | TEST |
-| `revision` | integer | **no** | `0` | TEST |
+| Enum | Added values | Came with | Status |
+|---|---|---|---|
+| `Role` | `SALES_REP` | round 1 | TEST |
+| `CallOutcome` | `WANTS_TO_ORDER` | round 1 | TEST |
+| `ActivitySource` | `CLIENTS` | round 1 | TEST |
+| `ActivityType` | `CALLER_ASSIGNED`, `CALLER_RELEASED`, `CALL_REVERTED`, `DEAL_REOPENED` | round 1 | TEST |
+| `ActivityType` | `OFFER_SENT`, `CLIENT_REPLIED` | round 2 wave 3a | TEST |
+| `ActivityType` | `TASK_CREATED`, `TASK_MESSAGE`, `TASK_DONE`, `TASK_DECLINED`, `TASK_CANCELLED`, `TASK_REASSIGNED`, `TASK_RESULT_DISMISSED` | wave 3 | TEST |
 
-`revision` is the only NOT NULL addition. It is safe on PostgreSQL 11+ (fast default, no table rewrite); Neon is far
-newer, so this was instant.
+`ALTER TYPE … ADD VALUE` is additive and cheap, but **a value added inside a transaction cannot be used by the same
+transaction** — a rollout script must never add a value and write rows using it in one go, and the schema must land
+**before** code that writes the value is deployed.
 
-### 1.2 `Lead` — new indexes
+### 1.2 New enums
 
-| Index | Status |
-|---|---|
-| `(status, assignedCallerId, createdAt)` | TEST |
-| `(assignedCallerId, status, callbackKind)` | TEST |
-| `(ownerId, status)` | TEST |
-| `(pipelineEnteredAt, status)` | TEST |
+| Enum | Values | Came with | Status |
+|---|---|---|---|
+| `DealTaskType` | `HELP`, `HANDOVER` | wave 3 | TEST |
+| `DealTaskContent` | `PRICE`, `DESIGN`, `OTHER` | wave 3 | TEST |
+| `DealTaskStatus` | `OPEN`, `DONE`, `DECLINED`, `CANCELLED` | wave 3 | TEST |
+| `DealOwnershipReason` | `HANDOFF`, `CHANGE`, `BULK`, `TAKEOVER`, `HANDOVER`, `REVERT` | wave 3 | TEST |
 
-Plain `CREATE INDEX` takes a lock that blocks writes for its duration. Do not assume the duration on production;
-review its table size and schedule the rollout accordingly. If needed, use reviewed `CREATE INDEX CONCURRENTLY` SQL
-instead of Prisma-generated `CREATE INDEX`.
+### 1.3 `Lead` — new columns
 
-### 1.3 `Activity` — new columns
+| Column | Type | Null | Default | Came with | Status |
+|---|---|---|---|---|---|
+| `assignedCallerId` | text, FK → `User.id` `ON DELETE SET NULL` | yes | — | round 1 | TEST |
+| `assignedCallerAt` | timestamp(3) without time zone | yes | — | round 1 | TEST |
+| `pipelineEnteredAt` | timestamp(3) without time zone | yes | — | round 1 | TEST |
+| `handedOffById` | text, FK → `User.id` `ON DELETE SET NULL` | yes | — | round 1 | TEST |
+| `closedAt` | timestamp(3) without time zone | yes | — | round 1 | TEST |
+| `revision` | integer | **no** | `0` | round 1 | TEST |
+| `offerAboutUsAt`, `offerPricelistAt`, `offerPriceAt` | timestamp(3) without time zone | yes | — | wave 3a | TEST |
+| `legacySendsReviewedAt` | timestamp(3) without time zone | yes | — | wave 3a | TEST — **test-only per §3.3**, not for production |
+| `hadLegacySends` | boolean | **no** | `false` | wave 3a | TEST — **test-only per §3.3**, not for production |
 
-| Column | Type | Null | Note | Status |
-|---|---|---|---|---|
-| `idempotencyKey` | text, **UNIQUE** | yes | the one object that made `db push` warn | TEST |
-| `leadRevision` | integer | yes | only first calls write it | TEST |
-| `revertedAt` | timestamp(3) without time zone | yes | | TEST |
-| `revertedById` | text, FK → `User.id` | yes | | TEST |
+`revision` and `hadLegacySends` are the only NOT NULL additions; both have a constant default (PostgreSQL 11+ fast
+default, no table rewrite).
+
+### 1.4 `Activity` — new columns
+
+| Column | Type | Null | Note | Came with | Status |
+|---|---|---|---|---|---|
+| `idempotencyKey` | text, **UNIQUE** | yes | see the gotcha below | round 1 | TEST |
+| `leadRevision` | integer | yes | only first calls write it | round 1 | TEST |
+| `revertedAt` | timestamp(3) without time zone | yes | | round 1 | TEST |
+| `revertedById` | text, FK → `User.id` `ON DELETE SET NULL` | yes | | round 1 | TEST |
+| `taskId` | text, FK → `DealTask.id` `ON DELETE SET NULL` | yes | set on `TASK_*` rows | wave 3 | TEST |
 
 **Production gotcha:** on test, `prisma db push` refused the new unique index on `idempotencyKey` with a *data-loss
 warning*, even though the new column was entirely NULL. The reviewed `migrate diff` → `db execute` → `db push`
 ("already in sync") path resolved it. Production may issue the same warning; inspect its actual diff with Michal's
 explicit approval and do not answer "yes" to the warning.
 
-### 1.4 New enum values
+### 1.5 `Design` — new column
 
-| Enum | Added values | Status |
+| Column | Type | Null | Came with | Status |
+|---|---|---|---|---|
+| `legacySentAt` | timestamp(3) without time zone | yes | wave 3a | TEST — **test-only per §3.3**, not for production |
+
+### 1.6 New tables
+
+| Table | Columns | FKs | Came with | Status |
+|---|---|---|---|---|
+| `DealTask` | `id`, `leadId`, `type`, `contents DealTaskContent[]`, `status` (default `OPEN`), `text`, `requestedById`, `assigneeId`, `createdAt`, `closedAt?`, `closedById?`, `closeReason?`, `result jsonb?` | `leadId` → `Lead` `CASCADE`; `requestedById`, `assigneeId` → `User` `RESTRICT`; `closedById` → `User` `SET NULL` | wave 3 | TEST |
+| `DealOwnership` | `id`, `leadId`, `fromUserId?`, `toUserId?`, `byUserId`, `reason`, `note?`, `createdAt` | `leadId` → `Lead` `CASCADE`; `fromUserId`, `toUserId` → `User` `SET NULL`; `byUserId` → `User` `RESTRICT` | wave 3 | TEST |
+
+Both start empty. "At most one `OPEN` task per deal" is enforced **in code under the Lead row lock**, not by a partial
+unique index (Prisma cannot declare one, so `db push` would treat it as drift). If it ever moves into the database it is
+a new ledger row with a duplicate pre-check.
+
+### 1.7 New indexes
+
+| Index | Came with | Status |
 |---|---|---|
-| `Role` | `SALES_REP` | TEST |
-| `CallOutcome` | `WANTS_TO_ORDER` | TEST |
-| `ActivitySource` | `CLIENTS` | TEST |
-| `ActivityType` | `CALLER_ASSIGNED`, `CALLER_RELEASED`, `CALL_REVERTED`, `REQUEST_CREATED`, `REQUEST_RESOLVED`, `DEAL_REOPENED` | TEST |
+| `Lead (status, assignedCallerId, createdAt)` | round 1 | TEST |
+| `Lead (assignedCallerId, status, callbackKind)` | round 1 | TEST |
+| `Lead (ownerId, status)` | round 1 | TEST |
+| `Lead (pipelineEnteredAt, status)` | round 1 | TEST |
+| `Activity (idempotencyKey)` **UNIQUE** | round 1 | TEST |
+| `Activity (taskId)` | wave 3 | TEST |
+| `DealTask (assigneeId, status, createdAt)`, `DealTask (leadId, status)` | wave 3 | TEST |
+| `DealOwnership (leadId, createdAt)`, `DealOwnership (fromUserId, createdAt)` | wave 3 | TEST |
 
-Adding a value to an existing enum is `ALTER TYPE … ADD VALUE`. Additive and cheap, but **a value added inside a
-transaction cannot be used by the same transaction** — so a rollout script must never add a value and write rows using
-it in one go. None of ours does.
+Plain `CREATE INDEX` takes a lock that blocks writes for its duration. The new-table indexes are instant (empty tables);
+for `Lead` and `Activity` do not assume the duration on production — review table sizes and schedule the rollout, or
+use reviewed `CREATE INDEX CONCURRENTLY` SQL instead of the Prisma-generated statement.
 
-### 1.5 New table `DealRequest` + enums
+### 1.8 Added on test earlier and removed again — never reached production, nothing owed
 
-| Object | Status |
-|---|---|
-| enum `DealRequestKind` (`PRICE`, `DESIGN`, `EMAIL`, `ORDER`, `REOPEN`, `OTHER`) | TEST |
-| enum `DealRequestStatus` (`OPEN`, `DONE`, `CANCELLED`) | TEST |
-| table `DealRequest` (+ FKs to `Lead` `ON DELETE CASCADE`, to `User` twice) | TEST |
-| indexes `(status, createdAt)`, `(leadId, status, kind)` | TEST |
+These existed on test between waves and were dropped in wave 3 (test pre-check: 0 `DealRequest` rows, 0 `REQUEST_*`
+activities, 0 leads with `nextActionKind = ORDER`; applied with reviewed SQL, `db push` "already in sync"). Production
+never had them, so their removal is **not** a production change. Do not add them to production.
 
-"At most one OPEN request per (leadId, kind)" is enforced **in code under the Lead row lock**, not by a partial unique
-index. If that ever moves into the database it is a new ledger row (a partial unique index is additive, but it can fail
-on existing duplicates, so it needs a pre-check query first).
-
-### 1.6 Data backfill (not schema, still owed to production)
-
-`prisma/backfill/2026-09-assignments.ts` — populates `assignedCallerId`, `pipelineEnteredAt`, `handedOffById`,
-`closedAt` and normalises `NEW` contacts that already have call history. Dry-run by default, `--apply` requires a direct
-host and `--confirm <endpoint>`, aborts on ambiguous records, repeatable, `--verify` reports drift.
-
-| Environment | Status |
-|---|---|
-| test | TEST — applied, `--verify` clean |
-| production | **OWED** — apply only in the approved rollout session |
-
-### 1.7 Production rollout checklist for round 1 (still owed)
-
-1. Backup + restore-point Neon branch.
-2. Reviewed diff → `db execute` → `db push` reports "already in sync" (§1.3 gotcha).
-3. Create team "Obchod" (leader Michal) so positive telesales calls route to an owner instead of landing unassigned.
-4. Backfill dry-run → review → `--apply` → `--verify`.
-5. Deploy, re-run `--verify`, spot-check the screens.
+| Object | Was added in | Removed in |
+|---|---|---|
+| table `DealRequest`, enums `DealRequestKind`, `DealRequestStatus` | round 1 | wave 3 (replaced by `DealTask`) |
+| `ActivityType.REQUEST_CREATED`, `REQUEST_RESOLVED` | round 1 | wave 3 (replaced by `TASK_*`) |
+| `NextActionKind.ORDER` | round 2 wave 2 (S-01) | wave 3 ("chcú objednať" is an ordinary reply; handover is a `HANDOVER` task) |
 
 ---
 
-## 2. Round 2, Wave 2 — interaction model (applied to TEST 2026-09-18)
+## 2. Data steps owed to production
 
-| id | Change | Kind | Risk | Status |
-|---|---|---|---|---|
-| S-01 | `NextActionKind += ORDER` | additive enum value | deploy schema before code; do not use the value in the transaction that adds it | **TEST** (2026-09-18, `db push`, no warning) |
+| Step | What | Test | Production |
+|---|---|---|---|
+| Round 1 backfill | `prisma/backfill/2026-09-assignments.ts` — populates `assignedCallerId`, `pipelineEnteredAt`, `handedOffById`, `closedAt` and normalises `NEW` contacts that already have call history. Dry-run by default, `--apply` requires a direct host and `--confirm <endpoint>`, aborts on ambiguous records, repeatable, `--verify` reports drift | applied, `--verify` clean (test was later wiped and reseeded, 2026-09-18 / 2026-09-19) | **OWED** — only in the approved rollout session |
+| Routing team | create team "Obchod" (leader Michal) so positive telesales calls route to an owner instead of landing unassigned | seeded | **OWED** |
+| Wave 3a legacy step | `prisma/backfill/2026-09-offer-legacy.ts` | applied before the wipe | **NOT IN THE CHOSEN FINAL ROUTE** — §3.3 replaces it |
+| Wave 3 | none. `DealTask` / `DealOwnership` start empty; no existing row is rewritten | — | nothing to backfill. Consequence: História and ownership history show only moves **after** the rollout; older owner changes remain readable only as `OWNER_CHANGED` activities |
 
-**Production note:** `ALTER TYPE "NextActionKind" ADD VALUE 'ORDER'` must run in the rollout script *before* any
-statement that writes the value, and round 1's own additions have to land first (§1). The deals list shows the value
-through `NEXT_ACTION_LABEL`, so deploying code that writes `ORDER` before the enum exists would fail at runtime — order
-matters: schema, then deploy.
+## 3. Old send data — wave 3a legacy layer and the decided conversion
 
-Production has never had `NextActionKind.ORDER` or `DealRequestKind.ORDER`. If a later wave removes them from the test
-schema before the rollout, delete their rows here — that is still additive toward production. Once production has
-them, removing them is non-additive.
-
-## 3. Round 2, Wave 3a — what the client received (applied to TEST 2026-09-18)
-
-Design: `context/features/01-salesrep/round2-deal-workspace.md` §2c. Reviewed `migrate diff` SQL contained exactly the
-rows below; `prisma db push` applied it with no data-loss warning; a second push reported "already in sync".
-All additive: nothing production already has is renamed, retyped, dropped or rewritten.
-
-| Change | Kind | Status |
-|---|---|---|
-| `ActivityType += OFFER_SENT, CLIENT_REPLIED` | two additive enum values | TEST |
-| `Lead.offerAboutUsAt`, `Lead.offerPricelistAt`, `Lead.offerPriceAt`, `Lead.legacySendsReviewedAt` | nullable `timestamp(3)` columns | TEST |
-| `Lead.hadLegacySends` | `boolean NOT NULL DEFAULT false` (fast default, no table rewrite) | TEST |
-| `Design.legacySentAt` | nullable `timestamp(3)` column | TEST |
+Design: `context/features/01-salesrep/round2-deal-workspace.md` §2c. The wave 3a schema rows (`OFFER_SENT`,
+`CLIENT_REPLIED`, `Lead.offer*`, `hadLegacySends`, `legacySendsReviewedAt`, `Design.legacySentAt`) are in §1.
 
 ### 3.1 Data step (not schema, still owed to production)
 
@@ -194,7 +200,7 @@ system. It only sets values, so it is repeatable.
 These steps describe the currently implemented test design, **not** the chosen final production route. Retained for
 the test–production delta audit until the revised migration is implemented and verified on test.
 
-1. Round 1 (§1) and wave 2 (§2) first — `OFFER_SENT` code assumes the round-1 schema.
+1. The §1 schema first — `OFFER_SENT` code assumes the round-1 schema.
 2. Schema (enum values **before** any code that writes them; not used in the transaction that adds them).
 3. `2026-09-offer-legacy.ts` dry-run → review counts → `--apply` → `--verify`.
 4. Deploy the new code.
@@ -226,6 +232,15 @@ approving any conversion. `NULL`/false means "not recorded/marked", not proof th
 | `Lead.priceDisclosed = true` | "client knows a price", by any channel; Michal says that in live cases it was the exact calculated price | Reconcile against already-confirmed price sends. If it represents a **separate** disclosure, confirm amount, channel and business date; do not assume `PHONE`, current `Lead.price`, or the toggle's audit timestamp without review. False is not a new send. |
 | `Design` exists, `sentAt = NULL` | návrh exists but was not marked sent | Keep the Design, versions, tracker/token and all view events unchanged; create no `OFFER_SENT`. |
 | `Design.sentAt` and/or `Lead.designSentAt`; old `DESIGN_SENT` rows | návrh marked sent; toggles were reversible, and old `DESIGN_SENT` has no design ID | For each still-valid marked send, create `EMAIL` + `DESIGN` with the right Design ID and confirmed date. Resolve reverted sends, multiple designs, deleted designs and field-only `Lead.designSentAt` explicitly. Keep versions, links, tracker tokens and tracker-event history in place; a view is not proof of email contents. |
+
+**Michal's clarifications (2026-09-20), to be verified on the duplicate, not assumed:**
+
+- **There is no cenník in live production.** The old system had no such content and no flag; `PRICELIST` exists only on
+  test (wave 3a). Any old cenník recipient must be named explicitly by Michal, otherwise no `PRICELIST` is created.
+- **A price plus "klient pozná cenu" means the exact calculated price, sent by email.** So `priceDisclosed = true` with
+  a price present converts to one `OFFER_SENT(EMAIL, [PRICE])` with that amount and the old CP date. The inventory must
+  still count and classify the exceptions (flag without a price, price without the flag, undo sequences, several CPs);
+  each exception gets an explicit decision.
 
 This need not mean hand-editing hundreds of deals. After the duplicate's inventory, Michal may approve a **bulk rule**
 for the old initial emails and for `priceDisclosed = true` with a non-null matching price, if the old history and a
@@ -271,10 +286,10 @@ send manually, or state explicitly why that feature is removed; "historical" is 
 Replace legacy-only concurrency tests with conversion, correction, summary/list/filter parity, history de-duplication,
 idempotent rerun and
 multiple-design tests. The current W3a/W3b code is not yet compatible with the contracted schema.
-Before this feature reaches production, also fix the current idempotency fingerprints: `offerFingerprint` omits the
-price amount/note and follow-up choice/date; `logFollowUpAs` checks CALL replay by outcome only and every planning-only
-replay as `"plan"`. A retry with the same key but changed price or plan can be reported as saved without those
-changes. Add changed-payload/same-key cases to the concurrency checks.
+The idempotency-fingerprint defect noted here earlier (`offerFingerprint` without price / follow-up, `logFollowUpAs`
+replaying by outcome only) was **fixed in wave 3**: both store the full canonical fingerprint in `meta.fp`, and
+`w3Fingerprints` in the concurrency suite covers same-key / changed-payload cases. A converted row must not carry a
+`meta.fp` that a live retry could match.
 
 #### Required implementation and rehearsal order
 
@@ -288,7 +303,7 @@ changes. Add changed-payload/same-key cases to the concurrency checks.
    expected source/revision before writing. Preserve old raw history. A `skip` is an explicit unresolved exception,
    **not** a passing verification. Make the script refuse the production endpoint independently of CLI arguments.
 3. Rehearse the **entire rollout** on the duplicate from the actual production schema: round 1 schema → create the
-   routing team → round 1 backfill (§1), wave 2 schema (§2), the revised wave 3a additions, conversion,
+   routing team → round 1 backfill (§2), the rest of the §1 schema without the test-only columns, conversion,
    recomputation, then the reviewed
    non-additive contraction. The old one-time `2026-09-offer-legacy.ts` step is **not** part of the final route.
    Avoid a `db push` that accepts a data-loss warning; review the explicit SQL and apply contraction only after
@@ -325,15 +340,28 @@ reads, `confirmLegacyReviewedAs`, legacy design-date baselining and the one-time
 `database-map.md`, `operations.md`, `app-workflow.md` and the statistics rule together. Preserve correction and
 backdated-entry behaviour that is still useful. The tracker ingest and existing design rows are not rebuilt.
 
-## 4. Verification before production rollout
+## 4. Production rollout order and verification
+
+Order (all of it only in a separately approved rollout session; rehearse on a fresh production duplicate first):
+
+1. Backup + restore-point Neon branch. Compare the **live** production schema with the §1 baseline; add any surprise
+   here before continuing.
+2. Reviewed net-delta SQL (§1, regenerate it against the live schema with `migrate diff --from-config-datasource`) →
+   `db execute` → `db push` reports "already in sync" (§1.4 gotcha). Enum values before any code that writes them. Leave
+   out the test-only columns marked in §1.3 / §1.5 if §3.3 is implemented by then.
+3. Create the routing team "Obchod" (leader Michal) (§2).
+4. Round 1 backfill dry-run → review → `--apply` → `--verify` (§2).
+5. Old-send conversion and reconciliation per §3.3 (not the old one-time legacy step).
+6. Deploy the new code, re-run `--verify`, spot-check the screens (including "Pre mňa", "Čakám na manažéra", a task,
+   História).
 
 | Check | Command |
 |---|---|
 | schema really in sync | `npx prisma db push` → "already in sync" |
 | client regenerated | `npx prisma generate`, then `npx tsc --noEmit` |
 | business calendar | `npx tsx prisma/backfill/check-business-time.ts` (and with `TZ=UTC`) |
-| section classification | `npx tsx prisma/backfill/check-client-sections.ts` |
-| concurrency + scope | `npx tsx prisma/backfill/check-concurrency.ts --expect-endpoint <dev endpoint>` |
+| section classification (incl. the locked step) | `npx tsx prisma/backfill/check-client-sections.ts` |
+| concurrency + scope + wave 3 tasks | `npx tsx prisma/backfill/check-concurrency.ts --expect-endpoint <dev endpoint>` |
 | backfill integrity | `npx tsx prisma/backfill/check-backfill-delta.ts …` and the backfill's own `--verify` |
 | wave 3a legacy step | current test implementation only; replace with the conversion/reconciliation checks in §3.3 before rollout |
 

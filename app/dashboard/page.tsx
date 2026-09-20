@@ -10,7 +10,7 @@ import { StatCard } from "@/components/stats/StatCard";
 import Logo from "@/components/Logo";
 import UrgencyLabel from "@/components/shared/UrgencyLabel";
 import { requireUser } from "@/lib/access/user";
-import { REQUEST_KIND_LABEL } from "@/lib/dictionaries";
+import { TASK_CONTENT_LABEL, TASK_TYPE_LABEL } from "@/lib/dictionaries";
 import { BUSINESS_TZ } from "@/lib/domain/businessTime";
 import { can } from "@/lib/permissions";
 import { getCallerToday, getDealsToday, todayKey, type TodayUrgentItem } from "@/lib/queries/today";
@@ -70,34 +70,37 @@ export default async function DashboardPage() {
 
             {manager && (
                 <div className="mb-6 grid gap-6 lg:grid-cols-2">
-                    <Card className={manager.oldestRequestOverTwoDays ? "border-destructive/50" : undefined}>
+                    {/* „Čaká na mňa" = ten istý dopyt ako pilulka „Pre mňa" (úlohy pridelené mne, wave 3 §7). */}
+                    <Card className={manager.oldestTaskOverdue ? "border-destructive/50" : undefined}>
                         <CardHeader className="flex-row items-center justify-between pb-3">
-                            <CardTitle className={`text-base ${manager.oldestRequestOverTwoDays ? "text-destructive" : ""}`}>
-                                Čaká na mňa ({manager.requestCount})
+                            <CardTitle className={`text-base ${manager.oldestTaskOverdue ? "text-destructive" : ""}`}>
+                                Čaká na mňa ({manager.taskCount})
                             </CardTitle>
                             <Button asChild variant="ghost" size="sm">
-                                <Link href="/dashboard/pipeline?filter=all&view=requests">
-                                    Všetky <ArrowRight className="h-4 w-4" />
+                                <Link href="/dashboard/pipeline?view=inbox">
+                                    Pre mňa <ArrowRight className="h-4 w-4" />
                                 </Link>
                             </Button>
                         </CardHeader>
                         <CardContent>
-                            {manager.requests.length === 0 ? (
-                                <p className="py-6 text-center text-sm text-muted-foreground">Žiadne otvorené požiadavky.</p>
+                            {manager.tasks.length === 0 ? (
+                                <p className="py-6 text-center text-sm text-muted-foreground">Žiadne otvorené úlohy.</p>
                             ) : (
                                 <ul className="divide-y">
-                                    {manager.requests.map((r) => (
-                                        <li key={r.id} className="space-y-0.5 py-2 text-sm">
+                                    {manager.tasks.map((t) => (
+                                        <li key={t.id} className="space-y-0.5 py-2 text-sm">
                                             <div className="flex flex-wrap items-center gap-2">
-                                                <Badge variant="destructive">{REQUEST_KIND_LABEL[r.kind]}</Badge>
-                                                <Link href={`/dashboard/pipeline/${r.leadId}`} className="truncate font-medium hover:underline">
-                                                    {r.leadName}
+                                                <Badge variant={t.overdue ? "destructive" : "secondary"}>
+                                                    {t.type === "HANDOVER" ? TASK_TYPE_LABEL.HANDOVER : t.contents.map((c) => TASK_CONTENT_LABEL[c]).join(" + ")}
+                                                </Badge>
+                                                <Link href={`/dashboard/pipeline/${t.leadId}`} className="truncate font-medium hover:underline">
+                                                    {t.leadName}
                                                 </Link>
-                                                <span className="ml-auto text-xs text-muted-foreground">
-                                                    {r.requester} · {fmtAgo(r.createdAt)}
+                                                <span className={`ml-auto text-xs ${t.overdue ? "text-destructive" : "text-muted-foreground"}`}>
+                                                    {t.requester} · {fmtAgo(t.createdAt)}
                                                 </span>
                                             </div>
-                                            {r.note && <p className="truncate text-xs text-muted-foreground">{r.note}</p>}
+                                            <p className="truncate text-xs text-muted-foreground">{t.text}</p>
                                         </li>
                                     ))}
                                 </ul>

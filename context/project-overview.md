@@ -37,9 +37,9 @@ Invariant: `status NEW` ⇒ the lead has no CALL activity.
 - **TELESALES** — first calls in `/dashboard/calls` (claims batches of 10 from the pool, own retries/callbacks/snoozes),
   own call history, may add contacts. Positive calls are routed to their team leader, or stay unassigned.
 - **SALES_REP** — TELESALES plus follow-ups on **own** deals in `/dashboard/pipeline` (scope `own`): price,
-  quote/email sent, requests to the manager (`[WAVE 3]` tasks). Their own positive first call becomes their own deal. No WON, no reopen,
+  quote/email sent, tasks for the manager (price / návrh / other, or a handover). Their own positive first call becomes their own deal. No WON, no reopen,
   no design management, no other people's deals.
-- **MANAGER** — everything on all deals, the assignment tool, resolving requests, global read access.
+- **MANAGER** — everything on all deals, the assignment tool, resolving tasks ("Pre mňa"), taking clients over, global read access.
 - **ADMIN** — all permissions plus the admin pages.
 
 Today there is exactly one manager (Michal, account role `ADMIN`). `deals.viewTeam` is a permission prepared for a
@@ -57,13 +57,13 @@ Deal permissions (round 2 naming; `clients.*` and `pipeline.*` no longer exist):
 | Permission | Meaning |
 |---|---|
 | `deals.view` | may open the deals screen |
-| `deals.work` | may act on deals in scope (next step, interaction, price, contact data, requests to the manager) |
+| `deals.work` | may act on deals in scope (next step, interaction, price, contact data, tasks for the manager) |
 | `deals.viewAll` | scope = every deal |
 | `deals.viewTeam` | scope = own + team (no role holds it yet) |
-| `deals.manage` | status, owner, project type, WON, reopen, designs, resolving requests, bulk transfer |
+| `deals.manage` | status, owner, project type, WON, reopen, designs, takeover, bulk transfer |
 | `deals.receive` | may own deals (handoff targets, owner selects) |
 
-Others: `today.view`, `calls.*`, `callHistory.*`, `contacts.*`, `requests.resolve`, `stats.*`, `teams.manage`,
+Others: `today.view`, `calls.*`, `callHistory.*`, `contacts.*`, `requests.resolve` (receives and resolves manager tasks; the name predates tasks), `stats.*`, `teams.manage`,
 `admin.access`, `users.manage`.
 
 The hand-written `ROLES` array in `lib/dictionaries.ts` must contain every `Role` (asserted at startup).
@@ -86,6 +86,7 @@ permission; a page may add a more specific check (for example, `teams.manage` on
 | `/dashboard/calls/history` | `callHistory.access` | |
 | `/dashboard/calls/assignments` | `calls.assign` | manager tool |
 | `/dashboard/pipeline`, `/dashboard/pipeline/[id]` | `deals.view` | **the one deal workspace for every role**, labelled "Pipeline" for everyone; scope from `dealScope()` |
+| `/dashboard/pipeline/historia` | `deals.view` | "História": deals that moved away from me (handover, takeover, transfer); no link to the live deal |
 | `/dashboard/stats` | `stats.view` | unfinished |
 | `/dashboard/admin`, `/admin/users`, `/admin/users/new`, `/admin/users/[id]` | `admin.access` | |
 | `/dashboard/admin/teams` | `admin.access` + `teams.manage` | the page checks `teams.manage` itself |

@@ -1,5 +1,5 @@
 import type { ActivitySource, ActivityType, CallOutcome } from "@/app/generated/prisma/enums";
-import type { ActionError } from "@/lib/access/errors";
+import { AccessError, isUniqueViolation, type ActionError } from "@/lib/access/errors";
 import prisma from "@/lib/db";
 import { isHandoffOutcome } from "@/lib/domain/leadFlow";
 
@@ -59,4 +59,40 @@ export async function activityReplay(
         expected.types.includes(existing.type) &&
         (!expected.fingerprint || expected.fingerprint(existing) === expected.want);
     return matches ? { success: true } : { error: "Obchod sa medzitým zmenil – obnovujem.", code: "IDEMPOTENCY_CONFLICT" };
+}
+
+// Príkaz s jedným hlavným riadkom a kľúčom (wave 3 §5.5): kľúč sa hľadá PRED kontrolou revízie – ten istý kľúč + ten
+// istý odtlačok = predchádzajúci úspech (dvojklik nikdy neukáže falošnú chybu), iný odtlačok = IDEMPOTENCY_CONFLICT.
+// Prehratý súbeh (unique index alebo STALE po čakaní na zámok) sa znova pozrie na kľúč.
+export async function runKeyed(
+    key: string,
+    expected: { userId: string; leadId: string; types: readonly ActivityType[]; fp: string },
+    run: () => Promise<void>,
+    fail: (error: unknown) => ActionError,
+): Promise<{ success: true } | ActionError> {
+    const replayArgs = {
+        userId: expected.userId,
+        leadId: expected.leadId,
+        types: expected.types,
+        fingerprint: (row: ReplayRow) => fpOf(row.meta),
+        want: expected.fp,
+    };
+    const first = await activityReplay(key, replayArgs);
+    if (first) return first;
+    try {
+        await run();
+        return { success: true };
+    } catch (error) {
+        if (isUniqueViolation(error) || (error instanceof AccessError && error.code === "STALE")) {
+            const again = await activityReplay(key, replayArgs);
+            if (again) return again;
+        }
+        return fail(error);
+    }
+}
+
+function fpOf(meta: unknown): string {
+    return meta && typeof meta === "object" && !Array.isArray(meta) && typeof (meta as { fp?: unknown }).fp === "string"
+        ? (meta as { fp: string }).fp
+        : "";
 }

@@ -1,7 +1,7 @@
 // Delta scenáre backfillu (plán §13 fáza 10) na dev/test branchi: simuluje zápisy starého kódu medzi behmi,
 // spustí backfill a overí, že zmigruje presne tú deltu; potom CONFLICT musí prerušiť apply. Fixture na konci zmaže.
 //
-//   npx tsx prisma/backfill/check-backfill-delta.ts --expect-endpoint ep-xxxx --expect-db neondb --owner-username michal
+//   npx tsx prisma/backfill/check-backfill-delta.ts --expect-endpoint ep-xxxx --expect-db neondb --owner-username michal //       [--caller-username telesales]   # volajúci pre fixture (predvolene t_timea zo „svetového" seedu)
 import "dotenv/config";
 import { spawnSync } from "node:child_process";
 import { Client } from "pg";
@@ -14,6 +14,7 @@ const arg = (n: string) => {
 const expectEndpoint = arg("--expect-endpoint");
 const expectDb = arg("--expect-db");
 const ownerUsername = arg("--owner-username");
+const callerUsername = arg("--caller-username") ?? "t_timea";
 const pooled = new URL(process.env.DATABASE_URL ?? "postgres://x/none");
 const endpoint = pooled.hostname.split(".")[0].replace(/-pooler$/, "");
 if (!expectEndpoint || !expectDb || !ownerUsername || endpoint !== expectEndpoint) {
@@ -48,9 +49,9 @@ async function main() {
     await c.connect();
     const ids: string[] = [];
     try {
-        const caller = (await c.query(`SELECT id FROM "User" WHERE username = 't_timea'`)).rows[0]?.id as string;
+        const caller = (await c.query(`SELECT id FROM "User" WHERE username = $1`, [callerUsername])).rows[0]?.id as string;
         const owner = (await c.query(`SELECT id FROM "User" WHERE username = $1`, [ownerUsername])).rows[0]?.id as string;
-        if (!caller || !owner) throw new Error("fixture users missing (t_timea / owner)");
+        if (!caller || !owner) throw new Error(`fixture users missing (${callerUsername} / owner)`);
 
         const lead = async (label: string, sql: string, params: unknown[] = []) => {
             const id = `${RUN}_${label}`;

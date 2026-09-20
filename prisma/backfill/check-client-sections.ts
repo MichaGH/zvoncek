@@ -19,15 +19,18 @@ const base: ClassifiableDeal = {
     nextActionHasTime: false,
     nextActionMode: "SCHEDULED",
     closedAt: null,
-    openRequestCount: 0,
+    stepLocked: false,
 };
 const c = (patch: Partial<ClassifiableDeal>) => clientSection({ ...base, ...patch }, now);
 
 eq("closed recent", c({ status: "WON", closedAt: new Date("2026-09-01T10:00:00Z") }), { section: "CLOSED_RECENT" });
 eq("closed old", c({ status: "LOST", closedAt: new Date("2026-05-01T10:00:00Z") }), { section: "ARCHIVED" });
 eq("closed without closedAt", c({ status: "UNREACHABLE", closedAt: null }), { section: "ARCHIVED" });
-eq("closed with open REOPEN request stays closed", c({ status: "LOST", closedAt: new Date("2026-09-10T10:00:00Z"), openRequestCount: 1 }), { section: "CLOSED_RECENT" });
-eq("open request wins", c({ openRequestCount: 1, nextActionAt: businessDayStart("2026-09-01") }), { section: "WAITING_ON_US" });
+eq("closed stays closed even if a lock were reported", c({ status: "LOST", closedAt: new Date("2026-09-10T10:00:00Z"), stepLocked: true }), { section: "CLOSED_RECENT" });
+eq("locked step wins over overdue (wave 3)", c({ stepLocked: true, nextActionAt: businessDayStart("2026-09-01") }), { section: "WAITING_ON_MANAGER" });
+eq("locked step without date is not 'bez termínu'", c({ stepLocked: true, nextActionAt: null }), { section: "WAITING_ON_MANAGER" });
+eq("locked snoozed deal is not 'zobudený'", c({ stepLocked: true, status: "SNOOZED", nextActionAt: null }), { section: "WAITING_ON_MANAGER" });
+eq("locked deal without any step", c({ stepLocked: true, nextActionKind: null, nextActionAt: null }), { section: "WAITING_ON_MANAGER" });
 eq("snoozed without date", c({ status: "SNOOZED", nextActionAt: null }), { section: "TODAY", badge: "chýba dátum" });
 eq("snoozed due", c({ status: "SNOOZED", nextActionAt: businessDayStart("2026-09-17") }), { section: "TODAY", badge: "zobudený" });
 eq("snoozed future", c({ status: "SNOOZED" }), { section: "SNOOZED" });
@@ -44,7 +47,7 @@ eq("future planned", c({}), { section: "PLANNED" });
 
 // Úplnosť: každá kombinácia dostane práve jednu sekciu zo zoznamu (alebo ARCHIVED).
 const statuses: LeadStatus[] = ["ACTIVE", "SNOOZED", "WON", "LOST", "UNREACHABLE"];
-const kinds: (NextActionKind | null)[] = [null, "CALL", "SEND_QUOTE", "SEND_DESIGN", "SEND_EMAIL", "WAITING_FOR_CLIENT", "ORDER", "CUSTOM"];
+const kinds: (NextActionKind | null)[] = [null, "CALL", "SEND_QUOTE", "SEND_DESIGN", "SEND_EMAIL", "WAITING_FOR_CLIENT", "CUSTOM"];
 const ats = [null, businessDayStart("2026-09-01"), businessDayStart("2026-09-17"), businessDayStart("2026-10-01"), new Date("2026-09-17T20:00:00Z")];
 const modes: NextActionMode[] = ["SCHEDULED", "IN_PROGRESS"];
 const closeds = [null, new Date("2026-09-01T00:00:00Z"), new Date("2025-01-01T00:00:00Z")];
@@ -56,9 +59,9 @@ for (const status of statuses)
             for (const nextActionHasTime of [false, true])
                 for (const nextActionMode of modes)
                     for (const closedAt of closeds)
-                        for (const openRequestCount of [0, 1]) {
+                        for (const stepLocked of [false, true]) {
                             combos++;
-                            const r = clientSection({ status, nextActionKind, nextActionAt, nextActionHasTime, nextActionMode, closedAt, openRequestCount }, now);
+                            const r = clientSection({ status, nextActionKind, nextActionAt, nextActionHasTime, nextActionMode, closedAt, stepLocked }, now);
                             if (![...CLIENT_SECTIONS, "ARCHIVED"].includes(r.section)) bad++;
                         }
 eq(`totality over ${combos} combinations`, bad, 0);
