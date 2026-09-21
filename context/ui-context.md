@@ -55,7 +55,9 @@ Conventions for building screens here. Behaviour lives in `context/app-workflow.
 - Filter pills with a count compute it with the same predicate and filters as the list, so the number matches what a
   click shows. On the pipeline **every pill has a count** (wave 3): one predicate per pill (`pillFilter` in
   `lib/queries/pipeline`), shared by `getDealList` and `getDealCounts` (`COUNTED_VIEWS`). A new pill gets its count
-  from the same predicate, never from a second query written by hand.
+  from the same predicate, never from a second query written by hand. The pipeline filter has status on top, then two composable levels
+  (queue → step kind, only for Aktívne; `components/pipeline/DealFilters.tsx`); the step chips count inside the current queue
+  (`getDealStepCounts`), which is why `step` is a separate parameter and not another pill.
 - Dialog forms (e.g. `AskManagerDialog`, `FinishTaskDialog`): small uppercase section labels, one decision per
   section, a derived value shown as text with "Zmeniť" instead of an always-open picker, the primary button's label
   stays stable and the reason it is disabled is shown under it. Slovak names are not declined in labels — write

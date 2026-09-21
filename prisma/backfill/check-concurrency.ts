@@ -5121,6 +5121,89 @@ tests.w4ReviewR01 = async () => {
     void work;
 };
 
+// W4A-F: filtre pipeline majú tri skladateľné úrovne (rad práce → druh kroku → stav). Rad × krok = prienik, počty čipov
+// sedia so zoznamom, stará adresa ?view=call je „Všetko + krok", „auto" sa rozhodne podľa počtu „Na spracovanie".
+tests.w4aFilterLevels = async () => {
+    const { queries, dealScope, follow, ask, send, openTask } = await w3();
+    const { parseDealParams, dealsHref, resolveView, DEAL_STEPS } = await import("../../lib/domain/dealFilters");
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const w = await w5();
+    // Obchody: volať dnes, volať o týždeň, poslať cenu (klient pýta cenu), a jeden zamknutý úlohou.
+    const callToday = await makeDeal(rep);
+    await follow(rep, callToday, { contact: "NONE", nextKind: "CALL", schedule: { kind: "daysFromToday", days: 0 } });
+    const callLater = await makeDeal(rep);
+    await follow(rep, callLater, { contact: "NONE", nextKind: "CALL", schedule: { kind: "daysFromToday", days: 7 } });
+    const needsPrice = await w.interested(rep, ["PRICE"]);
+    const locked = await makeDeal(rep);
+    await follow(rep, locked, { contact: "NONE", nextKind: "CALL", schedule: { kind: "daysFromToday", days: 0 } });
+    await ask(rep, locked, manager.id, { contents: ["PRICE"], step: undefined });
+    void send; void openTask;
+
+    const scope = dealScope(rep);
+    const base = { scope, owner: { userId: rep.id }, viewerId: rep.id } as const;
+    const ids = async (view: string | undefined, step?: string) =>
+        new Set((await queries.getDealList({ ...base, view, step, take: 5000 })).rows.map((r) => r.id));
+    const inter = (a: Set<string>, b: Set<string>) => new Set([...a].filter((x) => b.has(x)));
+    const same = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((x) => b.has(x));
+
+    const allCall = await ids(undefined, "call");
+    const todayAll = await ids("today");
+    const todayCall = await ids("today", "call");
+    const legacyCall = await ids("call");
+    check(
+        "W4A-F-1: 'Na dnes' × 'Volať' is the intersection; 'Všetko' × 'Volať' lists every unlocked CALL deal; the old view=call equals it; a locked deal is in neither",
+        same(todayCall, inter(todayAll, allCall)) && todayCall.has(callToday) && !todayCall.has(callLater) &&
+            allCall.has(callToday) && allCall.has(callLater) && same(legacyCall, allCall) && !allCall.has(locked) && !todayCall.has(locked),
+        `todayCall=${todayCall.size} allCall=${allCall.size} legacy=${legacyCall.size}`,
+    );
+
+    const bad: string[] = [];
+    for (const view of ["work", "today", undefined, "got_price"]) {
+        const counts = await queries.getDealStepCounts({ ...base }, view);
+        const whole = await ids(view);
+        if (counts.all !== whole.size) bad.push(`${view}: all=${counts.all} list=${whole.size}`);
+        for (const s of DEAL_STEPS) {
+            const list = await ids(view, s.key);
+            if (list.size !== counts[s.key]) bad.push(`${view}/${s.key}: count=${counts[s.key]} list=${list.size}`);
+        }
+    }
+    const lockedStep = await queries.getDealStepCounts({ ...base }, "waiting_manager");
+    const lockedList = await ids("waiting_manager", "call");
+    check(
+        "W4A-F-2: every step chip count equals its list in every queue; 'Čakám na manažéra' ignores the step",
+        bad.length === 0 && lockedList.has(locked) && lockedStep.all === (await ids("waiting_manager")).size,
+        bad.slice(0, 4).join(" | "),
+    );
+
+    const p1 = parseDealParams({ view: "quote" });
+    const p2 = parseDealParams({ view: "waiting_manager", step: "call" });
+    const p3 = parseDealParams({ view: "today", step: "nonsense" });
+    const p4 = parseDealParams({});
+    check(
+        "W4A-F-3: parse – legacy ?view=quote → all + quote, a step is dropped where it makes no sense or is unknown, no view = auto; links keep the step across queues but not into 'Čakám na manažéra'",
+        p1.view === "all" && p1.step === "quote" && p2.step === undefined && p3.step === undefined && p4.view === "auto" &&
+            resolveView("auto", { work: 3 }) === "work" && resolveView("auto", { work: 0 }) === "today" && resolveView("today", { work: 3 }) === "today" &&
+            dealsHref({ ...p4, view: "today", step: "call" }, { view: "all" }).includes("step=call") &&
+            !dealsHref({ ...p4, view: "today", step: "call" }, { view: "waiting_manager" }).includes("step="),
+        `${JSON.stringify(p1)} ${JSON.stringify(p2)}`,
+    );
+    void needsPrice;
+
+    // Stav je hore a rady s krokmi existujú len pri „Aktívne" (Michal, 2026-09-21).
+    const won = parseDealParams({ filter: "won", view: "today", step: "call" });
+    const cur = { ...p4, view: "work", step: "call" };
+    const toLost = dealsHref(cur, { filter: "lost" });
+    const back = dealsHref({ ...cur, filter: "lost", view: "all", step: undefined }, { filter: "active" });
+    check(
+        "W4A-F-4: any status other than Aktívne is a plain list (no queue, no step, even from a hand-made URL); switching to it drops queue and step, switching back to Aktívne picks the queue by work again",
+        won.view === "all" && won.step === undefined &&
+            !toLost.includes("step=") && !toLost.includes("view=") && toLost.includes("filter=lost") &&
+            !back.includes("view=") && !back.includes("filter="),
+        `${JSON.stringify(won)} ${toLost} ${back}`,
+    );
+};
+
 // W4A-R02 (review partA-R02, 2026-09-21): začína vždy od SKUTOČNÉHO kroku wave 5 (klient pýta → appka nastaví
 // „Poslať …"), nie od ručne zvoleného CALL – práve tam sa stará záloha vracala ako už hotová práca.
 tests.w4ReviewR02 = async () => {

@@ -366,6 +366,38 @@ No schema change. R02-1/2/3/5 fixed; R02-4 and R02-6 are release gates (see the 
 - Tests: `w4ReviewR02` (W4A-R02-*) starts from a real Wave 5 `SEND_QUOTE` / `SEND_DESIGN`.
 - **Not verified by a human:** the new confirmation and the `/calls` cards on phone + desktop (no browser session).
 
+### Backup before the filter redesign — 2026-09-21
+
+GitHub backup of everything above (R01 + R02 fixes, the shared "Čo chceli" cards, the test-DB reseed script, the review
+records, and ChatGPT's unfinished filter attempt as it stood): branch **`backup/wave4a-r01-r02-fixes-pre-filters-2026-09-21`**,
+commit **`8478c7f`**, pushed to `origin`. The working branch `feature/wave5-workflow-fix` was fast-forwarded onto that
+commit and continues from there. Earlier backups: `backup/wave5-ui-redesign-2026-09-21`,
+`backup/wave5-built-pre-ui-fix-2026-09-20`, `codex/pre-wave5-*`. Restore = `git switch` to the branch; nothing else.
+
+### Wave 4 — pipeline filters redesigned: status on top + two composable levels (2026-09-21, after partA-R02)
+
+Michal's rep workflow: call ~20 numbers in /calls → in the pipeline first finish what the calls promised (prices,
+cenníky, návrhy, asking the manager) → then the day's deadlines. The flat pills did not answer that ("Rozpracované
+návrhy" mixed manager work with the rep's own; "Všetko → Volať" did not exist). Managers use the same screen for their
+own deals and for their telesales' deals. **No schema, no server rule changed — filters only.**
+
+- **Level 1, queue** (big pills, icon + count): *Pre mňa* (manager) · *Čakám na manažéra* │ *Na spracovanie* · *Na dnes* ·
+  *Všetko*. **Level 2, step kind** (chips, counts inside the current queue): Volať · Poslať cenu · Poslať návrh · Poslať
+  email · Čaká na klienta — a *narrowing* of level 1 (`step` URL parameter), so *Všetko → Volať* and *Na dnes → Volať* differ
+  as Michal expected; hidden in *Čakám na manažéra* / *Pre mňa*. **Status** (Aktívne … Všetky) is the subtle switch at the very top again (Michal's correction to the first version, which put it in *Všetko*); queues and steps exist **only for Aktívne** — any other status is a plain list, even from a hand-made URL, and switching status resets queue and step (back to Aktívne re-picks the queue by work).
+  "Klient už dostal" / "Neoverené" moved into one quiet disclosure. ChatGPT's boxed "Pracovný rad" card and its hint
+  sentence are gone.
+- **Default:** no `view` in the URL → *Na spracovanie* while its count > 0, otherwise *Na dnes* (`resolveView`); the choice is
+  visible because the active queue is filled with colour. Every link the screen builds carries an explicit queue. If that
+  turns out to be confusing in daily use, the alternative is a fixed default — one constant (`DEFAULT_VIEW`).
+- **"Poslať návrh"** = `nextActionKind = SEND_DESIGN` replaces "Rozpracované návrhy" (`nextActionMode = IN_PROGRESS`);
+  manager work is already *Čakám na manažéra*. Old `?view=call|quote|email|design|waiting` links still work (= *Všetko* + step).
+- Code: `lib/domain/dealFilters.ts` (model), `lib/queries/pipeline` (`stepWhere`, `getDealStepCounts`),
+  `components/pipeline/DealFilters.tsx`, `app/dashboard/pipeline/page.tsx`. Tests `w4aFilterLevels` (W4A-F-1..4): queue × step is
+  the intersection, step counts equal their lists in every queue, legacy links, parsing; `w3LockParity`, `w1TodayParity`,
+  `w3InboxHref` still pass.
+- **Not verified visually or on a phone** (no browser login by the agent) — the layout is owed a click-through.
+
 ### Wave 4 — not resolved / to do later
 
 - **Human click-through owed** (phone + desktop, a browser session is not something this agent may open with someone's

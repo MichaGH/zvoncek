@@ -12,7 +12,7 @@ import {
     type DealScope,
     type OwnerFilter,
 } from "@/lib/domain/dealScope";
-import { isDealView, STEP_KIND_VIEWS, viewIgnoresStatus } from "@/lib/domain/dealFilters";
+import { DEAL_STEPS, isDealStep, isDealView, viewAllowsStep, viewIgnoresStatus } from "@/lib/domain/dealFilters";
 import { businessDaysBetween } from "@/lib/domain/businessTime";
 import {
     isStepLocked,
@@ -86,16 +86,6 @@ function viewWhere(view?: string): Prisma.LeadWhereInput {
             return { status: "ACTIVE", requests: { some: { state: "OPEN" } }, ...UNLOCKED_WHERE };
         case "today":
             return { status: { in: [...OPEN_STATUSES] } }; // presné pravidlo dopĺňa TODAY_SQL v SQL časti
-        case "call":
-            return { nextActionKind: "CALL" };
-        case "quote":
-            return { nextActionKind: "SEND_QUOTE" };
-        case "email":
-            return { nextActionKind: "SEND_EMAIL" };
-        case "design":
-            return { nextActionMode: "IN_PROGRESS" };
-        case "waiting":
-            return { nextActionKind: "WAITING_FOR_CLIENT" };
         case "got_pricelist":
             return { offerPricelistAt: { not: null } };
         case "got_price":
@@ -109,6 +99,19 @@ function viewWhere(view?: string): Prisma.LeadWhereInput {
         default:
             return {};
     }
+}
+
+// Úroveň 2 filtra: druh ďalšieho kroku. Zamknutý obchod krok nemá (je v „Čakám na manažéra"), preto ho nezahŕňa.
+// „Poslať návrh" je krok SEND_DESIGN – rozpracovanie u manažéra je samostatný rad „Čakám na manažéra".
+const STEP_KIND_OF: Record<string, NextActionKind> = {
+    call: "CALL",
+    quote: "SEND_QUOTE",
+    design: "SEND_DESIGN",
+    email: "SEND_EMAIL",
+    waiting: "WAITING_FOR_CLIENT",
+};
+function stepWhere(step: string): Prisma.LeadWhereInput {
+    return { nextActionKind: STEP_KIND_OF[step], ...UNLOCKED_WHERE };
 }
 
 function searchWhere(q: string): Prisma.LeadWhereInput {
@@ -561,6 +564,7 @@ export type DealListParams = {
     status?: LeadStatus;
     query?: string;
     view?: string;
+    step?: string; // úroveň 2 – druh kroku, skladá sa s `view`
     handedOffBy?: string;
     viewerId?: string; // „Pre mňa" = úlohy pridelené tomuto používateľovi
     take?: number;
@@ -586,7 +590,10 @@ type PillFilter = { where: Prisma.LeadWhereInput; sql: Prisma.Sql | null; order:
 //   „Na spracovanie", „Na dnes", „Neoverené" – stav (naprieč stavmi)
 // Pilulky podľa druhu kroku nezahŕňajú zamknuté obchody (§5.3).
 function pillFilter(view: string | undefined, params: Omit<DealListParams, "view" | "take">): PillFilter {
-    const v = isDealView(view) ? view : undefined;
+    // Stará pilulka druhu kroku (`view: "call"`) je „Všetko + krok" – rovnaký predikát ako úroveň 2.
+    const legacyStep = isDealStep(view) ? view : undefined;
+    const v = legacyStep ? undefined : isDealView(view) ? view : undefined;
+    const step = viewAllowsStep(v) ? (legacyStep ?? (isDealStep(params.step) ? params.step : undefined)) : undefined;
     const q = params.query?.trim();
     if (v === "inbox") {
         return {
@@ -609,7 +616,7 @@ function pillFilter(view: string | undefined, params: Omit<DealListParams, "view
             ...base,
             ...(params.status && !viewIgnoresStatus(v) ? { status: params.status } : {}),
             ...viewWhere(v),
-            ...(v && STEP_KIND_VIEWS.has(v) ? UNLOCKED_WHERE : {}),
+            ...(step ? stepWhere(step) : {}),
         },
         sql: v === "today" ? TODAY_SQL : null,
         order: "rank",
@@ -694,7 +701,7 @@ export const COUNTED_VIEWS = [
 export type DealCounts = Record<(typeof COUNTED_VIEWS)[number], number> & { open: number; unassignedOpen: number };
 
 // Počty do pilulek – tie isté vstupy a ten istý predikát ako zoznam, takže číslo sedí s tým, čo klik ukáže (§7).
-export async function getDealCounts(params: Omit<DealListParams, "view" | "take">): Promise<DealCounts> {
+export async function getDealCounts(params: Omit<DealListParams, "view" | "take" | "step">): Promise<DealCounts> {
     const counted = await Promise.all(
         COUNTED_VIEWS.map(async (v) => [v, (await matchingIds(pillFilter(v === "all" ? undefined : v, params))).length] as const),
     );
@@ -705,6 +712,14 @@ export async function getDealCounts(params: Omit<DealListParams, "view" | "take"
             : Promise.resolve(0),
     ]);
     return { ...(Object.fromEntries(counted) as Record<(typeof COUNTED_VIEWS)[number], number>), open, unassignedOpen };
+}
+
+// Počty úrovne 2: koľko obchodov má daný druh kroku V AKTUÁLNOM RADE (`view`) a pri aktuálnych filtroch. `all` = rad bez kroku.
+export type DealStepCounts = Record<"all" | (typeof DEAL_STEPS)[number]["key"], number>;
+export async function getDealStepCounts(params: Omit<DealListParams, "view" | "take" | "step">, view: string | undefined): Promise<DealStepCounts> {
+    const withStep = async (step?: string) => (await matchingIds(pillFilter(view, { ...params, step }))).length;
+    const [all, ...rest] = await Promise.all([withStep(), ...DEAL_STEPS.map((s) => withStep(s.key))]);
+    return { all, ...Object.fromEntries(DEAL_STEPS.map((s, i) => [s.key, rest[i]])) } as DealStepCounts;
 }
 
 // ── Detail ───────────────────────────────────────────────────────────────────

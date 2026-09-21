@@ -1155,3 +1155,11 @@ Q5–Q8 block nothing in Part A and can be answered when Part A is built.
     D5 is independent of Part A and can be pulled forward whenever the test branch is free.
 12. Docs (`app-workflow.md` §6, `database-map.md`, `operations.md`, `progress-tracker.md`), HTTP role checks, final
     full check pass.
+13. **Pipeline filters, redesigned 2026-09-21 (Michal, after partA-R02) — decision note, no schema.** The old flat pills
+    (Na dnes · Všetko · Volať · … · Návrh v procese) could not answer the rep's real questions. Now three composable
+    levels under a **status** switch at the top (Aktívne · Spiace · …): **queue** (Čakám na manažéra │ Na spracovanie · Na dnes
+    · Všetko; manager: + Pre mňa) → **step kind** chips that narrow the queue you are in (*Na dnes → Volať*). Queues and
+    steps exist **only for Aktívne**; any other status is a plain list. "Rozpracované návrhy"
+    (`nextActionMode = IN_PROGRESS`) is replaced by **Poslať návrh** (`nextActionKind = SEND_DESIGN`) — work the manager
+    is doing is already *Čakám na manažéra*. No `view` in the URL opens *Na spracovanie* while it is not empty, else
+    *Na dnes*. See `app-workflow.md` §4 "Filters" and the tracker.

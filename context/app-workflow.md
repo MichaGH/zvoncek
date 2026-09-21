@@ -125,13 +125,25 @@ forced back to themselves. Scope never comes from the path or the URL.
 
 **Filters** (identical for both roles; owner controls render only when the scope can contain other people):
 
-1. owner — ja (default) / všetci / nepriradené / a person · plus "Od:" (who handed the deal over)
-2. status — Aktívne (default) · Spiace · Vyhraté · Stratené · Nedostupné · Všetky
-3. view pills — (manager) **Pre mňa** · Čakám na manažéra · **Na dnes** (default) · Všetko · Volať · Poslať cenu ·
-   Poslať email · Návrh v procese · Čaká na klienta · Dostali cenník · Dostali cenu · Dostali návrh · (manager)
-   Neoverené. **Every pill shows a count** computed by the same predicate and filters as its list, so the number
-   matches what a click shows
-4. search (firma, web, telefón, email)
+**Status on top, then two composable levels** (a rep's day: call 20 numbers in /calls → *Na spracovanie* to finish what the calls
+promised → *Na dnes* for deadlines; a manager uses the same screen for his own deals, and for a telesales caller's
+deals when he acts as their rep):
+
+0. **Status** (subtle switch at the very top) — **Aktívne** (default) · Spiace · Vyhraté · Stratené · Nedostupné · Všetky.
+   Queues and steps below exist **only for Aktívne**; every other status is a plain list of its deals.
+1. **Queue** (big pills with counts, Aktívne only) — (manager) **Pre mňa** · **Čakám na manažéra** │ **Na spracovanie** · **Na dnes**
+   · **Všetko**. *Na spracovanie* = open client promises the owner can act on now (after a first call, before the
+   manager is asked); *Na dnes* = the day's deadlines; *Čakám na manažéra* = locked by a manager task; *Všetko* = every
+   active deal. With no `view` in the URL the screen opens on **Na spracovanie while it is not
+   empty, otherwise Na dnes** (`resolveView`); every link the screen builds carries an explicit queue.
+2. **Step kind** (chips under the queue, Aktívne only, counts *inside that queue*) — Volať · Poslať cenu · Poslať návrh · Poslať email
+   · Čaká na klienta. It **narrows the queue you are in**: *Všetko → Volať* = every deal whose step is Volať, *Na dnes →
+   Volať* = whom to call today. It survives switching between queues, and is not offered in *Čakám na manažéra* / *Pre
+   mňa* (a locked deal has no step of its own). Old `?view=call` links mean *Všetko + Volať*.
+Plus: owner — ja (default) / všetci / nepriradené / a person, and "Od:" (who handed the deal over); search (firma, web,
+telefón, email); a rarely used disclosure "Klient už dostal" (Dostali cenník / cenu / návrh) and, for managers,
+"Neoverené". **Every count** is computed by the same predicate and filters as its list, so the number matches what a
+click shows.
 
 "Na dnes" is the day's work: due or overdue, woken snoozes, missing next step, missing date, a due check date. Its SQL
 mirrors `clientSection()` and a parity test asserts they agree over every open deal. Ordering and paging are done in SQL

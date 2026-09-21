@@ -14,6 +14,7 @@ import {
     DEFAULT_STATUS_KEY,
     dealsHref,
     parseDealParams,
+    resolveView,
     statusOf,
     viewOf,
     type DealFilterParams,
@@ -27,6 +28,7 @@ import {
     getDealList,
     getDealOwnerOptions,
     getDealScope,
+    getDealStepCounts,
     getHandoffOptions,
     getResolverOptions,
 } from "@/lib/queries/pipeline";
@@ -37,7 +39,7 @@ import {
 export default async function DealsPage({
     searchParams,
 }: {
-    searchParams: Promise<{ filter?: string; view?: string; owner?: string; q?: string; from?: string; limit?: string }>;
+    searchParams: Promise<{ filter?: string; view?: string; step?: string; owner?: string; q?: string; from?: string; limit?: string }>;
 }) {
     const viewer = await requireUser();
     if (!viewer) redirect("/login?deactivated=1");
@@ -55,21 +57,25 @@ export default async function DealsPage({
     const scope = await getDealScope(viewer);
     const ownerFilter = resolveOwnerFilter(raw.owner, viewer, scope);
     // Parametre normalizujeme na to, čo server naozaj použil – odkazy potom nikdy neukazujú niečo iné než zoznam.
-    const params: DealFilterParams = { ...raw, owner: ownerFilterParam(ownerFilter, viewer.id) };
-    const take = params.limit ?? DEAL_PAGE_SIZE;
+    const normalized: DealFilterParams = { ...raw, owner: ownerFilterParam(ownerFilter, viewer.id) };
+    const take = normalized.limit ?? DEAL_PAGE_SIZE;
     // Zoznam aj počty dostanú tie isté vstupy (jeden predikát na pilulku).
     const filters = {
         scope,
         owner: ownerFilter,
-        status: statusOf(params),
-        query: params.q,
-        handedOffBy: params.from,
+        status: statusOf(normalized),
+        query: normalized.q,
+        handedOffBy: normalized.from,
         viewerId: viewer.id,
     };
 
-    const [{ rows, hasMore }, counts, owners, handoffs, callers, resolvers] = await Promise.all([
-        getDealList({ ...filters, view: viewOf(params), take }),
-        getDealCounts(filters),
+    // Počty rádov najprv: bez `view` v adrese sa otvorí „Na spracovanie", kým je čo spracovať, inak „Na dnes".
+    const counts = await getDealCounts(filters);
+    const params: DealFilterParams = { ...normalized, view: resolveView(normalized.view, counts) };
+
+    const [{ rows, hasMore }, stepCounts, owners, handoffs, callers, resolvers] = await Promise.all([
+        getDealList({ ...filters, view: viewOf(params), step: params.step, take }),
+        getDealStepCounts(filters, viewOf(params)),
         caps.seeOthers ? getDealOwnerOptions(scope) : Promise.resolve([]),
         caps.seeOthers ? getHandoffOptions(scope) : Promise.resolve([]),
         caps.transferDeals
@@ -115,6 +121,7 @@ export default async function DealsPage({
                     <DealFilters
                         params={params}
                         counts={counts}
+                        stepCounts={stepCounts}
                         owners={owners}
                         handoffs={handoffs}
                         showOwner={caps.seeOthers}

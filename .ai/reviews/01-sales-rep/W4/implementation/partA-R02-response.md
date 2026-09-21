@@ -78,3 +78,16 @@ unchanged. Not verified visually.
 | `check-concurrency` full, `--iterations 100` | **not run** |
 | `check-backfill-delta`, `check-business-time`, `check-client-sections` | not run this round |
 | Human click-through (phone + desktop) incl. the new confirmation and `/calls` cards | still owed |
+
+## After this response — pipeline filters redesigned (2026-09-21, Michal's request, not a review item)
+
+Backup first: branch `backup/wave4a-r01-r02-fixes-pre-filters-2026-09-21`, commit `8478c7f`, pushed to `origin`.
+
+Then the pipeline filter was redesigned as three **composable** levels: a status switch on top (Aktívne · Spiace · …; queues and steps only for Aktívne), then queue (Čakám na manažéra │ Na spracovanie · Na dnes ·
+Všetko; manager also Pre mňa) → step-kind chips that narrow the current queue (Volať · Poslať cenu · Poslať návrh · Poslať
+email · Čaká na klienta). ChatGPT's boxed "Pracovný rad" card and hint sentence were removed. With no
+`view` in the URL the screen opens on Na spracovanie while it is not empty, otherwise Na dnes. "Rozpracované návrhy" became
+"Poslať návrh" (`SEND_DESIGN`). No schema or server rule changed. Details, code locations and tests (`w4aFilterLevels`, 4
+checks; `w3LockParity`, `w1TodayParity`, `w3InboxHref` re-run and passing): `context/progress-tracker.md`, wave 4 proposal §9
+item 13, `app-workflow.md` "Filters". Type-check, lint (only the known error) and build pass; **the layout was not viewed in a
+browser**.
