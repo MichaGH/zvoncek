@@ -68,7 +68,7 @@ Data was never wrong. Resumed with `FROM=7`; everything passed.
 ## If a step stops
 
 Read the printed BLOCKER / FAIL line. Blockers are data patterns the rules do not cover — show them to Michal, do
-not improvise SQL. Nothing after the failing step has run; steps before it are repeatable.
+not improvise SQL. Nothing after the failing step has run; fix the cause and resume with FROM=<that step> (see the resume rules above).
 
 ## Review 2026-09-22 (ChatGPT, NO-GO) — what changed
 
