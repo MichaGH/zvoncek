@@ -222,7 +222,6 @@ export default function OfferSentDialog({
     const sendingLabel = contents
         .map((c) => (c === "PRICE" && sentAmount !== null ? `Cena ${formatMoney(sentAmount)}` : OFFER_CONTENT_LABEL[c]))
         .join(" + ");
-    const legacy = deal.offers.legacy;
     const blocked =
         contents.length === 0
             ? "Zaškrtni, čo sme poslali"
@@ -315,13 +314,7 @@ export default function OfferSentDialog({
             title={historical ? "Doplniť starý záznam" : "Čo sme poslali"}
             description={
                 historical
-                    ? `Staré: ${[
-                          legacy.aboutUsSentAt ? `email o nás ${businessDayMonth(new Date(legacy.aboutUsSentAt))}` : null,
-                          legacy.quoteSentAt ? `CP ${businessDayMonth(new Date(legacy.quoteSentAt))}` : null,
-                          legacy.priceDisclosed ? "„klient pozná cenu“" : null,
-                      ]
-                          .filter(Boolean)
-                          .join(", ") || "bez podrobností"}`
+                    ? "Odoslanie, ktoré sa stalo mimo aplikácie – s pôvodným dátumom. Krok ani úlohy sa nemenia."
                     : "Zaškrtni, čo bolo v emaili. Predvyplnené je len to, čo klient pýtal a ešte nedostal."
             }
         >

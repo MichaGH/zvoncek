@@ -123,7 +123,6 @@ export default function DealFilters({
     showOwner,
     showInbox,
     showWaiting,
-    showLegacy,
 }: {
     params: DealFilterParams; // `view` je tu už vždy konkrétny rad (server vyriešil „auto")
     counts: DealCounts;
@@ -133,11 +132,10 @@ export default function DealFilters({
     showOwner: boolean;
     showInbox: boolean; // „Pre mňa" – len ten, kto úlohy vybavuje
     showWaiting: boolean; // „Čakám na manažéra"
-    showLegacy: boolean; // „Neoverené" – staré obchody na overenie, len manažér
 }) {
     const router = useRouter();
     const [search, setSearch] = useState(params.q ?? "");
-    const extras = DEAL_VIEWS.filter((v) => v.group === "running" || (v.group === "legacy" && showLegacy));
+    const extras = DEAL_VIEWS.filter((v) => v.group === "running");
     const extraActive = extras.some((v) => v.key === params.view);
     const count = (key: string) => counts[key as keyof DealCounts];
 
@@ -298,12 +296,12 @@ export default function DealFilters({
                 </Row>
             )}
 
-            {/* Čo klient už dostal (a neoverené staré obchody) – zriedkavé, preto schované, kým sa nepoužijú. */}
+            {/* Čo klient už dostal – zriedkavé, preto schované, kým sa nepoužijú. */}
             {queues && extras.length > 0 && (
                 <details className="group" open={extraActive || undefined}>
                     <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
                         <SlidersHorizontal className="h-3.5 w-3.5" />
-                        Klient už dostal{showLegacy ? " · Neoverené" : ""}
+                        Klient už dostal
                         {extraActive && <span className="text-primary"> · aktívny filter</span>}
                     </summary>
                     <div className="mt-2">

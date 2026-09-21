@@ -6,7 +6,8 @@ import { businessDate, businessDayStart, isValidBusinessDate } from "@/lib/domai
 // Čo klient dostal (round 2, wave 3a – context/features/01-salesrep/round2-deal-workspace.md §2c).
 // Jeden záznam OFFER_SENT = jedno odoslanie ponukových materiálov (email) alebo cena povedaná telefonicky.
 // Obsah je v Activity.meta; súhrnné stĺpce na Lead (offer*) sú z neho VŽDY prepočítané (lib/domain/offerMutations.ts).
-// Staré polia (quoteSentAt, aboutUsSentAt, priceDisclosed) sú zmrazené – nikdy neznamenajú „áno", len „?".
+// Staré polia V1 (quoteSentAt, aboutUsSentAt, priceDisclosed) nový kód nečíta: jednorazový prevod V1 → V2 z nich urobil
+// OFFER_SENT záznamy (meta.migrated). Stĺpce sa zmažú samostatným krokom po nasadení.
 // Čisté funkcie bez DB – dá sa importovať aj z klientskych komponentov.
 
 export const OFFER_CONTENTS = ["ABOUT_US", "PRICELIST", "PRICE", "DESIGN", "REVIEW"] as const;
@@ -37,7 +38,20 @@ const offerMetaSchema = z.object({
     // Návrh bol poslaný, ale v systéme preň neexistuje Design riadok (PDF, obyčajný odkaz, starý obchod) – R01-5.
     // Nikdy spolu s `designs`; nemení žiadny Design.sentAt.
     untrackedDesign: z.boolean().optional(),
-    migrated: z.boolean().optional(), // prevedené zo starého systému skriptom 2026-09-offer-migrate.ts (ak sa použije)
+    migrated: z.boolean().optional(), // prevedené zo starého systému jednorazovým prevodom (V1 → V2)
+    // Prevod: ktoré staré QUOTE_SENT / EMAIL_SENT / DESIGN_SENT riadky tento záznam nahrádza – história ich už neukazuje.
+    // Celý tvar je vymenovaný (nie passthrough): oprava záznamu prepisuje meta z tohto parsovania a nič nesmie stratiť.
+    migration: z
+        .object({
+            key: z.string(), // deterministický kľúč prevodu (v2mig:offer:<leadId>:<sentOn>)
+            rule: z.string(), // schválené pravidlo (D-003r2) alebo rozhodnutie pre konkrétny obchod
+            sources: z.array(z.string()), // id starých aktivít
+            designIds: z.array(z.string()).optional(),
+            originalAt: z.string(), // ISO čas najstaršieho zdroja
+            amountSource: z.enum(["QUOTE_NOTE", "CURRENT_PRICE", "DECISION"]).optional(),
+            migratedAt: z.string(), // kedy prevod bežal
+        })
+        .optional(),
     // Wave 3: ktoré vrátené výsledky úloh toto odoslanie použilo (lib/domain/tasks.ts) + odtlačok odoslania.
     fulfils: z
         .array(z.object({ taskId: z.string(), kind: z.enum(["PRICE", "DESIGN"]), designId: z.string().optional() }))
@@ -94,8 +108,9 @@ export function offerNote(meta: Pick<OfferMeta, "channel" | "contents" | "price"
 // Posledné, čo klient od nás dostal (platné záznamy, v poradí compareOffers). Zobrazuje sa pri „Naposledy",
 // aby po ďalšom hovore nezmizlo, že čakáme, kým si pozrú návrh / cenu (round 2 §2d).
 export function lastOfferOf(rows: OfferRow[]): { text: string; at: string } | null {
-    // Spätne doplnené staré odoslania sa tu nezobrazujú – „Naposledy" je o nedávnom kontakte (§2c 5.3).
-    const valid = rows.filter((r) => r.revertedAt === null && !r.meta.historical).sort(compareOffers);
+    // Ručne spätne doplnené odoslania sa tu nezobrazujú – „Naposledy" je o nedávnom kontakte (§2c 5.3). Prevedené
+    // odoslania zo starého systému (migrated) áno: nesú presný pôvodný čas a boli to skutočné emaily.
+    const valid = rows.filter((r) => r.revertedAt === null && (!r.meta.historical || r.meta.migrated)).sort(compareOffers);
     const last = valid[valid.length - 1];
     return last ? { text: offerSummary(last.meta), at: offerInstant(last.meta, last.createdAt).toISOString() } : null;
 }
@@ -163,7 +178,7 @@ export function summarizeOffers(rows: OfferRow[]): OfferSummary {
 
 // ── Čo klient vie (zobrazenie) ─────────────────────────────────────────────────
 
-export type KnowledgeState = { state: "yes"; at: string } | { state: "unknown" } | { state: "no" };
+export type KnowledgeState = { state: "yes"; at: string } | { state: "no" };
 
 export type KnowledgeInput = {
     offerAboutUsAt: string | null;
@@ -171,25 +186,17 @@ export type KnowledgeInput = {
     offerPriceAt: string | null;
     offerReviewAt: string | null;
     designSentAt: string | null;
-    hadLegacySends: boolean;
-    legacySendsReviewedAt: string | null;
 };
 
-export function legacyUnreviewed(k: Pick<KnowledgeInput, "hadLegacySends" | "legacySendsReviewedAt">): boolean {
-    return k.hadLegacySends && k.legacySendsReviewedAt === null;
-}
-
-// Nový záznam = „áno"; na neoverenom starom obchode prázdne = „?" (nikdy „nie"); inak „nie".
-// Návrh má spoľahlivý starý údaj (Design.legacySentAt), preto sa berie zo sentAt priamo.
+// Záznam = „áno", inak „nie". Návrh sa berie z Lead.designSentAt (súhrn sledovaných aj nesledovaných odoslaní).
 export function clientKnowledge(k: KnowledgeInput): Record<OfferContent, KnowledgeState> {
-    const unknown = legacyUnreviewed(k);
-    const of = (at: string | null): KnowledgeState => (at ? { state: "yes", at } : unknown ? { state: "unknown" } : { state: "no" });
+    const of = (at: string | null): KnowledgeState => (at ? { state: "yes", at } : { state: "no" });
     return {
         ABOUT_US: of(k.offerAboutUsAt),
         PRICELIST: of(k.offerPricelistAt),
         PRICE: of(k.offerPriceAt),
         REVIEW: of(k.offerReviewAt),
-        DESIGN: k.designSentAt ? { state: "yes", at: k.designSentAt } : unknown ? { state: "unknown" } : { state: "no" },
+        DESIGN: of(k.designSentAt),
     };
 }
 
@@ -239,6 +246,19 @@ export function isValidSentOn(value: string, today: string): boolean {
     return isValidBusinessDate(value) && value <= today;
 }
 
+// Staré riadky odoslaní, ktoré už nahradil prevedený OFFER_SENT (meta.migration.sources). V histórii sa ukazuje len
+// prevedený záznam, aby každé staré odoslanie bolo vidieť raz. „Naposledy" ich naďalej číta – boli to skutočné kontakty.
+export function migratedSourceIds(rows: readonly { type: string; meta: unknown }[]): Set<string> {
+    const ids = new Set<string>();
+    for (const r of rows) {
+        if (r.type !== "OFFER_SENT") continue;
+        const meta = parseOfferMeta(r.meta);
+        if (!meta?.migrated) continue;
+        for (const id of meta.migration?.sources ?? []) ids.add(id);
+    }
+    return ids;
+}
+
 // „Naposledy" = posledný SKUTOČNÝ kontakt s klientom. Úpravy (cena, krok), požiadavky ani audit sem nepatria.
 export const LAST_TOUCH_TYPES = ["CALL", "CLIENT_REPLIED", "SMS_SENT", "OFFER_SENT", "NOTE", "QUOTE_SENT", "EMAIL_SENT", "DESIGN_SENT"] as const;
 
@@ -257,8 +277,6 @@ export type OfferDialogDeal = {
     // Wave 5: čo klient pýta a ešte nedostal (predvyplní sa) a celá nevybavená práca (predvolí ďalší krok, §6.9).
     asked: RequestContent[];
     outstanding: RequestContent[];
-    offers: KnowledgeInput & {
-        legacy: { quoteSentAt: string | null; aboutUsSentAt: string | null; priceDisclosed: boolean };
-    };
+    offers: KnowledgeInput;
     designs: { id: string; label: string | null; url: string | null; trackedUrl: string | null; sentAt: string | null }[];
 };

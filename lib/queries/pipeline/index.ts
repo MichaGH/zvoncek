@@ -41,7 +41,7 @@ import { requestsByLead } from "@/lib/domain/requestMutations";
 import { ROLE_PERMISSIONS } from "@/lib/permissions";
 import { summarizeEvents, type Confidence } from "@/lib/tracking/confidence";
 import { trackedUrl } from "@/lib/domain/designLinks";
-import { LAST_TOUCH_TYPES, lastOfferOf, parseOfferMeta, summarizeOffers, type OfferDialogDeal, type OfferRow } from "@/lib/domain/offers";
+import { LAST_TOUCH_TYPES, lastOfferOf, migratedSourceIds, parseOfferMeta, summarizeOffers, type OfferDialogDeal, type OfferRow } from "@/lib/domain/offers";
 import type {
     ActivityType,
     CallOutcome,
@@ -92,8 +92,6 @@ function viewWhere(view?: string): Prisma.LeadWhereInput {
             return { offerPriceAt: { not: null } };
         case "got_design":
             return { OR: [{ designs: { some: { deletedAt: null, sentAt: { not: null } } } }, { designSentAt: { not: null } }] };
-        case "unverified":
-            return { hadLegacySends: true, legacySendsReviewedAt: null };
         case "waiting_manager":
             return { status: { in: [...OPEN_STATUSES] }, ...LOCKED_WHERE };
         default:
@@ -202,11 +200,6 @@ type DealLead = {
     offerPricelistAt: Date | null;
     offerPriceAt: Date | null;
     offerReviewAt: Date | null;
-    hadLegacySends: boolean;
-    legacySendsReviewedAt: Date | null;
-    quoteSentAt: Date | null;
-    aboutUsSentAt: Date | null;
-    priceDisclosed: boolean;
     designs: { id: string; label: string | null; targetUrl: string | null; sentAt: Date | null; tracker: { token: string } | null }[];
     designSentAt: Date | null;
     _count: { designs: number };
@@ -268,11 +261,6 @@ const LIST_SELECT = {
     offerPricelistAt: true,
     offerPriceAt: true,
     offerReviewAt: true,
-    hadLegacySends: true,
-    legacySendsReviewedAt: true,
-    quoteSentAt: true,
-    aboutUsSentAt: true,
-    priceDisclosed: true,
     designSentAt: true,
     _count: { select: { designs: true } }, // aj zmazané – obchod bez jediného návrhu = starý údaj z Lead.designSentAt
     // Návrhy pre dialóg „Čo sme poslali" otváraný priamo zo zoznamu (round 2 §2d) + ikonka „dostali návrh".
@@ -478,7 +466,6 @@ function toDealRow(
         gotPricelist: lead.offerPricelistAt !== null,
         gotPrice: lead.offerPriceAt !== null,
         hasDesignSent: legacyAwareDesignSentAt(lead) !== null,
-        legacyUnreviewed: lead.hadLegacySends && lead.legacySendsReviewedAt === null,
         ownerId: lead.owner?.id ?? null,
         owner: lead.owner?.firstName ?? null,
         handedOffBy: lead.handedOffBy ? `${lead.handedOffBy.firstName} ${lead.handedOffBy.lastName}`.trim() : null,
@@ -544,9 +531,6 @@ function offerDialogOf(lead: DealLead): OfferDialogDeal {
             offerPriceAt: iso(lead.offerPriceAt),
             offerReviewAt: iso(lead.offerReviewAt),
             designSentAt: iso(designSentAt),
-            hadLegacySends: lead.hadLegacySends,
-            legacySendsReviewedAt: iso(lead.legacySendsReviewedAt),
-            legacy: { quoteSentAt: iso(lead.quoteSentAt), aboutUsSentAt: iso(lead.aboutUsSentAt), priceDisclosed: lead.priceDisclosed },
         },
         designs: lead.designs.map((d) => ({
             id: d.id,
@@ -694,7 +678,6 @@ export const COUNTED_VIEWS = [
     "got_pricelist",
     "got_price",
     "got_design",
-    "unverified",
     "waiting_manager",
     "inbox",
 ] as const;
@@ -807,6 +790,7 @@ export async function getDealDetail(
         if (meta) offerRows.push({ id: a.id, createdAt: a.createdAt, revertedAt: a.revertedAt, meta });
     }
     const offers = summarizeOffers(offerRows);
+    const replacedBySend = migratedSourceIds(lead.activities);
     // Rovnaké pravidlo ako LAST_TOUCH_WHERE v zozname.
     const lastTouch = lead.activities.find((a) => {
         if (!(LAST_TOUCH_TYPES as readonly string[]).includes(a.type) || a.revertedAt) return false;
@@ -842,15 +826,7 @@ export async function getDealDetail(
             offerPriceAt: lead.offerPriceAt?.toISOString() ?? null,
             offerReviewAt: lead.offerReviewAt?.toISOString() ?? null,
             designSentAt: legacyAwareDesignSentAt(lead)?.toISOString() ?? null,
-            hadLegacySends: lead.hadLegacySends,
-            legacySendsReviewedAt: lead.legacySendsReviewedAt?.toISOString() ?? null,
             lastPrice: offers.lastPrice,
-            // Staré polia – zobrazujú sa len ako „čo tvrdil starý záznam", nikdy ako „áno".
-            legacy: {
-                quoteSentAt: lead.quoteSentAt?.toISOString() ?? null,
-                aboutUsSentAt: lead.aboutUsSentAt?.toISOString() ?? null,
-                priceDisclosed: lead.priceDisclosed,
-            },
         },
         // Wave 4 D5: krátka história ceny na karte – čo sa zmenilo, kto a prečo. Obchodník ju vidí (BUSINESS riadok);
         // riadky spred D5 sú staršie CONTACT_UPDATED audity a do tohto zoznamu už nepatria (database-map.md).
@@ -924,7 +900,7 @@ export async function getDealDetail(
         lastTouch: lastTouch
             ? { type: lastTouch.type, outcome: lastTouch.outcome, note: lastTouch.note, at: lastTouch.createdAt.toISOString() }
             : null,
-        activities: lead.activities.map((a) => {
+        activities: lead.activities.filter((a) => !replacedBySend.has(a.id)).map((a) => {
             const offer = a.type === "OFFER_SENT" ? parseOfferMeta(a.meta) : null;
             const correction = correctionOf(a.meta);
             return {
@@ -940,7 +916,9 @@ export async function getDealDetail(
                 taskId: a.taskId,
                 revertedAt: a.revertedAt?.toISOString() ?? null,
                 correctionReason: correction,
-                offer: offer ? { sentOn: offer.sentOn, historical: offer.historical, channel: offer.channel, via: offer.via ?? null } : null,
+                offer: offer
+                    ? { sentOn: offer.sentOn, historical: offer.historical, migrated: offer.migrated === true, channel: offer.channel, via: offer.via ?? null }
+                    : null,
             };
         }),
         // Súhrn sledovania návrhu – bez tokenov, URL a IP (spravovanie návrhov má manažér vo vlastnej karte).

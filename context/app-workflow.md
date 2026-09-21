@@ -141,8 +141,8 @@ deals when he acts as their rep):
    Volať* = whom to call today. It survives switching between queues, and is not offered in *Čakám na manažéra* / *Pre
    mňa* (a locked deal has no step of its own). Old `?view=call` links mean *Všetko + Volať*.
 Plus: owner — ja (default) / všetci / nepriradené / a person, and "Od:" (who handed the deal over); search (firma, web,
-telefón, email); a rarely used disclosure "Klient už dostal" (Dostali cenník / cenu / návrh) and, for managers,
-"Neoverené". **Every count** is computed by the same predicate and filters as its list, so the number matches what a
+telefón, email); a rarely used disclosure "Klient už dostal" (Dostali cenník / cenu / návrh) (these views have no
+step row; entering them clears any step). **Every count** is computed by the same predicate and filters as its list, so the number matches what a
 click shows.
 
 "Na dnes" is the day's work: due or overdue, woken snoozes, missing next step, missing date, a due check date. Its SQL
@@ -157,7 +157,7 @@ task ends.
 **Layout**: desktop table (`# | Firma | Typ | [Stav] | Ďalší krok | Naposledy | Cena | [Rieši] | akcie`), phone cards.
 Every row shows the next step **and** the last contact (a real client contact: call, reply, SMS, email we sent —
 edits, task messages and back-filled old entries never count), e.g. `Naposledy: Nezdvihli · dnes · 3. pokus`, plus small icons
-for what the client already has (cenník, cena, návrh) and ⚠ for an old deal whose sends are not verified yet. Row click
+for what the client already has (cenník, cena, návrh). Row click
 opens the action sheet, the `i` icon opens the detail, the phone icon dials.
 
 **Manager-only** (hidden without `deals.manage`, refused server-side regardless): status, owner, project type, WON,
@@ -226,12 +226,11 @@ ponuku" — in place, from the list or the detail), from the detail's **Cena & p
 - **Mistakes:** "Opraviť" on a history entry (author or manager, with a reason) crosses it out; what the client knows is
   recalculated. Crossing out an **SMS** also crosses out the price that was written in it (same transaction, one
   revision); crossing out only the price leaves the SMS text in the history. On an **unlocked** deal the next step is not touched — the user fixes it by hand if needed. While a manager task is **open** the step is locked and derived, so a correction re-derives it (P6) — the user could not fix it by hand.
-- **Old deals** (sends from before this change): contents are unknown, so the card shows "?" instead of "no" and a ⚠
-  panel. The manager fills in what was really sent with its original date ("Doplniť starý záznam" — no next step, no
-  task change, not shown as "Naposledy") and then confirms "Hotovo – toto je všetko". The "Neoverené" pill lists
-  such deals. **[ROLLOUT]** This is the current test behaviour, not the chosen production end state: before rollout,
-  old sends will be converted on a duplicate of production, verified, and the permanent "?" layer removed
-  (`context/domain/db-changes.md` §3.3).
+- **Old deals** (sends from V1): the one-time conversion turned them into ordinary sends at their original time
+  (Info / Info + Cena / Info + Návrh, `.ai/migrations/v1-to-v2-live/02-data-mapping.md`). The history shows each one
+  once, labelled "zo starého systému" (the raw V1 row is hidden). **[ROLLOUT]** on production.
+- **"Doplniť starý záznam"** (manager, in Cena & ponuky): records a send that happened outside the app with its
+  original date — no next step, no task change, not "Naposledy".
 
 ### 5b. What the client asked for — "Chceli"
 
@@ -255,7 +254,7 @@ Design: `context/features/01-salesrep/wave-5-proposal.md`. Rules: `lib/domain/cl
   (a návrh email carries the price), "Poslať cenu" covers the price, "Poslať úvodný email" covers info, cenník and
   rozbor. A rep who deliberately keeps "Poslať cenu" while a návrh is also outstanding sees her own step plus
   "⚠ Chceli návrh – ešte nedostali". A call or "Čakáme na klienta" covers nothing, so everything outstanding warns.
-- **The pencil** at "Chceli" adds what they now want or withdraws what they no longer want (a short reason is
+- **The pencil** at "Chcú teraz" (in Cena & ponuky) adds what they now want or withdraws what they no longer want (a short reason is
   required for a withdrawal, and it is shown in the history). Only **open** rows can be withdrawn — a row the client
   already received keeps its link to the send. The pencil never cancels an open manager task; that is "Zmeniť krok
   (zruší úlohu)".
@@ -401,10 +400,10 @@ capabilities:
   header show the same line), one "Zaznamenať kontakt" button (the action sheet). "Zmeniť krok" opens the same sheet directly at the
   next-step screen, pre-filled, as "bez kontaktu – len naplánovať" (status unchanged). There is no separate step editor
   and no free-note field.
-- **Cena & ponuky** — current price + breakdown (the pencil opens a small price popup; it sends nothing), what the
-  client received (o nás · cenník · cena · návrh, with dates,
-  "?" on unverified old deals), the price-mismatch warning, "Zaznamenať odoslanie", and for the manager the old-deal
-  review panel
+- **Cena & ponuky** — current price + breakdown (the pencil opens a small price popup; it sends nothing), "Chcú teraz" (what still
+  waits; its pencil corrects what the client wants) beside "Klient dostal" (o nás · cenník · cena · návrh, with dates,
+  "?" on unverified old deals), the price-mismatch warning, a history dropdown (past requests, price changes) and for the
+  manager the old-deal review panel. "Zaznamenať odoslanie" lives in the action bar under "Ďalší krok · Naposledy"
 - **Návrh** — full management for the manager, confidence summary for the rep; both get "Odkaz do emailu" and
   "Odoslané…"
 - **Výsledok** (manager), **História** (rep: business steps; manager: audit too; crossed-out entries stay visible with

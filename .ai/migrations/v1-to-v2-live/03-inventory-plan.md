@@ -32,6 +32,25 @@ Count leads by every combination of:
 Also count duplicate dates, multiple old activities per lead, conflicting field/activity dates, undo/audit rows and
 evidence outside `pipelineEnteredAt IS NOT NULL`.
 
+Added 2026-09-21 for mapping revision 2 (`02-data-mapping.md`):
+
+- `EMAIL_SENT` rows per lead (expected ≤ 1) and any with a non-null note; `aboutUsSentAt` without an `EMAIL_SENT` row.
+- `QUOTE_SENT` rows with / without an amount in the note; audit rows "Odoslanie cenovej ponuky zrušené",
+  "Klient oboznámený s cenou", "Oboznámenie s cenou zrušené"; `quoteSentAt` vs last `QUOTE_SENT` date.
+- Price history: leads with "Cena: X → Y" rows; leads whose current `price` differs from the amount in their last
+  `QUOTE_SENT` note; leads with price set only after their first send.
+- Every combination of {price null/non-null} × {ABOUT, CP, DESIGN event present} × {current `nextActionKind`} for
+  open deals — especially `SEND_QUOTE` + price filled (Q3) and `SEND_*` steps on leads that already received that
+  content (D-007).
+- `DESIGN_SENT` rows matched / unmatched to a sent Design within 1 s; "Návrh označený ako neposlaný" rows; deleted
+  Designs with `sentAt`; `Lead.designSentAt` without a sent non-deleted Design.
+- Same-business-day groups of old sends per lead (Q5).
+- Round 1 blockers: `OUTCOME_CORRECTED` count; "Vrátené do volaní (reset na nový)" rows; `NEW` leads with CALL rows
+  (positive / non-positive); deals with 0 or >1 positive queue calls; deals without owner (Q6, Q8).
+- For each planning row type (`NEXT_ACTION_SET/CHANGED`), whether its `note` identifies the step kind reliably
+  (needed for D-007 `stepSetAt`).
+- Any existing `OFFER_SENT`, `LeadRequest`, `DealTask` rows (expected 0 — the live schema should not even have them).
+
 ## Stage C — planned-event manifest
 
 Produce one local sensitive manifest with one row per proposed canonical event:
@@ -71,3 +90,24 @@ Do not start V2 against the clone merely to inspect it. Its schema is V1 and the
 objects. Inventory tooling is purpose-built and read-only; application testing begins only after the rehearsed schema
 and data steps have completed.
 
+## Expected drift between clone 1 and the final copy (Michal, 2026-09-21)
+
+Live V1 keeps running until the final copy. Michal expects new data **only from the first stages**:
+
+- **Scouts:** newly added contacts, i.e. new `NEW` leads (+ their `CONTACT_UPDATED` audit rows).
+- **Telesales:** first calls from the call queue with ordinary outcomes only: no answer (`NO_ANSWER` → CALLING RETRY),
+  call later (`CALL_AGAIN` → CALLING SCHEDULED, with V1's call-stage `nextAction`), wants návrh (`WANTS_DESIGN` → new
+  ACTIVE deal, step SEND_DESIGN in progress) or wants price (`WANTS_QUOTE` → new ACTIVE deal, step SEND_QUOTE). Also
+  plausible: `NOT_INTERESTED` / `BAD_NUMBER` / `WANTS_EMAIL`. "No special situations."
+
+**Double-check on the final copy. Do not assume.** Re-run `inventory/` and compare with `INVENTORY-2026-09-21.md`:
+
+1. Schema identical to clone 1 (any difference = stop).
+2. Every lead/activity that is new or changed since clone 1 fits the list above. Expected results: Round 1 classes grow
+   only in POOL / CALLWORK_TO_MIGRATE / DEAL_TO_MIGRATE / TERMINAL_OK; new deals are ownerless → Michal; new
+   `SEND_DESIGN` / `SEND_QUOTE` / `SEND_EMAIL` deals have no sends → they become OPEN "Chceli" rows (new: OPEN PRICE rows
+   for `WANTS_QUOTE` deals, 0 on clone 1).
+3. Anything else is **unexpected and listed for Michal before any write**: a new EMAIL_SENT / QUOTE_SENT / DESIGN_SENT,
+   price edit, design, status change, owner change, reset ("Vrátené do volaní"), outcome correction, NOTE, a changed
+   send on one of the 86 known send leads, or a changed decision lead (#628, #98, #404).
+4. Every §9 gate in `02-data-mapping.md` is still 0.

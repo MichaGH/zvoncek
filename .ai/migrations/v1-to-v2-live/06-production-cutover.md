@@ -1,59 +1,75 @@
-# 06 — Production cutover plan
+# 06 — Production cutover (tonight's exact runbook)
 
-**NOT AUTHORIZED.** This becomes executable only after two clean fresh-clone rehearsals, a frozen commit/artifact set,
-an approved maintenance window and explicit go/no-go approval.
+Rehearsed end-to-end on clone 1 (`ep-dark-band-asjtba8q`) on 2026-09-21. Every step below passed there with the
+numbers shown. Each step is run by Claude **only after Michal says "go" for that step** in chat. Any number that
+differs from what is expected, or any blocker, means **STOP**: keep writes frozen and decide (rollback below).
 
-## Preferred strategy
+Operator: Claude (commands). Decision owner: Michal (freeze, GO/NO-GO, rollback). Expected freeze: ~30 minutes.
 
-Migrate the current live database during a short write freeze while retaining a verified Neon restore point. This
-avoids losing V1 writes made after an earlier clone and avoids changing the database connection URL. A final-branch
-switch is acceptable only if the branch is created after writes freeze and the switch/redeploy/rollback procedure was
-rehearsed exactly.
+## A. Before the window (can be done now)
 
-## Pre-window
+- [ ] Michal clicked through V2 on the migrated clone (`http://localhost:3200`, preview "zvoncek-migrated-clone").
+      Check the deals he knows: steps, "Klient dostal", "Chceli", history ("zo starého systému"), #628, #98, #404,
+      one návrh deal (#2365), the call queue for timea.
+- [ ] Code reviewed and committed on the branch. Michal approves commit + push + the PR into `main`. **Do not merge yet.**
+      Vercel production builds from `main`. Merging is the deploy.
+- [ ] Vercel: note the current production deployment. It is the V1 rollback target ("Instant Rollback").
+      V2 needs **no new environment variables** (only `DATABASE_URL`, `AUTH_SECRET`; Vercel sets `AUTH_TRUST_HOST`).
+- [ ] Telesales / scouts told: no work in Zvonček from HH:MM for ~30 minutes.
 
-- [ ] Record operator, verifier, decision owner and communication channel.
-- [ ] Record exact source deployment SHA, target SHA and artifact hashes.
-- [ ] Confirm no new code/schema/mapping change since rehearsal 2.
-- [ ] Confirm Neon restore retention, restore procedure and expected connection interruption.
-- [ ] Confirm Vercel deploy/rollback artifacts and environment values without printing secrets.
-- [ ] Announce maintenance/write freeze and expected duration.
-- [ ] Define hard abort time, maximum migration duration and who may declare rollback.
+## B. Freeze and restore point
 
-## Window sequence
+1. Everyone stops using Zvonček. Michal confirms nobody is working (and closes his own tabs).
+2. Neon → project → Branches → **Create branch** from `Production`, "current point in time", name
+   `pre-v2-restore-2026-09-21`. This is the restore point. It stays untouched.
+3. Neon → Production branch → **Connect** → *Connection pooling OFF* → copy the direct string. Replace the value
+   in `.env.migration` with it (same variable name). Tell Claude only the endpoint id (`ep-…-m0xyun`).
+   From here every command uses `--expect <that id> --production-window`. Below it is written as `$W`:
+   `node .ai/migrations/v1-to-v2-live/tools/with-target.mjs --expect <ep> --production-window --`.
 
-1. Keep V1 available only until the announced freeze begins.
-2. Freeze every CRM write path; ensure no old deployment or background process can still write.
-3. Wait for in-flight requests/transactions to finish and verify database write quietness.
-4. Create and verify the final pre-migration restore-point branch.
-5. Re-read production schema and inventory. Compare to rehearsal source hashes/counts; **abort on unexplained drift**.
-6. Run the same frozen sequence and artifacts as rehearsal:
-   - additive schema;
-   - routing team;
-   - Round 1 backfill;
-   - canonical send conversion and independent reconciliation;
-   - Wave 5 request backfill and reconciliation.
-7. Deploy the exact frozen V2 application. Do not reopen writes yet.
-8. Run the critical automated verifies and focused smoke tests from `07-verification.md`.
-9. Decision owner reviews the final summary and explicitly chooses GO or rollback.
-10. On GO, reopen writes deliberately and monitor first real actions.
+## C. Checks before writing (read-only)
 
-If D-006 is approved, P-01..P-03 are **not dropped in this initial window**. They remain unused/read-only until a
-separate stabilization and contraction release. If the decision changes, this runbook and rollback plan require new
-review and two new rehearsals.
+4. `ALLOW_PRODUCTION_READ=1 EXPECT_ENDPOINT=<ep> node .ai/migrations/v1-to-v2-live/inventory/<script>` for
+   `01-identity.mjs`, `02-schema.mjs`, `04-census.mjs`, `05-round1.mjs`, `06-sends.mjs` (read-only transactions).
+   **Expect:** schema identical to V1; drift from clone 1 only as listed in `03-inventory-plan.md` "Expected
+   drift" (new NEW leads, telesales first calls). **Any new send / price / design / reset / correction → STOP and
+   show Michal.**
 
-## First-hour monitoring
+## D. Migration (same artifacts as the rehearsal)
 
-- login and permission failures;
-- database/application errors and latency;
-- calls claim/handoff and one reversible test workflow;
-- pipeline scopes and counts;
-- `Pre mna`, manager waiting tasks and ownership history;
-- `Chceli` vs `Klient dostal` on migrated and newly changed deals;
-- new `OFFER_SENT` and request rows use live—not migrated—provenance;
-- no writes to frozen legacy columns.
+| # | Command (`$W` prefix) | Clone 1 result | Stop if |
+|---|---|---|---|
+| 5 | `npx prisma db execute --file .ai/migrations/v1-to-v2-live/sql/01-schema-v1-to-v2.sql` | "Script executed successfully" | any error |
+| 6 | `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` | "empty migration" | any statement |
+| 7 | `npx prisma db execute --file .ai/migrations/v1-to-v2-live/sql/02-obchod-team.sql` | success | error (a user missing) |
+| 8 | `npx tsx prisma/backfill/2026-09-assignments.ts --expect-endpoint <ep> --expect-db neondb --owner-username michal` | DEAL_TO_MIGRATE 116, CALLWORK_TO_MIGRATE 1282, POOL 334, TERMINAL_OK 1888, CONFLICT 0 | CONFLICT > 0, NEW_WITH_HISTORY > 0, OUTCOME_CORRECTED abort |
+| 9 | same + `--apply --confirm <ep>`, then same + `--verify` | COMMITTED; "RESULT: clean" | not clean |
+| 10 | `npx tsx prisma/backfill/2026-09-v1-sends.ts --expect-endpoint <ep>` | 88 sends / 86 leads, 0 blockers | any BLOCKER (Michal decides) |
+| 11 | same + `--apply --confirm <ep>`, then same + `--verify` | APPLIED 88; "RESULT: clean" | not clean |
+| 12 | `npx tsx prisma/backfill/2026-09-wave5-requests.ts --expect-endpoint <ep> --expect-db neondb` | receipts INFO 86 / PRICE 19 / DESIGN 12, openSteps DESIGN 11 / EMAIL 1, blocker 0 | blocker > 0 |
+| 13 | same + `--apply --confirm <ep>`, then same + `--verify` | created 129; "VERIFY OK" | not OK |
+| 14 | `npx tsx .ai/migrations/v1-to-v2-live/tools/post-check.ts` | "all post-migration invariants hold" | any FAIL |
 
-Record the production result in authoritative `context/domain/db-changes.md`: remove applied delta entries only after
-verification. Record application check results in `context/progress-tracker.md`. This dossier retains the process
-evidence and sanitized run summary.
+Numbers grow only by the expected drift (new deals from telesales add DEAL_TO_MIGRATE and OPEN "Chceli" rows).
+Duration on clone 1: well under 5 minutes of script time.
 
+## E. Deploy and reopen
+
+15. Merge the approved PR into `main` → Vercel builds V2 (≈2–3 min). Wait for "Ready".
+16. Smoke test on the live URL (Michal, logged in as himself): Pipeline opens on "Na spracovanie" (12 deals waiting
+    for návrh/email), #628 / #404 / #2365 detail, a call-queue page as timea is not possible → check
+    `/dashboard/calls/assignments` shows timea's 1 280 contacts; one harmless write (e.g. change a note) succeeds.
+17. **GO:** tell the team they can work. **NO-GO:** rollback below.
+18. After GO: `.env.migration` back to a non-production value (or delete it); keep `pre-v2-restore-2026-09-21` for at
+    least a week; record the run in `PROGRESS.md`; clear the applied rows in `context/domain/db-changes.md`.
+
+## F. Rollback (only before writes reopen, or with Michal's explicit decision after)
+
+- **Before step 5:** nothing changed. Unfreeze, V1 keeps running.
+- **After step 5, before step 15 (V1 still deployed):** Neon → Production → **Restore** to the timestamp of
+  `pre-v2-restore-2026-09-21` (or restore from that branch). V1 code is unchanged, so V1 works again. Unfreeze.
+- **After step 15:** Vercel → previous (V1) deployment → **Instant Rollback**, then the Neon restore as above.
+  Any work done in V2 after reopening would be lost by the restore, so decide before reopening writes.
+
+The obsolete columns `quoteSentAt`, `aboutUsSentAt`, `priceDisclosed` stay tonight (dead, unread). Dropping them is a
+separate later step (P-01..P-03).

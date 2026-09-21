@@ -27,7 +27,7 @@
 // a nikdy sa nepripíše dnešnému vlastníkovi. Migrované riadky sú vylúčené zo štatistík dopytu (origin <> LIVE).
 // SQL príkazy sú v wave5-requests-sql.ts, aby ich test spúšťal presne tie isté.
 //
-// Bezpečnosť ako pri 2026-09-offer-legacy.ts: DRY-RUN predvolený; --apply len na DIRECT hoste s --confirm <endpoint>;
+// Bezpečnosť ako pri ostatných backfilloch: DRY-RUN predvolený; --apply len na DIRECT hoste s --confirm <endpoint>;
 // --expect-endpoint a --expect-db sa musia zhodovať s DATABASE_URL; produkčný endpoint je odmietnutý NEZÁVISLE od
 // argumentov; URL ani heslo sa nevypisujú.
 //
@@ -132,8 +132,10 @@ async function main() {
     if (!connectionString) fail("DATABASE_URL nie je nastavené.");
     if (!args.expectEndpoint || !args.expectDb) fail("Povinné: --expect-endpoint a --expect-db.");
     const target = endpointOf(connectionString);
-    if (FORBIDDEN_ENDPOINT_SUFFIXES.some((s) => target.endpoint.endsWith(s))) {
-        fail("Cieľ je produkčný endpoint – tento skript sa na produkcii nespúšťa.");
+    // Produkcia len v schválenom okne V1 → V2: wrapper .ai/migrations/v1-to-v2-live/tools/with-target.mjs s
+    // --production-window nastaví ZVONCEK_PRODUCTION_WINDOW na presne tento endpoint. Inak odmietnuté ako doteraz.
+    if (FORBIDDEN_ENDPOINT_SUFFIXES.some((s) => target.endpoint.endsWith(s)) && process.env.ZVONCEK_PRODUCTION_WINDOW !== target.endpoint) {
+        fail("Cieľ je produkčný endpoint – mimo schváleného okna sa tu nespúšťa.");
     }
     if (target.endpoint !== args.expectEndpoint) fail("Endpoint nesedí (DATABASE_URL má iný endpoint než --expect-endpoint).");
     if (target.db !== args.expectDb) fail("Databáza nesedí (DATABASE_URL má inú databázu než --expect-db).");

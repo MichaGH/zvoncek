@@ -153,7 +153,6 @@ export default function TaskCard({
     caps,
     viewerId,
     resolvers,
-    onAsk,
     onCancel,
     onFinish,
     onTakeover,
@@ -163,7 +162,6 @@ export default function TaskCard({
     caps: DealCapabilities;
     viewerId: string;
     resolvers: Person[];
-    onAsk: (type: "HELP" | "HANDOVER") => void;
     onCancel: () => void;
     onFinish: (task: DealTaskView, send: boolean) => void;
     onTakeover: () => void;
@@ -191,7 +189,6 @@ export default function TaskCard({
     const isOpenDeal = lead.status === "ACTIVE" || lead.status === "SNOOZED";
     // Rozhoduje vlastník; na obchode bez vlastníka manažér (§5.2).
     const decides = isOpenDeal && caps.work && (isOwner || (lead.owner === null && caps.manage));
-    const canAsk = caps.askManager && isOwner && isOpenDeal && !open;
     const canWrite = caps.work && (isOwner || caps.manage);
     const reassignTargets = open ? resolvers.filter((r) => r.id !== open.assignee.id && r.id !== lead.owner?.id) : [];
     const sendable = lead.pending.some((i) => i.kind === "PRICE" || i.kind === "DESIGN");
@@ -204,7 +201,7 @@ export default function TaskCard({
           })
         : [];
 
-    if (!open && lead.pending.length === 0 && closed.length === 0 && !canAsk) return null;
+    if (!open && lead.pending.length === 0 && closed.length === 0) return null;
 
     function handle(r: { success: true } | ActionError, ok: string, onDone?: () => void) {
         if (!("error" in r)) {
@@ -324,18 +321,7 @@ export default function TaskCard({
                         <Hourglass className="mr-1 h-3 w-3" />
                         čaká na manažéra · {open.assignee.firstName}
                     </Badge>
-                ) : (
-                    canAsk && (
-                        <div className="flex flex-wrap gap-2">
-                            <Button size="sm" onClick={() => onAsk("HELP")}>
-                                Požiadať manažéra…
-                            </Button>
-                            <Button size="sm" variant="outline" onClick={() => onAsk("HANDOVER")}>
-                                Odovzdať manažérovi…
-                            </Button>
-                        </div>
-                    )
-                )}
+                ) : null}
             </CardHeader>
             <CardContent className="space-y-5 text-sm">
                 {open && (

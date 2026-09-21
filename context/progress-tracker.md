@@ -374,6 +374,32 @@ commit **`8478c7f`**, pushed to `origin`. The working branch `feature/wave5-work
 commit and continues from there. Earlier backups: `backup/wave5-ui-redesign-2026-09-21`,
 `backup/wave5-built-pre-ui-fix-2026-09-20`, `codex/pre-wave5-*`. Restore = `git switch` to the branch; nothing else.
 
+### Backup after the filter redesign, before the deal-detail restyle — 2026-09-21
+
+GitHub backup of the pipeline filter redesign (status on top, queues + steps under Aktívne, tests W4A-F-*): branch
+**`backup/wave4a-filters-pre-detail-restyle-2026-09-21`**, commit **`d582774`**, pushed to `origin` (not `main`). The working
+branch `feature/wave5-workflow-fix` was fast-forwarded onto it. Restore = `git switch` to the branch.
+
+### Wave 4 — deal detail (`/dashboard/pipeline/[id]`) restyled (2026-09-21, uncommitted, not checked in a browser)
+
+Layout (thick + thin column) unchanged; the thick column was tidied. UI only – no server, schema or command change.
+- **One action bar.** "Zaznamenať kontakt", "Zaznamenať odoslanie", "Požiadať manažéra…", "Odovzdať manažérovi…" are one row
+  of equal buttons under the "Ďalší krok · Naposledy" panels (before: split over three cards, "odoslanie" at the bottom of
+  Cena & ponuky). The ask buttons show under the same rule as before (owner, open deal, no open task).
+- **Cena & ponuky:** current price panel; "Chcú teraz" (only what still waits) next to "Klient dostal". The past ("Čo klient
+  pýtal", price changes) is a dropdown "História požiadaviek a ceny (n)". The second pencil at "Chceli" and its edit sheet were
+  **removed** – this was a mistake, see partA-R03 below (correcting what the client *asked for* is not correcting what they *received*).
+- **História** card is a collapsed dropdown with a count. "Úloha pre manažéra" card and the "Zmeniť krok" link are unchanged.
+- Files: `DealDetail.tsx`, `CenovaPonukaCard.tsx`, `TaskCard.tsx` (ask buttons moved out). tsc clean; lint only the known `MobileNav` error.
+
+### partA-R03 fixes — 2026-09-21 (test database only, nothing committed)
+
+Findings 2 and 4 are decided by Michal as **not bugs** (`partA-R03-response.md`). Fixed: #1 the pencil at "Chcú teraz" and its
+sheet (`setClientAsks`) are back; #3 `NO_STEP_VIEWS` now includes `got_*` / `unverified`, so entering them clears the step
+(test W4A-F-5; `w5Pencil` still covers add / withdraw / stale / manager); #5 the `dealFilters.ts` row of `operations.md`
+and the detail description in `app-workflow.md` are current. tsc clean, lint only the known error. Full 100-iteration run
+and the human phone + desktop click-through are still owed.
+
 ### Wave 4 — pipeline filters redesigned: status on top + two composable levels (2026-09-21, after partA-R02)
 
 Michal's rep workflow: call ~20 numbers in /calls → in the pipeline first finish what the calls promised (prices,
@@ -417,6 +443,48 @@ own deals and for their telesales' deals. **No schema, no server rule changed �
   after it, so both click-throughs are owed together.
 - `prisma/backfill/2026-09-wave4-parts.ts` and `wave4-parts-sql.ts` are historical: they cannot run after S-13b and
   refuse to. Keep them until the production rollout is done, then they can go.
+
+## V1 → V2 migration — "?" legacy layer removed, send converter, rehearsal on clone 1 (2026-09-21)
+
+Plan: `.ai/migrations/v1-to-v2-live/` (D-003 r2 answered by Michal; runbook `06-production-cutover.md`).
+
+- **Legacy layer removed:** `hadLegacySends`, `legacySendsReviewedAt`, `Design.legacySentAt` dropped from the schema and
+  from test (reviewed SQL: three `DROP COLUMN`, test-only, production never had them; `migrate diff` empty after).
+  Gone from code: `legacyUnreviewed`, the "?" knowledge state, the "Neoverené" view/pill/list ⚠, the review panel,
+  `confirmLegacyReviewed(As)`, design-date baselining, the legacy hint in the send dialog. "Doplniť starý záznam"
+  (historical send) stays as a manager tool on any deal. Converted sends count for "Odoslané: …" (`lastOfferOf`).
+- **Deleted scripts:** `2026-09-offer-legacy.ts`, `2026-09-offer-migrate.ts` (superseded; running either would be wrong).
+- **New:** `prisma/backfill/2026-09-v1-sends.ts` (converter), `.ai/migrations/v1-to-v2-live/tools/with-target.mjs`
+  (target wrapper, connection string never on a command line), `tools/post-check.ts`, `sql/01-schema-v1-to-v2.sql`
+  (offline diff origin/main → current, no DROP/retype), `sql/02-obchod-team.sql`. Wave 5 script accepts production
+  only with the window wrapper.
+- **Rehearsal on clone 1 (`ep-dark-band-asjtba8q`):** schema applied (diff empty) → team Obchod (michal + timea) →
+  Round 1 116 deals / 1 282 call work, verify clean → 88 `OFFER_SENT` on 86 deals, verify clean → 129 `LeadRequest`,
+  verify OK → post-check: all invariants hold (app `resolveRequests` agrees with every row).
+
+Checks (2026-09-21): `npx tsc --noEmit` clean · `npx eslint .` only the known MobileNav error · `npx next build` OK ·
+`check-client-sections.ts` / `check-business-time.ts` passed · `check-concurrency.ts --iterations 100` on test:
+**231/231** (re-run after fixing the one test that still expected the removed "Neoverené" view); new tests W3a-D (historical entry), MIG-1 (history hides V1 sources, migrated counts as sent), MIG-2
+(correction keeps provenance) passed. **Browser:** production build runs on the migrated clone at
+`localhost:3200`; Michal's click-through pending.
+
+## V1 → V2 migration prep — history shows each old send once (2026-09-21)
+
+Plan: `.ai/migrations/v1-to-v2-live/02-data-mapping.md` §2/§5 (D-003 r2, answered by Michal 2026-09-21).
+
+- `lib/domain/offers.ts`: `offerMetaSchema.migration` (fully typed provenance of a converted send; typed, not
+  passthrough, so a correction that rewrites meta keeps it) and `migratedSourceIds()`.
+- `lib/queries/pipeline/index.ts` (`getDealDetail`): the history list drops old rows listed in a migrated send's
+  `migration.sources`; `offer.migrated` is passed to the view. "Naposledy" still reads the old rows (real contacts).
+- `components/pipeline/DealDetail.tsx`: a migrated historical send is labelled "zo starého systému" instead of
+  "doplnené spätne".
+- Decision recorded in the migration spec: a converted send's `createdAt` = the original V1 time (sits in its real
+  place in the history); the migration time is `meta.migration.migratedAt`.
+
+Checks (2026-09-21): `npx tsc --noEmit` clean · `npx eslint` on the three touched files clean · `npx next build` OK ·
+`check-client-sections.ts` passed · `check-business-time.ts` passed · one-off `migratedSourceIds` assertion
+(scratchpad) passed. **Not run:** `check-concurrency.ts` (DB suite; no migrated rows exist on test, so the change is
+invisible there). **Browser:** not verifiable until the converter writes migrated rows on a rehearsal clone.
 
 ## Wave 5: what the client asked for vs. what they got (DONE on the test branch, 2026-09-20)
 

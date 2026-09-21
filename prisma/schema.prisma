@@ -117,13 +117,11 @@ model Lead {
   priceDisclosed Boolean  @default(false) // klient cenu pozná (ústne aj mailom)
 
   // ČO KLIENT DOSTAL (round 2, wave 3a) – súhrn platných OFFER_SENT aktivít, vždy prepočítaný (lib/domain/offers.ts).
-  // quoteSentAt / aboutUsSentAt / priceDisclosed vyššie sú odvtedy ZMRAZENÉ staré údaje – nový kód ich nezapisuje.
-  offerAboutUsAt        DateTime? // prvýkrát „o nás"
-  offerPricelistAt      DateTime? // prvýkrát cenník
-  offerPriceAt          DateTime? // naposledy konkrétna cena (email aj telefón)
-  offerReviewAt         DateTime? // prvýkrát rozbor webu (wave 5, S-17)
-  hadLegacySends        Boolean   @default(false) // mal odoslania ešte zo starého systému – nastaví jednorazový krok, potom sa nemení
-  legacySendsReviewedAt DateTime? // manažér potvrdil, čo klient zo starého systému naozaj dostal
+  // quoteSentAt / aboutUsSentAt / priceDisclosed vyššie sú staré údaje V1 – prevod ich zmenil na OFFER_SENT, kód ich nečíta ani nezapisuje.
+  offerAboutUsAt   DateTime? // prvýkrát „o nás"
+  offerPricelistAt DateTime? // prvýkrát cenník
+  offerPriceAt     DateTime? // naposledy konkrétna cena (email aj telefón)
+  offerReviewAt    DateTime? // prvýkrát rozbor webu (wave 5, S-17)
 
   lostReason String? // "nemajú záujem", "zlé číslo"
 
@@ -347,8 +345,7 @@ model Design {
   repoUrl        String? // GitHub repo – nech po vypnutí hostingu vieme, ktorý projekt to bol
   isLive         Boolean   @default(true) // ručný príznak: beží stránka? (pri vytvorení predpokladáme áno)
   currentVersion Int       @default(1)
-  sentAt         DateTime? // kedy bol návrh prvýkrát poslaný: prepočítané z OFFER_SENT, inak legacySentAt
-  legacySentAt   DateTime? // dátum odoslania zo starého systému – skopírovaný jednorazovým krokom, potom sa nemení
+  sentAt         DateTime? // kedy bol návrh prvýkrát poslaný: prepočítané z platných OFFER_SENT
   createdById    String?
   deletedAt      DateTime? // soft delete
 

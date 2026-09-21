@@ -25,6 +25,20 @@ the repository's `7beb689` production baseline. This does **not** prove the actu
    read-only transaction and the tool contains no write path.
 6. Do not connect a public V2 deployment to the clone until external side effects and access are controlled.
 
+## Exactly how Michal hands over the clone (agreed 2026-09-21)
+
+1. Neon console → project with ZVONCEK LIVE → Branches → *Create branch* from the live branch, "current point in
+   time", name `v2-migration-rehearsal-YYYY-MM-DD-N`. Do **not** reset or touch the live branch.
+2. Optional but preferred: in that branch create a role with read-only rights (`GRANT pg_read_all_data`) for Phase 1.
+3. Copy the **direct** (not `-pooler`) connection string of the new branch.
+4. Create `C:\000_DEV\0_ZVONCEK\zvoncek\.env.migration` (ignored by git via `.env*`) containing one line:
+   `MIGRATION_REHEARSAL_DATABASE_URL="postgresql://…"`. Do not paste it into chat and do not change `.env`.
+5. Tell Claude the branch name and the endpoint suffix only (e.g. `…ab12cd`), plus the Vercel production commit SHA.
+
+No schema dump or export is needed from Michal: the V1 schema in Git is known (`origin/main`), and the inventory tool
+reads the clone's real schema from `pg_catalog` / `information_schema` itself (read-only transaction), then diffs it
+against `origin/main:prisma/schema.prisma`.
+
 ## Data handling
 
 - Do not paste full live rows into an AI chat.

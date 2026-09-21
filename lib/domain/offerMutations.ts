@@ -25,8 +25,8 @@ import { businessDayStart } from "@/lib/domain/businessTime";
 // Telá zápisov „čo klient dostal" (round 2 §2c). Volajú ich príkazy pod zámkom Lead riadku; revízia sa zvýši raz.
 // Pravidlo: súhrnné stĺpce sa NIKDY nezapisujú ručne – vždy recomputeOffers() z platných OFFER_SENT záznamov.
 
-// Prepočet Lead.offer* + Design.sentAt z platných záznamov. Design.sentAt = PRVÉ odoslanie: skorší z najskoršieho
-// platného záznamu a starého údaja (Design.legacySentAt) – nové odoslanie staršie datovanie neprepíše.
+// Prepočet Lead.offer* + Design.sentAt z platných záznamov. Design.sentAt = PRVÉ platné odoslanie toho návrhu
+// (staré odoslania V1 sú od prevodu tiež OFFER_SENT záznamy).
 export async function recomputeOffers(tx: Tx, leadId: string) {
     const activities = await tx.activity.findMany({
         where: { leadId, type: "OFFER_SENT" },
@@ -41,12 +41,11 @@ export async function recomputeOffers(tx: Tx, leadId: string) {
 
     const designs = await tx.design.findMany({
         where: { leadId },
-        select: { id: true, sentAt: true, legacySentAt: true, deletedAt: true },
+        select: { id: true, sentAt: true, deletedAt: true },
     });
     let latestDesign: Date | null = null;
     for (const d of designs) {
-        const fresh = summary.designFirstSent.get(d.id) ?? null;
-        const next = fresh && d.legacySentAt ? (fresh < d.legacySentAt ? fresh : d.legacySentAt) : (fresh ?? d.legacySentAt);
+        const next = summary.designFirstSent.get(d.id) ?? null;
         if ((next?.getTime() ?? null) !== (d.sentAt?.getTime() ?? null)) {
             await tx.design.update({ where: { id: d.id }, data: { sentAt: next } });
         }
@@ -74,21 +73,6 @@ export async function recomputeOffers(tx: Tx, leadId: string) {
         ...(designSentAt !== undefined ? { designSentAt } : {}),
     });
     return summary;
-}
-
-// Návrh, ktorý starý kód označil ako poslaný a nový systém ho ešte nikdy nezapísal, si pred prvým novým odoslaním
-// uloží starý dátum do legacySentAt – inak by ho prepočet prepísal (okno medzi jednorazovým krokom a nasadením).
-async function baselineOldDesignDates(tx: Tx, leadId: string, designIds: string[]) {
-    const candidates = await tx.design.findMany({
-        where: { id: { in: designIds }, sentAt: { not: null }, legacySentAt: null },
-        select: { id: true, sentAt: true },
-    });
-    for (const d of candidates) {
-        const seen = await tx.activity.count({
-            where: { leadId, type: "OFFER_SENT", meta: { path: ["designs"], array_contains: [{ id: d.id }] } },
-        });
-        if (seen === 0) await tx.design.update({ where: { id: d.id }, data: { legacySentAt: d.sentAt } });
-    }
 }
 
 export type RecordOfferInput = {
@@ -195,7 +179,6 @@ export async function recordOffer(
         });
         if (found.length !== ids.length) throw new AccessError("NOT_FOUND", "Návrh sa nenašiel.");
         designs = found.map((d) => ({ id: d.id, label: d.label, url: d.targetUrl, version: d.currentVersion }));
-        await baselineOldDesignDates(tx, lead.id, ids);
     }
 
     const fulfils = input.fulfils ?? [];

@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Check, Copy, Lock, Pencil, Phone, PhoneCall, Send, UserCheck, XCircle } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, Copy, Handshake, Lock, Pencil, Phone, PhoneCall, Send, UserCheck, XCircle } from "lucide-react";
 import { LeadStatus, ProjectType } from "@/app/generated/prisma/enums";
 import { DashboardContent, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import AskManagerDialog from "@/components/pipeline/AskManagerDialog";
@@ -116,6 +116,7 @@ export default function DealDetail({
     const [savingData, setSavingData] = useState(false);
     const [busy, setBusy] = useState(false);
     const [showAllHistory, setShowAllHistory] = useState(caps.manage);
+    const [historyOpen, setHistoryOpen] = useState(false);
     const [lostReason, setLostReason] = useState(lead.lostReason ?? "");
     const [savingLost, setSavingLost] = useState(false);
     // Akčné okno: „contact" = Zaznamenať kontakt, „replan" = Zmeniť krok (rovno obrazovka ďalšieho kroku),
@@ -154,6 +155,8 @@ export default function DealDetail({
     const openTask = lead.tasks.find((t) => t.status === "OPEN") ?? null;
     const isOwner = lead.owner?.id === viewerId;
     // Zamknutý krok mení len vlastník – zrušením úlohy (D5); manažér na cudzom obchode úlohu vybaví alebo prevezme klienta.
+    // Požiadať / odovzdať manažérovi – tlačidlá sú v akčnom paneli hore (rovnaké pravidlo ako predtým v TaskCard).
+    const canAsk = caps.askManager && isOwner && (lead.status === "ACTIVE" || lead.status === "SNOOZED") && !openTask;
     const canReplan = editable && (!openTask || isOwner);
     const phoneHref = lead.phone ? `tel:${lead.phone.replace(/\s/g, "")}` : null;
 
@@ -424,102 +427,123 @@ export default function DealDetail({
                 <div className="grid items-start gap-6 lg:grid-cols-3">
                     {/* HLAVNÝ STĹPEC — priebeh obchodu */}
                     <div className="order-2 space-y-6 lg:order-none lg:col-span-2">
+                        {/* Ďalší krok · Naposledy + všetky akcie na jednom mieste (wave 4 – prehľad detailu):
+                            jeden rad rovnakých tlačidiel, nie tlačidlá rozhádzané po kartách. */}
+                        <Card>
+                            <CardContent className="space-y-4">
+                                <div className="grid gap-3 sm:grid-cols-5">
+                                    <div className="space-y-1.5 rounded-xl bg-muted/40 p-4 text-sm sm:col-span-3">
+                                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Ďalší krok</p>
+                                        {lead.nextActionKind ? (
+                                            <>
+                                                {/* Wave 5 (§3.7): nadpis vymenuje všetko, čo treba poslať; uložený druh kroku
+                                                    ostáva jedna kategória pre filtre a „Na dnes". */}
+                                                <p className="flex items-center gap-1.5 text-base font-medium">
+                                                    {openTask && <Lock className="h-3.5 w-3.5 text-amber-600" />}
+                                                    {lead.stepHeadline ?? NEXT_ACTION_LABEL[lead.nextActionKind]}
+                                                </p>
+                                                {openTask ? (
+                                                    <p className="text-xs text-amber-700 dark:text-amber-400">⏳ čaká na {openTask.assignee.firstName}</p>
+                                                ) : (
+                                                    <UrgencyLabel at={lead.nextActionAt} hasTime={lead.nextActionHasTime} mode={lead.nextActionMode} />
+                                                )}
+                                                {lead.nextActionNote && (
+                                                    <p className="whitespace-pre-wrap text-muted-foreground">{lead.nextActionNote}</p>
+                                                )}
+                                            </>
+                                        ) : (
+                                            <p className="text-muted-foreground">Bez ďalšieho kroku.</p>
+                                        )}
+                                        {lead.askWarning && (
+                                            <p className="flex items-start gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                                                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                                {lead.askWarning}
+                                            </p>
+                                        )}
+                                        <OutstandingChecklist rows={lead.outstandingRows} maker={openTask?.assignee.firstName ?? null} />
+                                        {lead.pendingText && (
+                                            <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">{lead.pendingText}</p>
+                                        )}
+                                        {canReplan && (
+                                            <Button size="sm" variant="ghost" className="-ml-2 h-7 text-muted-foreground" onClick={() => setInteraction(openTask ? "cancel" : "replan")}>
+                                                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                                                {openTask ? "Zmeniť krok (zruší úlohu)" : "Zmeniť krok"}
+                                            </Button>
+                                        )}
+                                    </div>
+                                    <div className="space-y-1.5 rounded-xl bg-muted/40 p-4 text-sm sm:col-span-2">
+                                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Naposledy</p>
+                                        {lead.lastTouch ? (
+                                            <>
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span className="font-medium">{ACTIVITY_LABEL[lead.lastTouch.type]}</span>
+                                                    {lead.lastTouch.outcome && (
+                                                        <span className="text-xs text-muted-foreground">{OUTCOME_LABEL[lead.lastTouch.outcome]}</span>
+                                                    )}
+                                                    {lead.noAnswerStreak > 1 && (
+                                                        <Badge variant="outline" className="font-normal">
+                                                            {lead.noAnswerStreak}. pokus
+                                                        </Badge>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs text-muted-foreground tabular-nums">{formatDateTime(lead.lastTouch.at)}</p>
+                                                {lead.lastTouch.note && (
+                                                    <p className="whitespace-pre-wrap text-muted-foreground">{lead.lastTouch.note}</p>
+                                                )}
+                                            </>
+                                        ) : (
+                                            <p className="text-muted-foreground">Zatiaľ žiadny kontakt.</p>
+                                        )}
+                                        {/* Čo sme poslali naposledy ostáva viditeľné aj po ďalšom hovore (round 2 §2d). */}
+                                        {lead.lastOffer && lead.lastTouch?.type !== "OFFER_SENT" && (
+                                            <p className="border-t pt-1.5 text-xs text-muted-foreground">
+                                                Odoslané: <span className="text-foreground">{lead.lastOffer.text}</span> · {formatDate(lead.lastOffer.at)}
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {(editable || canAsk) && (
+                                    <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-2">
+                                        {editable && (
+                                            <Button className="h-10" onClick={() => setInteraction("contact")}>
+                                                <PhoneCall className="mr-1.5 h-4 w-4" />
+                                                Zaznamenať kontakt
+                                            </Button>
+                                        )}
+                                        {editable && (
+                                            <Button className="h-10" variant="outline" onClick={() => setOfferDialog({ historical: false })}>
+                                                <Send className="mr-1.5 h-4 w-4" />
+                                                Zaznamenať odoslanie
+                                            </Button>
+                                        )}
+                                        {canAsk && (
+                                            <Button className="h-10" variant="outline" onClick={() => setAsk("HELP")}>
+                                                <Handshake className="mr-1.5 h-4 w-4" />
+                                                Požiadať manažéra…
+                                            </Button>
+                                        )}
+                                        {canAsk && (
+                                            <Button className="h-10" variant="outline" onClick={() => setAsk("HANDOVER")}>
+                                                <UserCheck className="mr-1.5 h-4 w-4" />
+                                                Odovzdať manažérovi…
+                                            </Button>
+                                        )}
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+
                         <TaskCard
                             lead={lead}
                             caps={caps}
                             viewerId={viewerId}
                             resolvers={resolvers}
-                            onAsk={(type) => setAsk(type)}
                             onCancel={() => setInteraction("cancel")}
                             onFinish={(task, send) => setFinish({ task, send })}
                             onTakeover={() => setTakingOver(true)}
                             onSend={editable ? () => setOfferDialog({ historical: false }) : undefined}
                         />
-
-                        {/* Ďalší krok · Naposledy – jedna karta, jedno tlačidlo na záznam kontaktu (round 2 §2d) */}
-                        <Card>
-                            <CardHeader className="flex items-center justify-between">
-                                <CardTitle className="text-base">Ďalší krok · Naposledy</CardTitle>
-                                {editable && (
-                                    <Button size="sm" onClick={() => setInteraction("contact")}>
-                                        <PhoneCall className="mr-1.5 h-3.5 w-3.5" />
-                                        Zaznamenať kontakt
-                                    </Button>
-                                )}
-                            </CardHeader>
-                            <CardContent className="grid gap-3 sm:grid-cols-2">
-                                <div className="space-y-1.5 rounded-lg border p-3 text-sm">
-                                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Ďalší krok</p>
-                                    {lead.nextActionKind ? (
-                                        <>
-                                            {/* Wave 5 (§3.7): nadpis vymenuje všetko, čo treba poslať; uložený druh kroku
-                                                ostáva jedna kategória pre filtre a „Na dnes". */}
-                                            <p className="flex items-center gap-1.5 font-medium">
-                                                {openTask && <Lock className="h-3.5 w-3.5 text-amber-600" />}
-                                                {lead.stepHeadline ?? NEXT_ACTION_LABEL[lead.nextActionKind]}
-                                            </p>
-                                            {openTask ? (
-                                                <p className="text-xs text-amber-700 dark:text-amber-400">⏳ čaká na {openTask.assignee.firstName}</p>
-                                            ) : (
-                                                <UrgencyLabel at={lead.nextActionAt} hasTime={lead.nextActionHasTime} mode={lead.nextActionMode} />
-                                            )}
-                                            {lead.nextActionNote && (
-                                                <p className="whitespace-pre-wrap text-muted-foreground">{lead.nextActionNote}</p>
-                                            )}
-                                        </>
-                                    ) : (
-                                        <p className="text-muted-foreground">Bez ďalšieho kroku.</p>
-                                    )}
-                                    {lead.askWarning && (
-                                        <p className="flex items-start gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-                                            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                                            {lead.askWarning}
-                                        </p>
-                                    )}
-                                    <OutstandingChecklist rows={lead.outstandingRows} maker={openTask?.assignee.firstName ?? null} />
-                                    {lead.pendingText && (
-                                        <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">{lead.pendingText}</p>
-                                    )}
-                                    {canReplan && (
-                                        <Button size="sm" variant="ghost" className="-ml-2 h-7" onClick={() => setInteraction(openTask ? "cancel" : "replan")}>
-                                            <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                                            {openTask ? "Zmeniť krok (zruší úlohu)" : "Zmeniť krok"}
-                                        </Button>
-                                    )}
-                                </div>
-                                <div className="space-y-1.5 rounded-lg border p-3 text-sm">
-                                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Naposledy</p>
-                                    {lead.lastTouch ? (
-                                        <>
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <span className="font-medium">{ACTIVITY_LABEL[lead.lastTouch.type]}</span>
-                                                {lead.lastTouch.outcome && (
-                                                    <span className="text-xs text-muted-foreground">{OUTCOME_LABEL[lead.lastTouch.outcome]}</span>
-                                                )}
-                                                {lead.noAnswerStreak > 1 && (
-                                                    <Badge variant="outline" className="font-normal">
-                                                        {lead.noAnswerStreak}. pokus
-                                                    </Badge>
-                                                )}
-                                            </div>
-                                            <p className="text-xs text-muted-foreground tabular-nums">{formatDateTime(lead.lastTouch.at)}</p>
-                                            {lead.lastTouch.note && (
-                                                <p className="whitespace-pre-wrap text-muted-foreground">{lead.lastTouch.note}</p>
-                                            )}
-                                        </>
-                                    ) : (
-                                        <p className="text-muted-foreground">Zatiaľ žiadny kontakt.</p>
-                                    )}
-                                    {/* Čo sme poslali naposledy ostáva viditeľné aj po ďalšom hovore (round 2 §2d). */}
-                                    {lead.lastOffer && lead.lastTouch?.type !== "OFFER_SENT" && (
-                                        <p className="border-t pt-1.5 text-xs text-muted-foreground">
-                                            Odoslané: <span className="text-foreground">{lead.lastOffer.text}</span> ·{" "}
-                                            {formatDate(lead.lastOffer.at)}
-                                        </p>
-                                    )}
-                                </div>
-                            </CardContent>
-                        </Card>
 
                         {/* Cena */}
                         <CenovaPonukaCard
@@ -535,7 +559,6 @@ export default function DealDetail({
                             mode={api.quoteMode}
                             readOnly={!editable}
                             isManager={caps.manage}
-                            onRecord={() => setOfferDialog({ historical: false })}
                             onHistorical={() => setOfferDialog({ historical: true })}
                         />
 
@@ -672,16 +695,25 @@ export default function DealDetail({
 
                         {/* História */}
                         <Card>
-                            <CardHeader className="flex items-center justify-between">
-                                <CardTitle className="text-base">História</CardTitle>
-                                {caps.manage && (
+                            <CardHeader className="flex items-center justify-between gap-3">
+                                <button
+                                    type="button"
+                                    aria-expanded={historyOpen}
+                                    onClick={() => setHistoryOpen((o) => !o)}
+                                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                >
+                                    <CardTitle className="text-base">História</CardTitle>
+                                    <span className="text-xs text-muted-foreground">({visibleActivities.length})</span>
+                                    <ChevronDown className={`ml-auto h-4 w-4 text-muted-foreground transition-transform${historyOpen ? " rotate-180" : ""}`} />
+                                </button>
+                                {historyOpen && caps.manage && (
                                     <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                                         <Checkbox checked={showAllHistory} onCheckedChange={(value) => setShowAllHistory(value === true)} />
                                         Zobraziť celú históriu
                                     </label>
                                 )}
                             </CardHeader>
-                            <CardContent>
+                            {historyOpen && <CardContent>
                                 {visibleActivities.length === 0 ? (
                                     <p className="text-sm text-muted-foreground">Zatiaľ žiadny obchodný krok.</p>
                                 ) : (
@@ -696,7 +728,7 @@ export default function DealDetail({
                                                         </span>
                                                         {activity.offer?.historical && (
                                                             <Badge variant="outline" className="font-normal">
-                                                                doplnené spätne
+                                                                {activity.offer.migrated ? "zo starého systému" : "doplnené spätne"}
                                                             </Badge>
                                                         )}
                                                         {caps.manage && (
@@ -769,7 +801,7 @@ export default function DealDetail({
                                     </div>
                                 )}
                                 <p className="mt-3 text-xs text-muted-foreground">Pridaný {formatDate(lead.createdAt)}</p>
-                            </CardContent>
+                            </CardContent>}
                         </Card>
                     </div>
 

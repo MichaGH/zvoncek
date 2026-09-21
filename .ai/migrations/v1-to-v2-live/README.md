@@ -19,19 +19,22 @@ test-production database delta:
 - V2 reviews are still in progress; no deploy commit is frozen.
 - The repository has the V1 `origin/main` Prisma schema at commit
   `8e8b1836bc91a67587783cf1443cd26c68a74f58`. It has the same Prisma schema as the recorded baseline `7beb689`.
-- The actual live database schema has not been measured; the Git baseline remains an assumption.
-- No fresh production duplicate has been created or inspected for this rollout.
-- No live-data inventory or exception classification exists.
+- Clone 1 (`ep-dark-band-asjtba8q`, 2026-09-21) inventoried read-only: schema equals V1 `origin/main`; data classified
+  (`INVENTORY-2026-09-21.md`).
 - `prisma/backfill/2026-09-offer-migrate.ts` is an unsafe prototype and must not be applied to production or a
   production duplicate.
-- Michal proposed a broader migration-only rule on 2026-09-21: old price evidence, old about-us email, and old sent
-  proposal evidence imply an exact-price receipt. It is recorded as a **draft decision** in `DECISIONS.md`; its missing
-  amount/date cases are unresolved and it has not yet been promoted to authoritative context.
+- Michal refined the migration-only send rule on 2026-09-21 (D-003 revision 2): old "Email o nás" → Info;
+  old CP → Info + Cena; old návrh → Info + Cena + Návrh; Cena only with an amount; no cenník. Open questions Q1–Q9 in
+  `DECISIONS.md`; exact spec in `02-data-mapping.md`; readable summary in `CHANGES-OVERVIEW.md`. Not yet promoted to
+  authoritative context.
 
 ## Folder map
 
 | File | Purpose |
 |---|---|
+| `INVENTORY-2026-09-21.md` | Sanitized results of the read-only inventory of clone 1 |
+| `inventory/` | Read-only inventory scripts (`EXPECT_ENDPOINT=ep-… node inventory/04-census.mjs`) |
+| `CHANGES-OVERVIEW.md` | Human-readable V1 → V2 table/column/meaning changes, for Michal's review |
 | `PROGRESS.md` | One current status board, gates, owners and evidence links |
 | `DECISIONS.md` | Proposed, approved, superseded and rejected migration decisions |
 | `01-inputs-and-access.md` | Everything required before reading the production duplicate |

@@ -36,9 +36,7 @@ One row per contact, and the same row later as a deal. **Never renamed.** Soft-d
 | `callbackKind?`, `callbackAt?`, `callbackHasTime`, `callbackNote?` | **call phase only** — why this is in a caller's queue |
 | `offerAboutUsAt?`, `offerPricelistAt?`, `offerPriceAt?`, `offerReviewAt?` | **what the client received**: first "about us", first cenník, **last** calculated price (email or phone), first rozbor webu. A summary of the valid `OFFER_SENT` activities, always recomputed by `recomputeOffers` — never written directly |
 | `designSentAt?` | latest sent date among the lead's designs; recomputed with the above, also when a design is deleted. A lead without any `Design` row keeps its old value, and the screens show that value as "návrh sent" — until a send with `untrackedDesign` is recorded for it; from then on the column is the **latest valid date across the non-deleted tracked designs and the untracked sends** (a deleted or later-created `Design` never suppresses a valid untracked send; crossing out the last one clears it). The "Dostali návrh" filter reads the same column |
-| `hadLegacySends` | `true` = the lead had sends under the old system (set once by `prisma/backfill/2026-09-offer-legacy.ts`, never changed after). Default `false` for every new lead |
-| `legacySendsReviewedAt?` | the manager confirmed what such a lead really received; until then empty contents show as "?" |
-| `quoteSentAt?`, `aboutUsSentAt?`, `priceDisclosed` | **frozen legacy**: "CP marked sent" (possibly without a price), "email o nás marked sent", "client knows a price". No code writes them any more; they are only shown as what the old record claimed, never as "yes" |
+| `quoteSentAt?`, `aboutUsSentAt?`, `priceDisclosed` | **dead V1 columns**: "CP marked sent", "email o nás marked sent", "client knows a price". No code reads or writes them; the one-time V1 → V2 conversion (`prisma/backfill/2026-09-v1-sends.ts`) turned the old sends into `OFFER_SENT` rows with `meta.migrated`. They are dropped in a separate later step (`db-changes.md` §3.3, P-01..P-03) |
 | `designUrl?` | legacy column; the current app does not read or write it. Keep it until a separately reviewed migration |
 | `price?` (`Decimal(10,2)`), `priceNote?` | the **current** quoted total and its hand-written breakdown; what the client actually received is the snapshot in `OFFER_SENT` |
 | `lostReason?` | why it ended |
@@ -145,7 +143,11 @@ client knows); "bez kontaktu" = no contact row, only the planning row. `QUOTE_SE
 `{ channel: "EMAIL" | "PHONE", contents: ["ABOUT_US" | "PRICELIST" | "PRICE" | "DESIGN" | "REVIEW"…], price?: { amount: "1285.00"
 (decimal string), note }, designs?: [{ id, label, url, version }], via? ("SMS" = price given in our SMS, channel PHONE), untrackedDesign? (true = a návrh sent with no `Design` row; never together with `designs`), sentOn: "YYYY-MM-DD", historical: bool,
 callActivityId? (phone price → the CALL it belongs to), fulfils?: [{ taskId, kind: "PRICE" | "DESIGN", designId? }],
-fp?, correction? }`. `createdAt` = when it was recorded, `sentOn` = when the client got it. `historical: true` = a
+fp?, correction?, migrated?, migration?: { key, rule, sources: [old Activity ids], designIds?, originalAt, amountSource?,
+migratedAt } }`. `createdAt` = when it was recorded, `sentOn` = when the client got it. `migrated: true` = converted from
+the old system by the one-time V1 → V2 migration (none exist on test yet); the deal history hides the old
+`QUOTE_SENT` / `EMAIL_SENT` / `DESIGN_SENT` rows listed in its `migration.sources` (`migratedSourceIds`) and labels the
+row "zo starého systému". `historical: true` = a
 legacy send entered later by the manager (no next step, never fulfils a task item). `fulfils` = the returned task
 items this send used (wave 3): at most one price, each návrh at most once, only items still pending. Order of sends: `sentOn`, then a historical entry before a normal one on the same day, then `createdAt`; the
 latest price is what the client knows (`lib/domain/offers.ts`).
@@ -312,10 +314,10 @@ reads or writes this table**: public signup is disabled and accounts are created
 
 ## Design tracking
 
-**Design** (per lead, cascade): `label?`, `targetUrl?`, `repoUrl?`, `isLive`, `currentVersion`, `sentAt?`, `legacySentAt?`,
+**Design** (per lead, cascade): `label?`, `targetUrl?`, `repoUrl?`, `isLive`, `currentVersion`, `sentAt?`,
 `createdById?`, `deletedAt?` (soft delete). Indexes: `leadId`, `deletedAt`. `sentAt` = when this design was **first**
-sent: recomputed as the earlier of the first valid `OFFER_SENT` containing it and `legacySentAt`. `legacySentAt` = the
-sent date under the old system, copied once by `prisma/backfill/2026-09-offer-legacy.ts` and never changed.
+sent: recomputed from the first valid `OFFER_SENT` containing it (old V1 sends are `OFFER_SENT` rows since the
+conversion).
 
 **DesignVersion**: `(designId, version)` unique, `url?`, `note?`, `markedAt`, `createdById?`.
 

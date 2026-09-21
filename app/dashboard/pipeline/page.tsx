@@ -127,7 +127,6 @@ export default async function DealsPage({
                         showOwner={caps.seeOthers}
                         showInbox={caps.resolver}
                         showWaiting={caps.work}
-                        showLegacy={caps.manage}
                     />
                 </div>
             </DashboardPageHeader>

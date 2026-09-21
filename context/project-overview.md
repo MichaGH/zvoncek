@@ -129,9 +129,8 @@ design sent is part of "Čo sme poslali" (`recordOfferSentAs`), open to the deal
 product truth. For a redesign: first calls = `Activity.source CALL_QUEUE`; deal follow-ups = `CLIENTS` (owner without
 `deals.manage`) or `PIPELINE` (manager) — the source follows the actor, not the screen; exclude reverted / crossed-out
 activities (`revertedAt`). Calls are `CALL` only — written replies (`CLIENT_REPLIED`), SMS and "bez kontaktu" are not
-calls. The cenník-vs-price experiment groups each deal by its **first verified offer email** and excludes
-`hadLegacySends` deals and historical entries in the **current test implementation**. **[ROLLOUT]** After the chosen
-old-send conversion, exclude migrated deals by `meta.migrated` instead; see `context/domain/db-changes.md` §3.3.
+calls. The cenník-vs-price experiment groups each deal by its **first verified offer email** and excludes deals with
+converted V1 sends (`OFFER_SENT.meta.migrated`) and historical entries.
 
 ## 8. Environments
 

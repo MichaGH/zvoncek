@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, BookOpen, Euro, Info, Lock, MessageSquare, Paintbrush, Phone } from "lucide-react";
+import { BookOpen, Euro, Info, Lock, MessageSquare, Paintbrush, Phone } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -72,9 +72,9 @@ function TaskLine({ row, dense, inbox }: { row: DealRow; dense?: boolean; inbox?
     );
 }
 
-// Čo klient už dostal (round 2 §2c) – z nových záznamov; ⚠ = starý obchod, ktorého odoslania ešte nikto neoveril.
+// Čo klient už dostal (round 2 §2c) – z OFFER_SENT záznamov (aj prevedených zo starého systému).
 function SentIcons({ row }: { row: DealRow }) {
-    if (!row.hasDesignSent && !row.gotPrice && !row.gotPricelist && !row.legacyUnreviewed) return null;
+    if (!row.hasDesignSent && !row.gotPrice && !row.gotPricelist) return null;
     return (
         <div className="flex shrink-0 items-center gap-1">
             {row.gotPricelist && (
@@ -99,14 +99,6 @@ function SentIcons({ row }: { row: DealRow }) {
                         <Paintbrush className="h-3 w-3 text-muted-foreground" />
                     </TooltipTrigger>
                     <TooltipContent>Dostali návrh</TooltipContent>
-                </Tooltip>
-            )}
-            {row.legacyUnreviewed && (
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                        <AlertTriangle className="h-3 w-3 text-amber-600" />
-                    </TooltipTrigger>
-                    <TooltipContent>Staré záznamy – neoverené, čo klient dostal</TooltipContent>
                 </Tooltip>
             )}
         </div>

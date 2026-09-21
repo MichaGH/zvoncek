@@ -159,6 +159,3 @@ export async function correctRecord(leadId: string, activityId: string, reason: 
     return run(leadId, (u) => offers.correctRecordAs(u, activityId, reason));
 }
 
-export async function confirmLegacyReviewed(leadId: string) {
-    return run(leadId, (u) => offers.confirmLegacyReviewedAs(u, leadId));
-}

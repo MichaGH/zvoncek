@@ -28,7 +28,7 @@ export const DEFAULT_VIEW = AUTO_VIEW;
 export const DEFAULT_OWNER = "me"; // vždy najprv moja práca; prepnutie na iných rieši filter (v rámci rozsahu)
 export const NO_VIEW = "all";
 
-// Pilulky pohľadov. „work", „today", „waiting_manager", „inbox" a „unverified" platia naprieč stavmi (stavová záložka sa pri
+// Pilulky pohľadov. „work", „today", „waiting_manager" a „inbox" platia naprieč stavmi (stavová záložka sa pri
 // nich ignoruje). Každá pilulka má počet, ktorý počíta ten istý predikát ako jej zoznam (lib/queries/pipeline – wave 3 §7).
 // Žije tu (nie v queries), aby to mohli importovať klientske komponenty bez ťahania Prisma klienta.
 export const DEAL_VIEWS = [
@@ -49,8 +49,6 @@ export const DEAL_VIEWS = [
     { key: "got_pricelist", label: "Dostali cenník", group: "running" },
     { key: "got_price", label: "Dostali cenu", group: "running" },
     { key: "got_design", label: "Dostali návrh", group: "running" },
-    // Staré obchody, ktorých odoslania ešte manažér neoveril (zobrazuje sa len manažérovi).
-    { key: "unverified", label: "Neoverené", group: "legacy" },
 ] as const;
 
 export type DealViewKey = (typeof DEAL_VIEWS)[number]["key"];
@@ -66,11 +64,13 @@ export const DEAL_STEPS = [
 export type DealStepKey = (typeof DEAL_STEPS)[number]["key"];
 
 const VIEW_KEYS = new Set<string>(DEAL_VIEWS.map((v) => v.key));
-const CROSS_STATUS_VIEWS = new Set<string>(["work", "today", "unverified", "waiting_manager", "inbox"]);
+const CROSS_STATUS_VIEWS = new Set<string>(["work", "today", "waiting_manager", "inbox"]);
 // Druhy kroku – zamknutý obchod v nich nie je (je v „Čakám na manažéra", §5.3).
 export const STEP_KIND_VIEWS = new Set<string>(DEAL_STEPS.map((s) => s.key));
-// Rady, v ktorých druh kroku nedáva zmysel: zamknutý obchod nemá krok a schránka nie je výsek mojich obchodov.
-const NO_STEP_VIEWS = new Set<string>(["waiting_manager", "inbox"]);
+// Rady, v ktorých druh kroku nedáva zmysel: zamknutý obchod nemá krok, schránka nie je výsek mojich obchodov a pohľady
+// „Klient už dostal" nemajú riadok s krokmi – skrytý krok by ticho zúžil zoznam oproti zobrazenému počtu
+// (partA-R03 #3). Vstup do nich krok vždy zruší, aj z ručne napísanej adresy.
+const NO_STEP_VIEWS = new Set<string>(["waiting_manager", "inbox", "got_pricelist", "got_price", "got_design"]);
 
 export function isDealView(value: string | undefined): value is DealViewKey {
     return Boolean(value && VIEW_KEYS.has(value));

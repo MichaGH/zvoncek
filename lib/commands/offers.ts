@@ -1,12 +1,10 @@
 import { z } from "zod";
 import { AccessError, FORBIDDEN, isUniqueViolation, toActionError, type ActionError } from "@/lib/access/errors";
-import { requireDealManage, requireDealWork } from "@/lib/access/leads";
+import { requireDealWork } from "@/lib/access/leads";
 import { withLockTx } from "@/lib/access/locks";
 import type { AccessUser } from "@/lib/access/user";
-import { createAuditActivity } from "@/lib/activityLog";
 import { sourceFor } from "@/lib/commands/dealWork";
 import { businessDate, isValidBusinessDate } from "@/lib/domain/businessTime";
-import { updateLead } from "@/lib/domain/dealMutations";
 import { activityReplay } from "@/lib/domain/idempotency";
 import { CORRECTABLE_TYPES, correctRecord, recordOffer } from "@/lib/domain/offerMutations";
 import { isValidSentOn, OFFER_CONTENTS, offerFingerprint, offerFingerprintOfMeta } from "@/lib/domain/offers";
@@ -103,10 +101,6 @@ export async function recordOfferSentAs(user: AccessUser, raw: RecordOfferSentIn
                 expectedRevision: input.expectedRevision,
                 closedPolicy: can(user, "deals.manage") ? "allow" : "reject",
             });
-            // Spätný záznam patrí len k starým obchodom, kým ich manažér nepotvrdí.
-            if (input.historical && (!lead.hadLegacySends || lead.legacySendsReviewedAt)) {
-                throw new AccessError("FORBIDDEN", "Spätný záznam je len pre neoverené staré obchody.");
-            }
             const source = sourceFor(user);
             // Zamknutý krok (§5.1): odoslanie je len fakt, pokiaľ sa v tom istom uložení úloha neruší. Odoslanie toho,
             // na čom manažér práve robí, bez voľby neprejde (W3-R2-05); „už to netreba" ruší len vlastník.
@@ -209,30 +203,5 @@ export async function correctRecordAs(user: AccessUser, activityId: string, reas
         return { success: true };
     } catch (error) {
         return toActionError(error, "Nepodarilo sa opraviť.", "correctRecord");
-    }
-}
-
-// Manažér potvrdí, že staré záznamy obchodu sú doplnené – odvtedy prázdne znamená „nie", nie „?".
-export async function confirmLegacyReviewedAs(user: AccessUser, leadId: string): Promise<Result> {
-    if (!can(user, "deals.manage")) return FORBIDDEN;
-    try {
-        await withLockTx(async (tx) => {
-            const { lead, actor } = await requireDealManage(tx, user, leadId);
-            if (!lead.hadLegacySends) throw new AccessError("FORBIDDEN", "Obchod nemá staré záznamy.");
-            if (lead.legacySendsReviewedAt) throw new AccessError("STALE", "Už potvrdené.");
-            await updateLead(tx, lead.id, { legacySendsReviewedAt: new Date() });
-            await tx.activity.create({
-                data: createAuditActivity({
-                    leadId: lead.id,
-                    userId: actor.id,
-                    type: "CONTACT_UPDATED",
-                    source: "PIPELINE",
-                    note: "Staré záznamy o odoslaní overené – doplnené je všetko, čo klient dostal",
-                }),
-            });
-        });
-        return { success: true };
-    } catch (error) {
-        return toActionError(error, "Nepodarilo sa uložiť.", "confirmLegacyReviewed");
     }
 }
