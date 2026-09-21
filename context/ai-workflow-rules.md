@@ -35,7 +35,7 @@ How to work in this repo. Read this first, then the file the task points at.
 **Old send data (implemented 2026-09-21).** The "?" legacy layer is gone from code and the test schema. Old V1 sends are
 converted once into `OFFER_SENT` (`prisma/backfill/2026-09-v1-sends.ts`, rehearsed on a production clone); the rollout
 dossier is `.ai/migrations/v1-to-v2-live/`. The dead V1 columns `quoteSentAt` / `aboutUsSentAt` / `priceDisclosed` are
-dropped in a separate later step; no code reads them.
+dropped in the same window (D-009, `sql/03-drop-v1-columns.sql`); no code reads them. Executable route: `.ai/migrations/v1-to-v2-live/RECIPE.md`.
 
 **Older text.** The feature documents and the progress tracker are records written over time. They mention things that
 no longer exist: `/dashboard/clients`, `components/clients|deals`, `lib/queries/clients|deals`, `lib/actions/deals`,

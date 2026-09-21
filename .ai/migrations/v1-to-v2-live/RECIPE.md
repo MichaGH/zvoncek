@@ -21,7 +21,9 @@ bash .ai/migrations/v1-to-v2-live/tools/run-migration.sh <ENV_VAR_NAME> <endpoin
 
 - It runs steps 1–12 below in order, dry-run before every apply, and **stops at the first non-zero exit**.
 - `--production-window` is required when the endpoint is live (`…m0xyun`); without it the tools refuse production.
-- Resume after a fix: `FROM=7 bash … ` (every step is idempotent / repeatable).
+- Resume after a fix: `FROM=<n> bash …` **only at the step that failed**. Steps are NOT all repeatable: 1 and 11 change the
+  schema (never re-run); 5–7 need the V1 columns and old rows (before 9 and 11); 10b removes the markers 7 relies on.
+- Both schema diffs (1b, 12) are compared by machine with the expected SQL; any difference stops the run.
 - Every command inside goes through `tools/with-target.mjs --var <ENV_VAR_NAME> --expect <ep>` which injects the URL.
 
 ## Steps and the results of the 2026-09-22 run (use them as the expected numbers)
@@ -36,9 +38,11 @@ bash .ai/migrations/v1-to-v2-live/tools/run-migration.sh <ENV_VAR_NAME> <endpoin
 | 5 | old sends dry-run | `2026-09-v1-sends.ts` | 88 sends / 86 leads, 0 blockers (7 same-day merges) |
 | 6 | apply | `--apply --confirm <ep>` | APPLIED: 88 OFFER_SENT |
 | 7 | verify | `--verify` | RESULT: clean (see fix below) |
-| 8 | V2 normalization dry-run | `2026-09-v2-normalize.ts` | first calls 116, asks 116, ownership 116, closed steps 44, call-stage steps 75, price notes 22, audits 7, old sends 97; 0 blockers |
+| 8 | V2 normalization dry-run (since the review also writes OWNER_CHANGED, CLIENT_ASK_CHANGED, NEXT_ACTION_CLEARED and first-call `fp` like V2) | `2026-09-v2-normalize.ts` | first calls 116, asks 116, ownership 116, closed steps 44, call-stage steps 75, price notes 22, audits 7, old sends 97; 0 blockers |
 | 9 | apply | `--apply --confirm <ep>` | APPLIED: 116 deals; audits 7, sends 97, callStage 75 deleted/cleared |
-| 10 | verify | `--verify` | all 10 checks 0 → RESULT: clean |
+| 10 | verify | `--verify` | all checks 0 → RESULT: clean |
+| 10b | strip migration markers | `2026-09-v2-normalize.ts --strip --confirm <ep>` | (new since 2026-09-22 review) OFFER_SENT `meta.migrated/migration` and `LeadRequest.migrationKey` removed |
+| 10c | verify again | `--verify` | all checks 0 |
 | 11 | drop dead V1 columns | `sql/03-drop-v1-columns.sql` | Script executed successfully |
 | 12 | diff + post-check | `migrate diff`, `tools/post-check.ts` | "empty migration"; "all post-migration invariants hold" |
 
@@ -65,3 +69,13 @@ Data was never wrong. Resumed with `FROM=7`; everything passed.
 
 Read the printed BLOCKER / FAIL line. Blockers are data patterns the rules do not cover — show them to Michal, do
 not improvise SQL. Nothing after the failing step has run; steps before it are repeatable.
+
+## Review 2026-09-22 (ChatGPT, NO-GO) — what changed
+
+1. V2-native history rows added (OWNER_CHANGED at handoff, CLIENT_ASK_CHANGED + NEXT_ACTION_CLEARED at closing, first
+   call `{ asked, fp }`). 2. Markers stripped in step 10b. Enum values and `LeadRequest.provenance` stay: they are part
+   of the V2 schema itself, so a database created by V2 has them too. 3. Runner enforces both schema diffs. 4. Report
+   expects cleared steps; it needs a fresh untouched V1 copy as BEFORE. 5. `--verify` checks every promised field;
+   fixture tests MIG-3 / MIG-4 in `check-concurrency.ts` run the real normalizer (pass). 6. Docs aligned; 03/04/05/07/08
+   marked superseded. 7. No false repeatability claims; normalization no longer bumps revisions on a no-op re-run.
+**The numbers table above is from the run BEFORE these changes** — a new full run on a fresh V1 copy is required.

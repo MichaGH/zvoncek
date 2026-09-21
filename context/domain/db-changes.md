@@ -236,7 +236,7 @@ The wave 3a "?" legacy layer is removed from code and test schema (2026-09-21). 
 | price filled / "klient pozná cenu" without a CP | no receipt (except the per-lead decision #628) |
 
 No `PRICELIST`, no `REVIEW`. Any pattern outside this table stops the run before writing. `Lead.price` / `priceNote`,
-steps and statuses are never touched. Raw V1 rows stay; the history hides those listed in `meta.migration.sources`.
+steps and statuses are never touched. Afterwards the normalization (D-009) deletes the raw V1 send rows and strips the migration markers; the restore point keeps V1.
 
 **Normalization (D-009):** after the conversion, `prisma/backfill/2026-09-v2-normalize.ts` makes the data V2-shaped
 (first calls → `INTERESTED` + "Chceli" from the call, ownership `HANDOFF`, closed deals / call stage without a step,
@@ -302,7 +302,7 @@ One row per (lead, content), taken from the **first** matching receipt — the c
   NOTHING`). Covered by `w5Migration` in the concurrency suite.
 - `provenance` records the source activity / column, the rule and the confidence.
 - `requestedById` is **NULL** — the historical actor is unknown and is never attributed to today's owner.
-- Migrated rows are excluded from demand statistics (`getDemandStats` reads `origin = LIVE` only).
+- (Superseded by D-009: the final route creates "Chceli" rows from the first call with `origin LIVE`; statistics count them like any other.)
 - The script **refuses the production endpoint independently of its arguments** (endpoint denylist), requires
   `--expect-endpoint` + `--expect-db` to match `DATABASE_URL`, and `--apply` additionally needs a **direct** (non-pooler)
   host plus `--confirm <endpoint>`. Dry-run is the default; `--verify` reports what is still missing.

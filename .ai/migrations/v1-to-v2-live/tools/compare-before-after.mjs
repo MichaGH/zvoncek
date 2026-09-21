@@ -1,5 +1,6 @@
 // Read-only before/after report for review: V1 snapshot clone vs migrated V2 clone, per deal.
 //   node .ai/migrations/v1-to-v2-live/tools/compare-before-after.mjs <output.md>
+// BEFORE must be an UNTOUCHED V1 copy (both 2026-09-21/22 clones are migrated now – create a fresh one).
 // BEFORE = MIGRATION_REHEARSAL_DATABASE_STD_URL (untouched V1 copy), AFTER = MIGRATION_REHEARSAL_DATABASE_URL (migrated).
 // Both from .env.migration; production (m0xyun) and pooler hosts are refused. Only lead numbers, statuses, dates,
 // amounts and usernames are written – no company names, contacts, notes or URLs. Keep the output outside the repo.
@@ -68,7 +69,7 @@ const after = await read(AFTER, {
 
 const by = (rows, key = "leadId") => rows.reduce((m, r) => m.set(r[key], [...(m.get(r[key]) ?? []), r]), new Map());
 const one = (rows) => new Map(rows.map((r) => [r.id, r]));
-const bLead = one(before.leads), aLead = one(after.leads), aStage = one(after.stage), aSum = one(after.summary);
+const bLead = one(before.leads), aLead = one(after.leads), aStage = one(after.stage);
 const bFields = one(before.fields);
 const bSends = by(before.sends), aOffers = by(after.offers), aReq = by(after.requests);
 
@@ -77,8 +78,14 @@ if (bLead.size !== aLead.size) problems.push(`lead count before ${bLead.size} �
 for (const [id, b] of bLead) {
     const a = aLead.get(id);
     if (!a) { problems.push(`#${b.number} missing after`); continue; }
-    for (const k of ["status", "del", "price", "kind", "mode", "stepAt"]) {
+    for (const k of ["status", "del", "price"]) {
         if (String(b[k]) !== String(a[k])) problems.push(`#${b.number} ${k}: ${b[k]} → ${a[k]}`);
+    }
+    // D-009: the step stays on open deals; closed deals and call-stage contacts must end WITHOUT a step (V2 clears it).
+    const entered = aStage.get(id)?.entered;
+    const mustClear = !entered || ["WON", "LOST", "UNREACHABLE"].includes(a.status);
+    if (mustClear ? a.kind !== null || a.stepAt !== null : ["kind", "mode", "stepAt"].some((k) => String(b[k]) !== String(a[k]))) {
+        problems.push(`#${b.number} step: ${b.kind}/${b.mode}/${b.stepAt} → ${a.kind}/${a.mode}/${a.stepAt} (${mustClear ? "must be cleared" : "must be unchanged"})`);
     }
     if (b.owner && b.owner !== a.owner) problems.push(`#${b.number} owner ${b.owner} → ${a.owner}`);
 }
@@ -110,7 +117,7 @@ lines.push("Times are Europe/Bratislava. Rules: `.ai/migrations/v1-to-v2-live/DE
 lines.push("");
 lines.push("## Automatic comparison (must be empty)");
 lines.push("");
-lines.push("Status, deletion, price, step kind / mode / date and existing owners must be identical before and after.");
+lines.push("Status, deletion, price and existing owners identical; steps unchanged on open deals and cleared on closed deals / call-stage contacts (D-009). Structural V2 promises are checked by `2026-09-v2-normalize.ts --verify`.");
 lines.push("");
 lines.push(problems.length ? problems.map((p) => `- ${p}`).join("\n") : "- **No differences.**");
 lines.push("");

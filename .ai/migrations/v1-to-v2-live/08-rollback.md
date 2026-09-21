@@ -1,5 +1,8 @@
 # 08 — Rollback and abort plan
 
+> **SUPERSEDED (2026-09-22).** The current, executable route is `RECIPE.md` + `tools/run-migration.sh` (D-009). This file is kept as the planning record; where it disagrees with RECIPE.md, RECIPE.md wins.
+
+
 Rollback is rehearsed before production. A backup existing somewhere is not a rollback plan.
 
 ## Abort before any write

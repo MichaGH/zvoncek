@@ -1,5 +1,8 @@
 # 07 — Verification and reconciliation
 
+> **SUPERSEDED (2026-09-22).** The current, executable route is `RECIPE.md` + `tools/run-migration.sh` (D-009). This file is kept as the planning record; where it disagrees with RECIPE.md, RECIPE.md wins.
+
+
 Verification is independent of the migration writer wherever practical. Success requires per-source coverage,
 per-target justification, aggregate invariants, application parity and human acceptance.
 

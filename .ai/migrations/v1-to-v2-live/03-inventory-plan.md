@@ -1,5 +1,8 @@
 # 03 — Read-only inventory plan
 
+> **SUPERSEDED (2026-09-22).** The current, executable route is `RECIPE.md` + `tools/run-migration.sh` (D-009). This file is kept as the planning record; where it disagrees with RECIPE.md, RECIPE.md wins.
+
+
 Goal: measure the real V1 schema and classify every possible migration source before writing anything.
 
 ## Stage A — database identity and schema

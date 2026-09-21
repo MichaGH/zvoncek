@@ -1,3 +1,5 @@
+> **Update 2026-09-22 (D-009):** besides what is described below, the migration now makes the data look as if V2 wrote it: first calls become "Majú záujem" with "Chceli" from the call, closed deals are closed like V2 closes them, old V1 rows and migration markers are removed, and the dead columns are dropped in the window. Executable route: `RECIPE.md`.
+
 # V1 live → V2: what changes (readable overview for Michal)
 
 Written 2026-09-21 from the code only: V1 = `origin/main` (`8e8b183`, same Prisma schema as `7beb689`), V2 = the current
@@ -5,8 +7,8 @@ working tree. **The live database has not been inspected yet.** Everything below
 looks like". The clone inventory (`03-inventory-plan.md`) must confirm it.
 
 Legend: **ADD** = new thing, nothing old is touched · **FILL** = new thing whose value is computed from old data ·
-**TRANSFORM** = the meaning moves from an old place to a new one · **KEEP** = unchanged · **DROP LATER** = removed only
-in a separate step after V2 is stable.
+**TRANSFORM** = the meaning moves from an old place to a new one · **KEEP** = unchanged · **DROP** = removed in the same window,
+after the conversion is verified (D-009).
 
 ---
 
@@ -41,13 +43,13 @@ exactly that in V2. `NextActionKind` has the same six values in both versions.
 | `offerAboutUsAt`, `offerPricelistAt`, `offerPriceAt`, `offerReviewAt` | FILL | recomputed from the new `OFFER_SENT` rows (§3). Never written by hand. |
 | `hadLegacySends`, `legacySendsReviewedAt` | **not added** | test-only "?" layer; must be removed from the V2 code/schema before release |
 
-### 1.4 `Lead` — old columns whose meaning moves (TRANSFORM, then DROP LATER)
+### 1.4 `Lead` — old columns whose meaning moves (TRANSFORM, then DROP)
 
 | Old column (V1) | What it meant in V1 (from the code) | Where it goes in V2 |
 |---|---|---|
-| `aboutUsSentAt` | date "Email o nás" was marked sent. Button disabled afterwards, no undo → at most one per lead. | `OFFER_SENT` with `ABOUT_US` (§3) → `offerAboutUsAt`. Column dropped later (P-02). |
-| `quoteSentAt` | date "CP odoslaná" was marked sent. Undo clears it (but keeps the `QUOTE_SENT` row and `priceDisclosed`). A re-send overwrites the date. | `OFFER_SENT` with `ABOUT_US` + `PRICE` (§3) → `offerPriceAt`. Dropped later (P-01). |
-| `priceDisclosed` | "klient pozná cenu" tick. **Automatically set to true when a CP is marked sent**, and stays true after undoing the CP. Also a separate manual toggle. | Not converted: only an explicitly sent CP counts (Q2). Dropped later (P-03). |
+| `aboutUsSentAt` | date "Email o nás" was marked sent. Button disabled afterwards, no undo → at most one per lead. | `OFFER_SENT` with `ABOUT_US` (§3) → `offerAboutUsAt`. Dropped in the window (D-009). |
+| `quoteSentAt` | date "CP odoslaná" was marked sent. Undo clears it (but keeps the `QUOTE_SENT` row and `priceDisclosed`). A re-send overwrites the date. | `OFFER_SENT` with `ABOUT_US` + `PRICE` (§3) → `offerPriceAt`. Dropped in the window (D-009). |
+| `priceDisclosed` | "klient pozná cenu" tick. **Automatically set to true when a CP is marked sent**, and stays true after undoing the CP. Also a separate manual toggle. | Not converted: only an explicitly sent CP counts (Q2). Dropped in the window (D-009). |
 | `designSentAt` | latest "návrh sent" date across the lead's designs. **Not recomputed when a design is deleted** in V1. | Stays as a column, but becomes a summary recomputed from `OFFER_SENT` návrh sends. |
 
 ### 1.5 `Design`
@@ -181,7 +183,7 @@ the moment that step was set, and it stays open unless something was sent **afte
 
 | Object | When |
 |---|---|
-| `Lead.quoteSentAt`, `Lead.aboutUsSentAt`, `Lead.priceDisclosed` | **not** in the first release. V2 stops reading them; they are dropped in a separate later step after V2 is stable (D-006). |
+| `Lead.quoteSentAt`, `aboutUsSentAt`, `priceDisclosed`, `designUrl`, `lockedById`, `lockedAt` | dropped in the window, after conversion and normalization verify clean (D-009). |
 | Old activity rows, `Lead.designUrl`, `lockedById/At` | never in this rollout |
 
 ---

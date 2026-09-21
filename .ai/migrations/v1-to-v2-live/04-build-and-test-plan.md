@@ -1,5 +1,8 @@
 # 04 — Migration build and test plan
 
+> **SUPERSEDED (2026-09-22).** The current, executable route is `RECIPE.md` + `tools/run-migration.sh` (D-009). This file is kept as the planning record; where it disagrees with RECIPE.md, RECIPE.md wins.
+
+
 Build against test and disposable fresh clones only. Production remains denied until a separately approved rollout.
 
 ## Deliverables

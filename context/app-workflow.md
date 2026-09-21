@@ -430,7 +430,7 @@ Unfinished; see `context/project-overview.md` §7 before touching it.
 
 One rule is already fixed (wave 5): **"Čo chceli" counts `LeadRequest` rows, never the call outcome.** The outcome
 says only that the call went well, so one call can count in two contents and "only the cenník" is finally countable.
-Rows migrated from old data (`origin <> LIVE`) are excluded — they would inflate a period nobody called in.
+Rows with `origin <> LIVE` are excluded. The V1 → V2 migration creates none: old asks are written from the first call as `LIVE` rows (D-009), so they count like any other.
 
 ## 11. Rules that hold everywhere
 

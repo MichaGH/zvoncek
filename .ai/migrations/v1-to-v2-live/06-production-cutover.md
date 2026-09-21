@@ -35,26 +35,15 @@ Operator: Claude (commands). Decision owner: Michal (freeze, GO/NO-GO, rollback)
    drift" (new NEW leads, telesales first calls). **Any new send / price / design / reset / correction → STOP and
    show Michal.**
 
-## D. Migration (same artifacts as the rehearsal)
+## D. Migration
 
-Rehearsal 2 numbers are filled in after it runs on a fresh copy (see `PROGRESS.md`). Rehearsal 1 numbers in brackets.
+One command, exactly as rehearsed (steps, expected numbers and resume rules: `RECIPE.md`):
 
-| # | Command (`$W` prefix) | Expected | Stop if |
-|---|---|---|---|
-| 5 | `npx prisma db execute --file .ai/migrations/v1-to-v2-live/sql/01-schema-v1-to-v2.sql` | "Script executed successfully" | any error |
-| 6 | `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` | exactly the 6 `DROP COLUMN` + 1 `DROP CONSTRAINT` of `sql/03` (they run last) | anything else |
-| 7 | `npx prisma db execute --file .ai/migrations/v1-to-v2-live/sql/02-obchod-team.sql` | success | error (a user missing) |
-| 8 | `npx tsx prisma/backfill/2026-09-assignments.ts --expect-endpoint <ep> --expect-db neondb --owner-username michal` | [116 deals, 1 282 call work, 334 pool, 1 888 terminal, 0 conflict] | CONFLICT / NEW_WITH_HISTORY / OUTCOME_CORRECTED |
-| 9 | same + `--apply --confirm <ep>`, then same + `--verify` | "RESULT: clean" | not clean |
-| 10 | `npx tsx prisma/backfill/2026-09-v1-sends.ts --expect-endpoint <ep>` | [88 sends / 86 leads, 0 blockers] | any BLOCKER |
-| 11 | same + `--apply --confirm <ep>`, then same + `--verify` | "RESULT: clean" | not clean |
-| 12 | `npx tsx prisma/backfill/2026-09-v2-normalize.ts --expect-endpoint <ep>` | 116 first calls, 116 asks, 116 ownership rows, 44 closed steps, 75 call-stage steps, 22 price notes, 7 audits, 97 old sends; 0 blockers | any BLOCKER |
-| 13 | same + `--apply --confirm <ep>`, then same + `--verify` | "RESULT: clean" (every line 0) | any FAIL |
-| 14 | `npx prisma db execute --file .ai/migrations/v1-to-v2-live/sql/03-drop-v1-columns.sql` then `migrate diff` (step 6 command) | success; diff **empty** | error / any statement |
-| 15 | `npx tsx .ai/migrations/v1-to-v2-live/tools/post-check.ts` | "all post-migration invariants hold" | any FAIL |
+```bash
+bash .ai/migrations/v1-to-v2-live/tools/run-migration.sh MIGRATION_REHEARSAL_DATABASE_URL <ep> --production-window
+```
 
-`2026-09-wave5-requests.ts` is **no longer part of the route** (D-009: "Chceli" comes from the first call, not from
-receipts). Numbers grow only by the expected drift.
+It stops at the first failure, including a schema diff that differs from the reviewed SQL.
 
 ## E. Deploy and reopen
 

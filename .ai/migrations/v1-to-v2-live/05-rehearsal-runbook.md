@@ -1,5 +1,8 @@
 # 05 — Fresh-clone rehearsal runbook
 
+> **SUPERSEDED (2026-09-22).** The current, executable route is `RECIPE.md` + `tools/run-migration.sh` (D-009). This file is kept as the planning record; where it disagrees with RECIPE.md, RECIPE.md wins.
+
+
 This is a gated plan, not a command sheet. Exact commands and artifact hashes are inserted only after Phase 2 is built
 and reviewed. Any material change restarts the rehearsal from a fresh clone.
 

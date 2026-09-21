@@ -1462,6 +1462,46 @@ tests.w3aMigratedSend = async () => {
     );
 };
 
+// V1 → V2 normalizácia (D-009): obchod v tvare V1 (WANTS_DESIGN, uzavretý s krokom, bez odoslania) musí po
+// normalizácii vyzerať presne ako obchod, ktorý uzavrela V2 – a druhý beh už nič nezmení.
+tests.migNormalize = async () => {
+    const norm = await import("./2026-09-v2-normalize");
+    const { withLockTx } = await import("../../lib/access/locks");
+    const caller = await makeUser("TELESALES");
+    const manager = await makeUser("MANAGER");
+    const t0 = new Date(Date.now() - 30 * 86_400_000);
+    const t1 = new Date(Date.now() - 10 * 86_400_000);
+    const lead = await prisma.lead.create({
+        data: { companyName: "mig-normalize", status: "LOST", pipelineEnteredAt: t0, handedOffById: caller.id, ownerId: manager.id, closedAt: t1, nextActionKind: "SEND_DESIGN", nextActionMode: "IN_PROGRESS", nextActionAt: t0 },
+    });
+    const call = await prisma.activity.create({ data: { leadId: lead.id, userId: caller.id, type: "CALL", category: "BUSINESS", source: "CALL_QUEUE", outcome: "WANTS_DESIGN", createdAt: t0 } });
+    await prisma.activity.create({ data: { leadId: lead.id, userId: caller.id, type: "NEXT_ACTION_SET", category: "PLANNING", source: "CALL_QUEUE", note: "SEND_DESIGN · ", createdAt: t0 } });
+    await prisma.activity.create({ data: { leadId: lead.id, userId: manager.id, type: "STATUS_CHANGED", category: "AUDIT", source: "PIPELINE", note: "Stav zmenený na LOST", createdAt: t1 } });
+    const [row] = await norm.loadDeals(prisma, { id: lead.id });
+    const plan = norm.planDeal(row);
+    await withLockTx((tx) => norm.normalizeDeal(tx, plan.item!));
+    const rev1 = (await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } })).revision;
+    const checks = await norm.verifyChecks(prisma, lead.id);
+    const c = await prisma.activity.findUniqueOrThrow({ where: { id: call.id } });
+    const req = await prisma.leadRequest.findFirstOrThrow({ where: { leadId: lead.id } });
+    const own = await prisma.dealOwnership.findFirstOrThrow({ where: { leadId: lead.id } });
+    const types = (await prisma.activity.findMany({ where: { leadId: lead.id }, select: { type: true } })).map((a) => a.type).sort().join(",");
+    const l = await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
+    check(
+        "MIG-3: a closed V1 deal normalizes exactly like V2 closes it (INTERESTED+fp, ask from the call, withdrawn at closedAt, HANDOFF, OWNER_CHANGED, CLIENT_ASK_CHANGED, NEXT_ACTION_CLEARED, no step)",
+        !plan.blocker && checks.every(([, n]) => n === 0) && c.outcome === "INTERESTED" && JSON.stringify((c.meta as { asked?: string[] }).asked) === '["DESIGN"]' && (c.meta as { fp?: string }).fp === '{"asked":["DESIGN"]}' &&
+            req.content === "DESIGN" && req.state === "WITHDRAWN" && req.reason === norm.WITHDRAW_REASON && req.resolvedAt?.getTime() === t1.getTime() && req.resolvedById === manager.id &&
+            req.requestedAt.getTime() === t0.getTime() && req.requestedById === caller.id && req.sourceActivityId === call.id && req.origin === "LIVE" &&
+            own.reason === "HANDOFF" && own.fromUserId === null && own.toUserId === manager.id && own.byUserId === caller.id && own.createdAt.getTime() === t0.getTime() &&
+            types.includes("CLIENT_ASK_CHANGED") && types.includes("NEXT_ACTION_CLEARED") && types.includes("OWNER_CHANGED") && l.nextActionKind === null,
+        `blocker=${plan.blocker} failing=${checks.filter(([, n]) => n).map(([k]) => k).join("|")} meta=${JSON.stringify(c.meta)} req=${req.state}/${req.resolvedAt?.toISOString()}/${req.resolvedById === manager.id}/${req.requestedAt.toISOString()}/${req.requestedById === caller.id} own=${own.byUserId === caller.id}/${own.createdAt.toISOString()} t0=${t0.toISOString()} t1=${t1.toISOString()} step=${l.nextActionKind}`,
+    );
+    await withLockTx(async (tx) => norm.normalizeDeal(tx, norm.planDeal((await norm.loadDeals(tx, { id: lead.id }))[0]).item!));
+    const after = await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
+    const count = await prisma.activity.count({ where: { leadId: lead.id } });
+    check("MIG-4: a second normalization run changes nothing (no rows, no revision bump)", after.revision === rev1 && count === types.split(",").length, `rev ${rev1}→${after.revision} rows ${types.split(",").length}→${count}`);
+};
+
 tests.w3aContactTypes = async () => {
     const { work } = await w3a();
     const { getDealList } = await import("../../lib/queries/pipeline");
