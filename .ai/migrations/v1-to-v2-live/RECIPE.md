@@ -79,3 +79,14 @@ not improvise SQL. Nothing after the failing step has run; fix the cause and res
    fixture tests MIG-3 / MIG-4 in `check-concurrency.ts` run the real normalizer (pass). 6. Docs aligned; 03/04/05/07/08
    marked superseded. 7. No false repeatability claims; normalization no longer bumps revisions on a no-op re-run.
 **The numbers table above is from the run BEFORE these changes** — a new full run on a fresh V1 copy is required.
+
+## Final test 2026-09-22 on `ep-raspy-forest-asru4x1z` (fresh V1 copy of live) — ALL STEPS PASSED
+
+Same numbers as the table above (116 deals, 88 sends, 97 old rows removed, 116 "Chceli": DESIGN 13 open / 11 sent /
+14 withdrawn, INFO 2 / 61 / 2, PRICE 0 / 10 / 3). Three stops, all fixed in code, then resumed:
+- Step 10 FAIL "closed deals whose latest step row is not NEXT_ACTION_CLEARED: 2" (#916, #348): V1 set a step seconds
+  AFTER closing. The clear row now goes 1 ms after the latest step row (a misplaced earlier one is moved). Resumed at 9.
+- Step 11: the drop guard looked for the migration marker that 10b strips; guard now checks "OFFER_SENT exist, no old
+  send rows". Resumed at 11.
+- Step 12: runner treated an empty diff as a failed command; fixed. Resumed at 12.
+On live the run is expected to go through in one pass with this code (commit e149768 or later).
