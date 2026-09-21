@@ -52,7 +52,7 @@ export async function updateLead(leadId: string, data: DealContactInput) {
     return run(leadId, (u) => cmd.updateLeadAs(u, leadId, data));
 }
 
-export async function saveQuote(leadId: string, input: { price: number | null; priceNote: string | null }) {
+export async function saveQuote(leadId: string, input: { price: number | null; priceNote: string | null; reason?: string | null }) {
     return run(leadId, (u) => cmd.saveQuoteAs(u, leadId, input));
 }
 
@@ -94,7 +94,7 @@ export async function updateDealContact(leadId: string, data: DealContactInput) 
     return run(leadId, (u) => work.updateDealContactAs(u, leadId, data));
 }
 
-export async function saveDealQuote(leadId: string, input: { price: number | null; priceNote: string | null }) {
+export async function saveDealQuote(leadId: string, input: { price: number | null; priceNote: string | null; reason?: string | null }) {
     return run(leadId, (u) => work.saveDealQuoteAs(u, leadId, input));
 }
 
@@ -108,16 +108,28 @@ export async function taskMessage(input: tasks.TaskMessageInput) {
     return runTask((u) => tasks.taskMessageAs(u, input));
 }
 
-export async function finishTask(input: tasks.FinishTaskInput) {
-    return runTask((u) => tasks.finishTaskAs(u, input));
+// Wave 4: manažér odovzdáva / zamieta ČASTI – jeden príkaz pre oboje (§2.4a, „Zamietnuť" je zamietnutie
+// každej časti, ktorá sa ešte robí).
+export async function resolveTaskParts(input: tasks.ResolveTaskPartsInput) {
+    return runTask((u) => tasks.resolveTaskPartsAs(u, input));
+}
+
+// „Nie, pokračuj ty" – manažér neprijme odovzdanie klienta (odovzdanie časti nemá, §2.4a).
+export async function declineHandover(input: tasks.DeclineHandoverInput) {
+    return runTask((u) => tasks.declineHandoverAs(u, input));
 }
 
 export async function finishAndSend(input: tasks.FinishAndSendInput) {
     return runTask((u) => tasks.finishAndSendAs(u, input));
 }
 
-export async function declineTask(input: tasks.DeclineTaskInput) {
-    return runTask((u) => tasks.declineTaskAs(u, input));
+// Wave 4: vlastník stiahne časť („Už netreba") alebo k otvorenej úlohe pridá ďalšiu.
+export async function withdrawTaskParts(input: tasks.WithdrawTaskPartsInput) {
+    return runTask((u) => tasks.withdrawTaskPartsAs(u, input));
+}
+
+export async function addTaskParts(input: tasks.AddTaskPartsInput) {
+    return runTask((u) => tasks.addTaskPartsAs(u, input));
 }
 
 export async function reassignTask(input: tasks.ReassignTaskInput) {

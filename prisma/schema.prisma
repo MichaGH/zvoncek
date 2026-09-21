@@ -38,6 +38,8 @@ model User {
   tasksRequested     DealTask[]      @relation("DealTaskRequestedBy")
   tasksAssigned      DealTask[]      @relation("DealTaskAssignee")
   tasksClosed        DealTask[]      @relation("DealTaskClosedBy")
+  taskPartsAdded     DealTaskPart[]  @relation("DealTaskPartAddedBy")
+  taskPartsResolved  DealTaskPart[]  @relation("DealTaskPartResolvedBy")
   ownershipFrom      DealOwnership[] @relation("DealOwnershipFrom")
   ownershipTo        DealOwnership[] @relation("DealOwnershipTo")
   ownershipBy        DealOwnership[] @relation("DealOwnershipBy")
@@ -242,6 +244,11 @@ enum ActivityType {
   TASK_REASSIGNED // úloha presunutá inému manažérovi
   TASK_RESULT_DISMISSED // vrátený výsledok sa neposiela / berie na vedomie (meta.items + dôvod)
   CLIENT_ASK_CHANGED // wave 5: ručná oprava toho, čo klient pýtal (meta.added / withdrawn / reason)
+  TASK_PART_ADDED // wave 4: k otvorenej úlohe pribudla časť (meta.parts)
+  TASK_PART_DONE // wave 4: manažér odovzdal časť / časti úlohy (meta.parts)
+  TASK_PART_DECLINED // wave 4: manažér časť nerobí, s dôvodom (meta.parts)
+  TASK_PART_WITHDRAWN // wave 4: vlastník časť stiahol, alebo skončila s obchodom / vlastníkom (meta.parts)
+  PRICE_CHANGED // wave 4 D5: zmena ceny obchodu, ktorú vidí aj obchodník (meta.from / to / reason / via)
 }
 
 enum CallOutcome {
@@ -424,28 +431,62 @@ enum DealTaskStatus {
 }
 
 model DealTask {
-  id            String            @id @default(cuid())
-  lead          Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  id            String         @id @default(cuid())
+  lead          Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
   leadId        String
   type          DealTaskType
-  contents      DealTaskContent[] // HELP: aspoň jeden; HANDOVER: prázdne
-  status        DealTaskStatus    @default(OPEN)
+  status        DealTaskStatus @default(OPEN)
   text          String // čo sa žiada
-  requestedBy   User              @relation("DealTaskRequestedBy", fields: [requestedById], references: [id])
+  requestedBy   User           @relation("DealTaskRequestedBy", fields: [requestedById], references: [id])
   requestedById String
-  assignee      User              @relation("DealTaskAssignee", fields: [assigneeId], references: [id])
+  assignee      User           @relation("DealTaskAssignee", fields: [assigneeId], references: [id])
   assigneeId    String // manažér, ktorý má konať (dá sa presunúť)
-  createdAt     DateTime          @default(now())
+  createdAt     DateTime       @default(now())
   closedAt      DateTime?
-  closedBy      User?             @relation("DealTaskClosedBy", fields: [closedById], references: [id])
+  closedBy      User?          @relation("DealTaskClosedBy", fields: [closedById], references: [id])
   closedById    String? // kto ju reálne uzavrel (môže sa líšiť od assignee)
-  closeReason   String? // povinné pri DECLINED / CANCELLED
-  result        Json? // nemenný záznam výsledku: { price?, designs?, answer? }
+  closeReason   String? // povinné pri DECLINED / CANCELLED; pri zmiešanom konci NULL – dôvody sú na častiach
 
+  // Wave 4 (§2.6, P6): krok, ktorý mal obchod PRED zamknutím – kam sa vráti, keď nie je čo poslať („Iné"-only úloha).
+  // Zapisuje sa RAZ pri vzniku úlohy a už sa neprepisuje; dátum ani režim sa neukladajú (zamknutý krok je vždy
+  // SCHEDULED bez dátumu, I8).
+  fallbackKind NextActionKind?
+  fallbackNote String?
+
+  parts      DealTaskPart[]
   activities Activity[]
 
   @@index([assigneeId, status, createdAt])
   @@index([leadId, status])
+}
+
+// Wave 4: jedna časť úlohy = jeden druh manažérskej práce (cena / návrh / iné) vo vnútri jednej úlohy.
+// Stav ÚLOHY sa z častí odvodzuje (lib/domain/tasks.ts taskPartState) – nikdy sa nenastavuje ručne.
+// @@unique([taskId, kind]) je nosné: adresa vrátenej položky (taskId, kind, designId) sa tým nemení.
+model DealTaskPart {
+  id           String             @id @default(cuid())
+  task         DealTask           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId       String
+  kind         DealTaskContent
+  status       DealTaskPartStatus @default(REQUESTED)
+  result       Json? // zapíše sa RAZ pri DELIVERED: { price } | { designs } | { answer }
+  addedBy      User               @relation("DealTaskPartAddedBy", fields: [addedById], references: [id])
+  addedById    String // kto si túto časť vyžiadal (s úlohou, alebo neskôr cez „+ Pridať")
+  addedAt      DateTime           @default(now())
+  resolvedBy   User?              @relation("DealTaskPartResolvedBy", fields: [resolvedById], references: [id])
+  resolvedById String? // kto ju dodal / nerobí / stiahol – prázdne len kým je REQUESTED
+  resolvedAt   DateTime?
+  reason       String? // povinný pri DECLINED a WITHDRAWN
+
+  @@unique([taskId, kind])
+  @@index([taskId, status])
+}
+
+enum DealTaskPartStatus {
+  REQUESTED // manažér to má na stole – „robí sa"
+  DELIVERED // manažér to dodal; vrátené položky čakajú na odoslanie
+  DECLINED // manažér túto časť neurobí, s dôvodom
+  WITHDRAWN // vlastník ju stiahol, alebo skončila s obchodom / zmenou vlastníka
 }
 
 // História vlastníctva obchodu (wave 3): každá skutočná zmena vlastníka = jeden riadok v tej istej transakcii.

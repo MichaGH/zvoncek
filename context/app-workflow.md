@@ -7,16 +7,19 @@ permissions, `context/architecture.md` for layers, `context/code-standards.md` f
 **Markers**
 
 - no marker = shipped and verified on the test branch
-- `[WAVE 4]` = agreed direction, **not built** (one task carrying both a price and a návrh, §6.1)
 - wave 3 (manager tasks, step lock, handover, História, pill counts —
   `context/features/01-salesrep/wave-3-task-proposal-final.md`) is **built on the test branch** (2026-09-19); what it
   still owes is listed in `context/progress-tracker.md`
 - wave 5 (what the client asked for vs. what they got — `context/features/01-salesrep/wave-5-proposal.md`) is
   **built on the test branch** (2026-09-20); its production data migration is written but **not executed**
   (`context/domain/db-changes.md` §5)
+- wave 4 Part A (one manager task with several **parts**, delivered one at a time —
+  `context/features/01-salesrep/wave-4-proposal.md`) is **built on the test branch** (2026-09-20), together with its
+  two prerequisite fixes (§7 P0 / P1) and Part D's price history (D5). Parts B (notes) and C (order note) are still
+  only designed — they wait on Michal's answers to Q5 / Q6. The pre-wave-5 draft is kept as
+  `wave-4-proposal-v1-2026-09-19.md` — history, not a plan.
 - **implementation order (decision 2026-09-19): wave-3 human checks → wave 5 → wave 4.** The numbers are stable
-  feature identifiers, not chronological renames. Wave 4 Part A stays blocked until it is re-reviewed against the
-  shipped wave-5 operations.
+  feature identifiers, not chronological renames.
 - `[ROLLOUT]` = exists in code, still missing in production (production is on the pre-round-1 schema; see
   `context/domain/db-changes.md`)
 - `[FUTURE ROUTING]` = desired operating arrangement; its complete team/recipient policy is not yet decided
@@ -188,11 +191,15 @@ records each offer send once, in one dialog, opened from the action sheet ("📨
 ponuku" — in place, from the list or the detail), from the detail's **Cena & ponuky** card
 ("Zaznamenať odoslanie"), or from a návrh ("Odoslané…").
 
-- Checkboxes **Info / ukážky · Cenník · Rozbor webu · Cena · Návrh**. Pre-ticked: everything **the client asked for
-  and has not received yet**, plus what was never sent ("o nás", "cenník"), "Cena" when the next step is "Poslať
-  cenu", a návrh when the step is "Poslať návrh". Any box can be unticked — unticking needs no explanation, the row
-  simply stays outstanding. "Rozbor webu" (what is wrong with their current site) is a full content: it can be asked
-  for and sent, and it is usually sent without being asked.
+- Checkboxes **Info / ukážky · Cenník · Cena · Návrh · Rozbor webu**. Pre-ticked: **only** what the client asked for
+  and has not received yet, what the manager returned and nobody sent, and "Cena" / a návrh when that is the current
+  step. Nothing is ticked merely because it was never sent before — a first email containing only a návrh must not
+  record info and cenník that were not in it (wave 5 review R01-4). Any box can be unticked — unticking needs no
+  explanation, the row simply stays outstanding. "Rozbor webu" (what is wrong with their current site) is a full
+  content: it can be asked for and sent, and it is usually sent without being asked.
+- **A návrh with no `Design` row** (a PDF, a plain link, an old deal): when the deal has no design at all the dialog
+  shows one plain "Návrh — bez záznamu v systéme" box. It records `DESIGN` with `untrackedDesign` and no design id,
+  satisfies the request, and never touches a `Design.sentAt`. A deal that has a `Design` must use it.
 - The price sent is **frozen** with its hand-written breakdown; changing the deal's price later does not change what
   the client received, and the card warns "Aktuálna cena sa líši od poslanej".
 - The next step is never replaced silently: when the email completes the current "poslať…" step **and nothing is left
@@ -205,7 +212,8 @@ ponuku" — in place, from the list or the detail), from the detail's **Cena & p
 - **Návrh link:** "Odkaz do emailu" copies a ready link — visible text `smrek1.thegrandpoints.com`, target the
   tracking URL. Nobody opens or builds the tracking link by hand.
 - **Mistakes:** "Opraviť" on a history entry (author or manager, with a reason) crosses it out; what the client knows is
-  recalculated. The next step and tasks are not touched — the user fixes the next step by hand if needed.
+  recalculated. Crossing out an **SMS** also crosses out the price that was written in it (same transaction, one
+  revision); crossing out only the price leaves the SMS text in the history. On an **unlocked** deal the next step is not touched — the user fixes it by hand if needed. While a manager task is **open** the step is locked and derived, so a correction re-derives it (P6) — the user could not fix it by hand.
 - **Old deals** (sends from before this change): contents are unknown, so the card shows "?" instead of "no" and a ⚠
   panel. The manager fills in what was really sent with its original date ("Doplniť starý záznam" — no next step, no
   task change, not shown as "Naposledy") and then confirms "Hotovo – toto je všetko". The "Neoverené" pill lists
@@ -241,8 +249,26 @@ Design: `context/features/01-salesrep/wave-5-proposal.md`. Rules: `lib/domain/cl
   (zruší úlohu)".
 - **The call sheet** says which price the client actually saw: "Klient videl 1 285 € (telefonicky) 22. 9. · aktuálna
   1 400 € ešte neodišla", or "Videl len cenník" / "Klient cenu ešte nevidel".
-- Closing a deal leaves the rows as they are and withdraws nothing. Reopening opens the deal on the outstanding send
-  step, due today; "Zavolať" only when nothing is outstanding.
+- **Snoozing or closing from the action sheet** ("Ozvať sa o pár mesiacov", "Nemajú záujem", "Zlé číslo") with open
+  asks lists what the client asked for and will not be sent, requires a short reason, and **withdraws every open row**
+  in the same save (the sheet sends the exact row ids it showed; the server compares them with what is open now and
+  refuses with a refresh if another tab changed them). The history shows "Nepošle sa – …". The same applies to a manager
+  **snoozing** the deal in the detail and to a manager closing it as LOST / UNREACHABLE ("Nemajú záujem", the status select): reason required, open
+  requests withdrawn by exact id. **WON** leaves them as history (the client ordered) and refuses a withdraw. Reopening opens the deal on the outstanding send step, due today; "Zavolať" only when nothing is
+  outstanding — a withdrawn row never comes back by itself.
+- **"Pozreli, chcú zmeny" and "Cena je vysoká"** (the two answers where a rep usually needs the manager) offer
+  **"Požiadať manažéra"** as the default next step — a custom step due today, and saving it opens the ask dialog
+  straight away; a call or "Čakáme na klienta" is still one tap away. "Chcú zmeny" also records a `DESIGN` request
+  (they asked for a reworked návrh). Only for the deal's owner, and not while the step is locked by a task.
+- **"Poslali sme SMS"** has the same "price given" screen as a call. A price written in the SMS is recorded as an
+  `OFFER_SENT` (channel `PHONE`, `via: "SMS"`, linked to the SMS row): it satisfies open price requests and shows as
+  "Klient videl … (SMS)". It is never an email and never plans "Zavolať, či prišlo". The next-step screen after an SMS offers
+  **"Ponechať aktuálny krok"** (shows the real headline, e.g. "Poslať návrh + cenu"; pre-selected only for a deliberately planned step — a call, waiting, custom — never for a system "Poslať …" step, and not offered at all when the SMS price has just satisfied that send step): only the SMS — and a price in it — is written,
+  the step, its date and the status stay, one revision bump (`keepStep`). "Chcú niečo poslať" is deliberately **not**
+  available from an SMS: it would overlap with the call/reply path.
+- **"Chcú niečo poslať" chooses no step.** After the requests and any price told on the same call are written, the
+  server derives the step from what is still outstanding ("Poslať info", "Poslať návrh"…). If the told price covered
+  everything they asked for, nothing is left to send and the sheet goes to "Kedy ďalej?" instead.
 - Reverting a first call deletes the rows that call created, and is refused when the client already received one of
   them.
 
@@ -256,22 +282,31 @@ Design, situations and reasons: `context/features/01-salesrep/wave-3-task-propos
 ### 6.1 The rep asks
 
 - **"Požiadať manažéra"** (detail task card, or the action sheet) — the rep picks **what she needs: Cena · Návrh ·
-  Iné** (one choice), writes a **message for the manager** (only for this task — it never changes the company note or
+  Otázka / konzultácia** (any combination of 1–3 parts, see Wave 4 below), writes a **message for the manager** (only for this task — it never changes the company note or
   the step note) and sends it. The manager is **pre-selected**: the leader of her team, else the manager she asked last;
   "Zmeniť" shows the list of all managers.
 - **The next step is not chosen — it follows from what she asked for.** She asks for a price because her step is to
   send a price: Cena → **"Poslať cenu"**, Návrh → **"Poslať návrh"**; the step note stays when the step does not change.
-  Iné → her current step stays; "Zmeniť" lets her pick another. If an earlier návrh is still waiting to be sent, the
+  Otázka / konzultácia → her current step stays; "Zmeniť" lets her pick another (while the task is open the step is locked; a system "Poslať …" step is never restored once its work has gone out — the safe step after the task is "Zavolať", see Wave 4). If an earlier návrh is still waiting to be sent, the
   step is "Poslať návrh" (a návrh carries the price too).
 - **Wave 5:** the locked step is derived from **all** outstanding work, not only from what is being asked of the
   manager. A rep who asks for "Iné" on a deal where the client is waiting for a price still gets "Poslať cenu"; a
   price task on a deal whose client wants a návrh is locked on "Poslať návrh" (§5b).
-- `[WAVE 4 — AFTER WAVE 5]` One task will be able to ask the manager for **both** a price and a návrh (any order);
-  the manager may prepare one part first and the rep may send that ready subset while the other part is still being
-  made. The task contributes manager-work readiness to wave 5's checklist but never becomes the source of client
-  intent or proof of sending. Today it is one content per task; sending while it is open already works. Draft, blocked
-  pending re-review against the shipped wave-5 operations: `context/features/01-salesrep/wave-4-proposal.md` §2
-  (BL-12).
+- **Wave 4: one task, several parts.** She ticks **any combination** of Cena · Návrh · Otázka / konzultácia and it stays **one**
+  task — one **part** per kind. The manager delivers, declines or withdraws them one at a time (he could not save
+  two at once anyway), and the card shows each part's own state. The rep may add a kind to a running task
+  ("+ Pridať", with a message the manager reads) or take one back ("Už netreba", with a reason); the rest of the
+  task runs on. Parts fill wave 5's *robí sa* / *pripravené* lists and nothing else: a delivered part is
+  **prepared**, never **received** — only a valid `OFFER_SENT` means received.
+- **The step after the task.** A step the rep chose herself (Zavolať, Čakáme na klienta, a custom one) comes back when
+  nothing client-facing is left. A step the **app** had set (Poslať cenu / návrh / email) or no step at all is never
+  restored — its work has gone out meanwhile — the safe step is **"Zavolať"** with the note "Pokračovať s klientom
+  po odpovedi manažéra", locked while the task is open and due today when it closes. While only the question is
+  left the deal reads **"Čaká na <manažér> – otázka / konzultácia"**, never "Poslať …" or an actionable "Zavolať";
+  the returned answer stays visible on the task card. A web review for the client is a separate deliverable (a
+  future REVIEW task part, not this one).
+- **Sending only part** (a returned price while the návrh is still being made) shows a summary first — what is being
+  sent, what the manager still makes, what the locked step will be — and needs an explicit "Áno, poslať len …".
 - Never created or closed automatically; telesales never create tasks; the manager never asks himself (on his own
   deal it is just his step). At most one open task per deal.
 
@@ -281,7 +316,10 @@ Design, situations and reasons: `context/features/01-salesrep/wave-3-task-propos
   manažéra"** — it is actionable nowhere else ("Na dnes", step pills, the dashboard due list). The detail's task card
   shows the request, "Po vybavení: Poslať cenu", and an internal message thread (rep ↔ manager; never a client contact).
 - Every real client contact (hers or the manager's) is still recorded and moves "Naposledy" without touching the step.
-  A send that overlaps what the task is producing asks first: keep the task, or cancel it as no longer needed.
+  A send that overlaps a part the manager is **still making** asks first: let him finish it, or take just that part
+  back as no longer needed — the rest of the task keeps running. Sending a part he has already delivered asks
+  nothing: that is the ordinary way to get the ready price out while the návrh is still being drawn, and the locked
+  step then drops what went out ("Poslať návrh + cenu" → "Poslať návrh") without ever becoming freely replannable.
   Snoozing, closing or replanning cancels the task in the same save — her decision, with a reason, no approval.
   "Zrušiť úlohu…" does the same from the card. A manager cancels a task only by closing the deal.
 
@@ -289,14 +327,18 @@ Design, situations and reasons: `context/features/01-salesrep/wave-3-task-propos
 
 - sees the task in **"Pre mňa"** (count on the pill) and **"Čaká na mňa"** on the dashboard (oldest first, red after
   two business days);
-- **"Hotovo…"**: enters the price (saved on the deal as well), picks the návrh, or writes the answer. Her step becomes
-  due **today**;
-- **"Poslal som to sám…"**: records the result and the send to the client in one save; the rep's step becomes
-  "Zavolať, či prišlo" (the day can be changed, the call cannot be switched off — otherwise the deal would still say
-  "Poslať…" for something already sent). Only if an older returned price / návrh is still unsent does the step stay
-  "Poslať…";
-- **"Zamietnuť…"** with a reason (she sees it, her step is unlocked), **"Presunúť…"** to another manager, or takes the
-  client over.
+- **"Hotovo…"**: he **ticks which parts he is handing over now** and fills only those — the price (saved on the deal
+  as well), the návrh, the answer. A pre-filled field is never a decision: an untouched price is not delivered.
+  Unticked parts stay open and the step stays locked; when nothing is left, her step becomes due **today**;
+- **"Poslal som to sám…"**: the same selection plus the send to the client in one save. "Zavolať, či prišlo" is
+  planned **only** when that save closes the task *and* the client is owed nothing else — otherwise the step becomes
+  what is still to send ("Poslať info + cenník"), so the deal never tells her to phone about an email that is still
+  half-written;
+- **"Toto nerobím…"** on one part with a reason, or **"Zamietnuť všetko…"** for everything he still has. A declined
+  part says he will not do that piece of work — it never says the client stopped wanting it, so her checklist keeps
+  the ask open until the client really gets it;
+- **"Presunúť…"** to another manager, or takes the client over. A `HANDOVER` he does not want is
+  **"Nie, pokračuj ty…"**.
 
 ### 6.4 What came back
 
@@ -311,7 +353,16 @@ and on the list row ("✓ cena 1 285 € (od Nikolas)") until the rep deals with
 - **answer / decline** → "Beriem na vedomie".
 
 The manager sees the same items as "Vrátené obchodníkovi – ešte neposlané klientovi". Closing the deal dismisses what
-is still pending. Closed tasks stay under "História úloh".
+is still pending. Closed tasks stay under "História úloh", still broken down by part.
+
+**A task that ended is "Vybavené" as soon as anything came back**, even if the rest was declined or withdrawn — the
+per-part marks tell the whole truth ("cena odovzdaná, návrh zrušený"). There is no "Čiastočne vybavené" state: the
+task is closed, and if they need that part again it is a new task. A badge saying "Zrušené" while a delivered price
+is still waiting to be sent would be the real lie.
+
+Each returned item keeps its **own** fate: waiting, sent to the client on a date, or deliberately not sent with a
+reason. One návrh of two can be sent and the other dropped, and the card says exactly that — a dropped návrh is
+never shown as something the client received.
 
 ### 6.5 Handover, takeover, owner changes
 

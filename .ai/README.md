@@ -31,6 +31,12 @@ Reusable instructions for automated Claude/Codex workflow stages.
 
 Automation and orchestration.
 
+### `migrations/`
+
+Operational planning, rehearsal evidence and progress records for one-time data migrations. These files document the
+process and never authorize production access or writes. Approved schema and business decisions must also be recorded
+in the appropriate authoritative file under `context/`.
+
 ## Critical rule
 
 Information required to correctly build, maintain, or reason about the application

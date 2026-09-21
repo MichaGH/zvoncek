@@ -1,3 +1,4 @@
+import { businessDate, isValidBusinessDate } from "@/lib/domain/businessTime";
 import { z } from "zod";
 import type { LeadStatus, ProjectType } from "@/app/generated/prisma/enums";
 import { AccessError, FORBIDDEN, toActionError, type ActionError } from "@/lib/access/errors";
@@ -6,6 +7,7 @@ import { lockUsers, withLockTx, type Tx } from "@/lib/access/locks";
 import type { AccessUser } from "@/lib/access/user";
 import type { Lead } from "@/app/generated/prisma/client";
 import * as deal from "@/lib/domain/dealMutations";
+import { withdrawInputSchema } from "@/lib/domain/clientRequests";
 import { runKeyed } from "@/lib/domain/idempotency";
 import { canonical } from "@/lib/domain/tasks";
 import { ownerTransition } from "@/lib/domain/taskMutations";
@@ -41,8 +43,11 @@ async function managed(
 export const updateLeadAs = (user: AccessUser, leadId: string, data: deal.DealContactInput) =>
     managed(user, leadId, "updateLead", (tx, lead, actor) => deal.updateDealContact(tx, actor, lead, data, "PIPELINE"));
 
-export const saveQuoteAs = (user: AccessUser, leadId: string, input: { price: number | null; priceNote: string | null }) =>
-    managed(user, leadId, "saveQuote", (tx, lead, actor) => deal.saveQuote(tx, actor, lead, input, "PIPELINE"));
+// D5: cenové okienko smie pripojiť krátky dôvod („pridali sme EN jazyk") – nepovinne, preklep formulár nepotrebuje.
+export const saveQuoteAs = (user: AccessUser, leadId: string, input: { price: number | null; priceNote: string | null; reason?: string | null }) =>
+    managed(user, leadId, "saveQuote", (tx, lead, actor) =>
+        deal.saveQuote(tx, actor, lead, { price: input.price, priceNote: input.priceNote }, "PIPELINE", { via: "EDIT", reason: input.reason }),
+    );
 
 export const setProjectTypeAs = (user: AccessUser, leadId: string, projectType: ProjectType | null) =>
     managed(user, leadId, "setProjectType", (tx, lead, actor) => deal.setProjectType(tx, actor, lead, projectType));
@@ -60,12 +65,22 @@ const keyed = {
     idempotencyKey: z.string().min(8).max(100),
 };
 const trim = (v: string | null | undefined) => v?.trim() || null;
+const withdrawFp = (w: { ids: string[]; reason: string } | null | undefined) =>
+    w ? { ids: [...new Set(w.ids)].sort(), reason: trim(w.reason) } : undefined;
 const cancelFp = (c: deal.CancelTaskInput | null | undefined) => (c ? { taskId: c.taskId, reason: trim(c.reason) } : null);
 
 // ── Stav, „Stratené", znovuotvorenie ────────────────────────────────────────
 
 const statusSchema = z
-    .object({ status: z.enum(deal.DEAL_STATUSES), ...keyed, cancelTask: deal.cancelTaskSchema.nullish() })
+    .object({
+        status: z.enum(deal.DEAL_STATUSES),
+        ...keyed,
+        cancelTask: deal.cancelTaskSchema.nullish(),
+        withdraw: withdrawInputSchema.nullish(),
+        // Uspatie s otvorenou úlohou: kedy sa obchod zobudí (obchodný deň, YYYY-MM-DD). Bez neho by zrušená úloha
+        // odomkla krok „dnes" a spiaci obchod by bol hneď „zobudený" (R01-5).
+        snoozeUntil: z.string().nullish(),
+    })
     .strict();
 export type ChangeStatusInput = z.input<typeof statusSchema>;
 
@@ -74,7 +89,16 @@ export async function changeStatusAs(user: AccessUser, leadId: string, raw: Chan
     const parsed = statusSchema.safeParse(raw);
     if (!parsed.success) return { error: "Neplatný stav obchodu." };
     const input = parsed.data;
-    const fp = canonical({ status: input.status, cancelTask: cancelFp(input.cancelTask) });
+    const snoozeUntil = trim(input.snoozeUntil);
+    if (snoozeUntil && (input.status !== "SNOOZED" || !isValidBusinessDate(snoozeUntil) || snoozeUntil <= businessDate(new Date()))) {
+        return { error: "Neplatný dátum zobudenia." };
+    }
+    const fp = canonical({
+        status: input.status,
+        cancelTask: cancelFp(input.cancelTask),
+        withdraw: withdrawFp(input.withdraw),
+        ...(snoozeUntil ? { snoozeUntil } : {}),
+    });
     return runKeyed(
         input.idempotencyKey,
         { userId: user.id, leadId, types: ["STATUS_CHANGED", "DEAL_REOPENED"], fp },
@@ -85,13 +109,17 @@ export async function changeStatusAs(user: AccessUser, leadId: string, raw: Chan
                     cancelTask: input.cancelTask,
                     primary: { key: input.idempotencyKey, fp },
                     people,
+                    withdraw: input.withdraw,
+                    snoozeUntil,
                 });
             }),
         (error) => toActionError(error, "Nepodarilo sa uložiť.", "changeStatus"),
     );
 }
 
-const lostSchema = z.object({ reason: z.string().max(500).nullish(), ...keyed, cancelTask: deal.cancelTaskSchema.nullish() }).strict();
+const lostSchema = z
+    .object({ reason: z.string().max(500).nullish(), ...keyed, cancelTask: deal.cancelTaskSchema.nullish(), withdraw: withdrawInputSchema.nullish() })
+    .strict();
 export type MarkLostInput = z.input<typeof lostSchema>;
 
 export async function markLostAs(user: AccessUser, leadId: string, raw: MarkLostInput): Promise<CommandResult> {
@@ -99,7 +127,7 @@ export async function markLostAs(user: AccessUser, leadId: string, raw: MarkLost
     const parsed = lostSchema.safeParse(raw);
     if (!parsed.success) return { error: "Neplatné údaje." };
     const input = parsed.data;
-    const fp = canonical({ status: "LOST", reason: trim(input.reason), cancelTask: cancelFp(input.cancelTask) });
+    const fp = canonical({ status: "LOST", reason: trim(input.reason), cancelTask: cancelFp(input.cancelTask), withdraw: withdrawFp(input.withdraw) });
     return runKeyed(
         input.idempotencyKey,
         { userId: user.id, leadId, types: ["STATUS_CHANGED"], fp },
@@ -109,6 +137,7 @@ export async function markLostAs(user: AccessUser, leadId: string, raw: MarkLost
                 await deal.markLost(tx, actor, lead, trim(input.reason), "PIPELINE", {
                     cancelTask: input.cancelTask,
                     primary: { key: input.idempotencyKey, fp },
+                    withdraw: input.withdraw,
                 });
             }),
         (error) => toActionError(error, "Nepodarilo sa uložiť.", "markLost"),

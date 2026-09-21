@@ -475,6 +475,14 @@ different work; the SQL twin is covered by the parity test (§10.10).
 
 ### 6.10 Closing and reopening a deal (R02-5)
 
+> **Final matrix (supersedes the bullets below where they differ; Michal's P7 in `wave-5-workflow.md` §6, implemented after
+> implementation reviews R01/R02).** Open client requests are **withdrawn** — by exact row id, with a mandatory reason,
+> under the Lead lock, one revision bump, one audit row — when the deal is: snoozed from the action sheet; snoozed by a
+> manager in the detail; closed as LOST or UNREACHABLE from the action sheet or by a manager. They are **left open as
+> history** only when a manager marks the deal **WON** (a withdraw payload is refused there). Reopening never revives a
+> withdrawn row; it revives the send step only for rows that stayed open (WON). Test 17's first half is replaced by
+> `w5CloseWithdraw`, `w5ManagerClose` and `w5ManagerSnooze`.
+
 - **Closing** (WON / LOST / UNREACHABLE) does not rewrite the history: open rows stay `OPEN` but dormant, because the
   checklist, warnings and counts only apply to active deals. The step is cleared as today.
 - **Reopening** uses the same default as every other command (§6.8): if something is still outstanding, the step is

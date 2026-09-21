@@ -77,6 +77,7 @@ recorded here because the row is removed after rollout.
 | `ActivityType` | `TASK_CREATED`, `TASK_MESSAGE`, `TASK_DONE`, `TASK_DECLINED`, `TASK_CANCELLED`, `TASK_REASSIGNED`, `TASK_RESULT_DISMISSED` | wave 3 | TEST |
 | `ActivityType` | `CLIENT_ASK_CHANGED` (S-18) | wave 5 | TEST |
 | `CallOutcome` | `INTERESTED` (S-19) | wave 5 | TEST |
+| `ActivityType` | `TASK_PART_ADDED`, `TASK_PART_DONE`, `TASK_PART_DECLINED`, `TASK_PART_WITHDRAWN` (S-14), `PRICE_CHANGED` (S-15) | wave 4 | TEST |
 
 `ALTER TYPE … ADD VALUE` is additive and cheap, but **a value added inside a transaction cannot be used by the same
 transaction** — a rollout script must never add a value and write rows using it in one go, and the schema must land
@@ -93,6 +94,7 @@ transaction** — a rollout script must never add a value and write rows using i
 | `RequestContent` | `INFO`, `PRICELIST`, `PRICE`, `DESIGN`, `REVIEW` (S-16) | wave 5 | TEST |
 | `RequestState` | `OPEN`, `SENT`, `WITHDRAWN` (S-16) | wave 5 | TEST |
 | `RequestOrigin` | `LIVE`, `MIGRATED_RECEIPT`, `MIGRATED_OPEN_STEP` (S-16) | wave 5 | TEST |
+| `DealTaskPartStatus` | `REQUESTED`, `DELIVERED`, `DECLINED`, `WITHDRAWN` (S-13a) | wave 4 | TEST |
 
 ### 1.3 `Lead` — new columns
 
@@ -117,6 +119,22 @@ contained only `CREATE TYPE` ×3, `ALTER TYPE … ADD VALUE` ×2, `ADD COLUMN` �
 `CREATE [UNIQUE] INDEX` ×3 and `ADD CONSTRAINT … FOREIGN KEY` ×5 — **no `DROP`, no retype**. `prisma db push`
 applied it without a data-loss warning and a second run reported "already in sync". Endpoint verified before the
 command: `…nhww8x` / `neondb`.
+
+**Wave 4 application on test (2026-09-20), in two steps.** Endpoint verified before each command
+(`…nhww8x` / `neondb`); both diffs were generated with `migrate diff --from-config-datasource --to-schema` and read
+before applying, then applied with `db execute` and confirmed with a second `migrate diff` that came back empty.
+
+- **S-13a + S-14 + S-15 (additive):** `CREATE TYPE "DealTaskPartStatus"` ×1, `ALTER TYPE "ActivityType" … ADD VALUE`
+  ×5, `ADD COLUMN` ×2 on `DealTask` (both nullable), `CREATE TABLE "DealTaskPart"` ×1, `CREATE INDEX` ×1,
+  `CREATE UNIQUE INDEX` ×1, `ADD CONSTRAINT … FOREIGN KEY` ×3 — **no `DROP`, no retype**.
+- **S-13b (test-only drop, after the code was switched over and verified):**
+  `ALTER TABLE "DealTask" DROP COLUMN "contents", DROP COLUMN "result"` — two columns **production has never had**.
+  Nothing is owed to production for it and the ledger keeps "non-additive owed: none" true.
+
+  Test-data conversion between the two steps: `prisma/backfill/2026-09-wave4-parts.ts` derived one `DealTaskPart`
+  per task content (12 parts from 12 tasks, no blockers, zero drift verified). Production runs **none** of it — it
+  has no task rows to convert — so it is not a data step in §2. The script is kept only as the record of what ran
+  and refuses to run again.
 
 ### 1.4 `Activity` — new columns
 
@@ -143,13 +161,19 @@ explicit approval and do not answer "yes" to the warning.
 
 | Table | Columns | FKs | Came with | Status |
 |---|---|---|---|---|
-| `DealTask` | `id`, `leadId`, `type`, `contents DealTaskContent[]`, `status` (default `OPEN`), `text`, `requestedById`, `assigneeId`, `createdAt`, `closedAt?`, `closedById?`, `closeReason?`, `result jsonb?` | `leadId` → `Lead` `CASCADE`; `requestedById`, `assigneeId` → `User` `RESTRICT`; `closedById` → `User` `SET NULL` | wave 3 | TEST |
+| `DealTask` | `id`, `leadId`, `type`, `status` (default `OPEN`), `text`, `requestedById`, `assigneeId`, `createdAt`, `closedAt?`, `closedById?`, `closeReason?`, `fallbackKind?`, `fallbackNote?` | `leadId` → `Lead` `CASCADE`; `requestedById`, `assigneeId` → `User` `RESTRICT`; `closedById` → `User` `SET NULL` | wave 3, wave 4 | TEST |
+| `DealTaskPart` (S-13a) | `id`, `taskId`, `kind`, `status` (default `REQUESTED`), `result jsonb?`, `addedById`, `addedAt`, `resolvedById?`, `resolvedAt?`, `reason?`; **UNIQUE `(taskId, kind)`** | `taskId` → `DealTask` `CASCADE`; `addedById` → `User` `RESTRICT`; `resolvedById` → `User` `SET NULL` | wave 4 | TEST |
 | `DealOwnership` | `id`, `leadId`, `fromUserId?`, `toUserId?`, `byUserId`, `reason`, `note?`, `createdAt` | `leadId` → `Lead` `CASCADE`; `fromUserId`, `toUserId` → `User` `SET NULL`; `byUserId` → `User` `RESTRICT` | wave 3 | TEST |
 | `LeadRequest` (S-16) | `id`, `leadId`, `content`, `state` (default `OPEN`), `origin` (default `LIVE`), `requestedAt`, `requestedById?`, `sourceActivityId?`, `resolvedAt?`, `resolvedById?`, `resolvedActivityId?`, `reason?`, `migrationKey?` **UNIQUE**, `provenance jsonb?`, `createdAt`, `updatedAt` | `leadId` → `Lead` `CASCADE`; `requestedById`, `resolvedById` → `User` `SET NULL`; `sourceActivityId`, `resolvedActivityId` → `Activity` `SET NULL` | wave 5 | TEST |
 
-Both start empty. "At most one `OPEN` task per deal" is enforced **in code under the Lead row lock**, not by a partial
+All start empty. "At most one `OPEN` task per deal" is enforced **in code under the Lead row lock**, not by a partial
 unique index (Prisma cannot declare one, so `db push` would treat it as drift). If it ever moves into the database it is
 a new ledger row with a duplicate pre-check.
+
+**`DealTask.contents` / `DealTask.result` are gone (S-13b, wave 4)** and are deliberately **not** in the table above:
+production never had the task tables at all, so it receives the final parent + parts shape in one additive step. The
+drop was a test-only cleanup of a column production never saw — it is **not** a non-additive change owed to
+production, and there is nothing for a rollout to drop.
 
 ### 1.7 New indexes
 
@@ -164,6 +188,7 @@ a new ledger row with a duplicate pre-check.
 | `DealTask (assigneeId, status, createdAt)`, `DealTask (leadId, status)` | wave 3 | TEST |
 | `DealOwnership (leadId, createdAt)`, `DealOwnership (fromUserId, createdAt)` | wave 3 | TEST |
 | `LeadRequest (leadId, state)`, `LeadRequest (leadId, content, state)`, `LeadRequest (migrationKey)` **UNIQUE** | wave 5 | TEST |
+| `DealTaskPart (taskId, status)`, `DealTaskPart (taskId, kind)` **UNIQUE** | wave 4 | TEST |
 
 Plain `CREATE INDEX` takes a lock that blocks writes for its duration. The new-table indexes are instant (empty tables);
 for `Lead` and `Activity` do not assume the duration on production — review table sizes and schedule the rollout, or
@@ -252,6 +277,20 @@ approving any conversion. `NULL`/false means "not recorded/marked", not proof th
 
 - **There is no cenník in live production.** The old system had no such content and no flag; `PRICELIST` exists only on
   test (wave 3a). Any old cenník recipient must be named explicitly by Michal, otherwise no `PRICELIST` is created.
+- **Cenník recipients are named at the send conversion, not in the wave-5 script (implementation review R01-1).** The
+  named `leadId + activityId` gets `PRICELIST` added to that canonical `OFFER_SENT`; the wave-5 backfill then creates
+  the linked `SENT` request like for any other received content. There is no separate `--pricelist-leads` list any
+  more — it produced open work for people who had already received the cenník.
+- **Cenová ponuka (CP) mapping — clarified by Michal, 2026-09-20 (to be verified on the duplicate).** The old live app let
+  a user mark a CP as sent (`quoteSentAt` / `QUOTE_SENT`) and separately tick "klient videl" (`priceDisclosed`). Target:
+  **CP marked sent → `OFFER_SENT(EMAIL, [PRICE])`** (exact price sent, amount from the lead's price / a trustworthy old
+  note, dated from the CP), and **"videl" ticked → the client saw that price**. In the new model a `PRICE` receipt *is*
+  "the client saw the price" (there is no separate unseen-price state), so a CP marked sent **without** the "videl"
+  tick has no faithful representation: it is listed as an exception on the duplicate, not silently converted.
+  "Email o nás odoslaný" (`aboutUsSentAt` / `EMAIL_SENT`) → `OFFER_SENT(EMAIL, [ABOUT_US])` as before. A price that is
+  merely *written* on a lead (`Lead.price`) with none of those marks is **not** a send (it is today's editable price).
+  The earlier remark that every old email o nás also carried the exact price is **not** applied unless Michal
+  re-confirms it separately. This is the narrow rule already described in the table above; nothing in the mapping changed.
 - **A price plus "klient pozná cenu" means the exact calculated price, sent by email.** So `priceDisclosed = true` with
   a price present converts to one `OFFER_SENT(EMAIL, [PRICE])` with that amount and the old CP date. The inventory must
   still count and classify the exceptions (flag without a price, price without the flag, undo sequences, several CPs);
@@ -389,7 +428,8 @@ alone does not establish the live database state.
 
 ## 5. Wave 5 — the production migration of "what the client asked for" (NOT executed)
 
-Design: `context/features/01-salesrep/wave-5-proposal.md` §11. Script: `prisma/backfill/2026-09-wave5-requests.ts`.
+Design: `context/features/01-salesrep/wave-5-proposal.md` §11. Script: `prisma/backfill/2026-09-wave5-requests.ts` (its SQL is
+in `wave5-requests-sql.ts`, which `w5MigrationPricelist` runs in a rolled-back transaction).
 The schema (S-16 – S-19, §1 above) is applied and verified on test; **no production command has been run**, and the
 script has only been executed in dry-run mode against the test branch.
 
@@ -403,7 +443,7 @@ send step has no matching receipt still owes that content, so the pending work s
 | canonical `ABOUT_US` receipt | `LeadRequest(INFO, SENT)` dated with the first such send | `MIGRATED_RECEIPT` |
 | canonical `PRICE` receipt | `LeadRequest(PRICE, SENT)` | `MIGRATED_RECEIPT` |
 | canonical `DESIGN` receipt | `LeadRequest(DESIGN, SENT)` | `MIGRATED_RECEIPT` |
-| **cenník** | **nothing.** Live production had no cenník content and no flag (§3.3). Rows are created only for leads Michal names in `--pricelist-leads <file>` | `MIGRATED_RECEIPT` |
+| canonical `PRICELIST` receipt | `LeadRequest(PRICELIST, SENT)`. Live production had no cenník content and no flag (§3.3), so a receipt exists only where Michal named the recipient's email at the send conversion. **No manual list here** — an `OPEN` row for a recipient would be false work (R01-1) | `MIGRATED_RECEIPT` |
 | **rozbor webu** | nothing — the old system had no such content | — |
 | **open** deal with `SEND_QUOTE` / `SEND_DESIGN` / `SEND_EMAIL` and no matching receipt | one `LeadRequest(PRICE / DESIGN / INFO, OPEN)` | `MIGRATED_OPEN_STEP` |
 | anything else | no rows, no warnings | — |
@@ -412,8 +452,7 @@ One row per (lead, content), taken from the **first** matching receipt — the c
 
 ### 5.2 Identity, provenance and safety
 
-- `migrationKey` is deterministic (`w5:receipt:<leadId>:<content>`, `w5:step:<leadId>:<content>`,
-  `w5:pricelist:<leadId>`) and **unique**, so a rerun or an interrupted run cannot duplicate a row (`ON CONFLICT DO
+- `migrationKey` is deterministic (`w5:receipt:<leadId>:<content>`, `w5:step:<leadId>:<content>`) and **unique**, so a rerun or an interrupted run cannot duplicate a row (`ON CONFLICT DO
   NOTHING`). Covered by `w5Migration` in the concurrency suite.
 - `provenance` records the source activity / column, the rule and the confidence.
 - `requestedById` is **NULL** — the historical actor is unknown and is never attributed to today's owner.
@@ -432,7 +471,8 @@ Insert between steps 5 and 6 of §4:
 1. §1 schema (including S-16 – S-19; the enum values land **before** any code that writes `INTERESTED` /
    `CLIENT_ASK_CHANGED` is deployed, and never inside the transaction that adds them).
 2. The §3.3 old-send conversion and its reconciliation.
-3. Michal's list of cenník recipients, if any (`--pricelist-leads`); without the file no `PRICELIST` row is created.
+3. Michal's cenník recipients, if any, are already inside step 2 as `PRICELIST` added to named canonical sends; if
+   there are none, no `PRICELIST` row is created.
 4. `2026-09-wave5-requests.ts` dry-run → review the counts and the exception list → `--apply` → `--verify` (0 left).
 5. Reconcile: every lead's "Chceli" matches its "Klient dostal"; open deals with an unmet send step have exactly one
    `OPEN` row; no lead has two rows of the same content from the migration; demand statistics are unchanged.
@@ -441,5 +481,5 @@ Insert between steps 5 and 6 of §4:
 ### 5.4 What is still missing before any of this may run
 
 Unchanged from the wave-5 design §11: a **fresh duplicate of production** under its own env name (never
-`DATABASE_URL`), the exact deployed commit, permission for the read-only inventory, Michal's cenník list (probably
-empty), and a full rehearsal on that duplicate. None of that has happened.
+`DATABASE_URL`), the exact deployed commit, permission for the read-only inventory, Michal's cenník recipients (probably
+none; named at the send conversion), and a full rehearsal on that duplicate. None of that has happened.

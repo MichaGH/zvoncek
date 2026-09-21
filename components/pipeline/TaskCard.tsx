@@ -3,27 +3,48 @@
 import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowRightLeft, CircleX, Euro, Handshake, Hourglass, Lock, MessageSquare, Palette, SendHorizontal } from "lucide-react";
+import {
+    ArrowRightLeft,
+    CircleX,
+    Euro,
+    Handshake,
+    Hourglass,
+    Lock,
+    MessageSquare,
+    Palette,
+    Plus,
+    SendHorizontal,
+} from "lucide-react";
 import type { DealTaskContent } from "@/app/generated/prisma/enums";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import type { ActionError } from "@/lib/access/errors";
-import { declineTask, dismissResults, reassignTask, taskMessage } from "@/lib/actions/pipeline";
+import {
+    addTaskParts,
+    declineHandover,
+    dismissResults,
+    reassignTask,
+    resolveTaskParts,
+    taskMessage,
+    withdrawTaskParts,
+} from "@/lib/actions/pipeline";
 import { ACTIVITY_LABEL, NEXT_ACTION_LABEL, TASK_CONTENT_LABEL, TASK_STATUS_LABEL, TASK_TYPE_LABEL } from "@/lib/dictionaries";
 import { BUSINESS_TZ, businessDayMonth } from "@/lib/domain/businessTime";
 import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
 import { formatMoney } from "@/lib/domain/offers";
-import { TASK_AGE_ALERT_DAYS, type PendingItem } from "@/lib/domain/tasks";
+import { partMarkLabel, TASK_AGE_ALERT_DAYS, TASK_CONTENTS, type PartItemView, type PartView, type PendingItem } from "@/lib/domain/tasks";
 import type { DealDetailData, DealTaskView } from "@/lib/queries/pipeline";
 import { cn } from "@/lib/utils";
 
-// Karta úlohy na detaile obchodu (wave 3 §7):
-// 1. otvorená úloha – čo sa žiada, vlákno správ, akcie (obchodník: zrušiť; manažér: hotovo / zamietnuť / presunúť);
-// 2. „Od manažéra" – vrátené a ešte neposlané výsledky; každý sa rozhoduje zvlášť („Poslať klientovi…" / „Neposielam" /
-//    „Beriem na vedomie"). Manažér ich vidí ako „čaká, kým to obchodník pošle";
-// 3. história úloh zbalená.
+// Karta úlohy na detaile obchodu (wave 3 §7, wave 4 §2.9):
+// 1. otvorená úloha – čo sa žiada PO ČASTIACH (cena / návrh / iné), vlákno správ, akcie (vlastník: pridať časť,
+//    stiahnuť časť, zrušiť úlohu; manažér: hotovo, toto nerobím, presunúť);
+// 2. „Od manažéra" – vrátené a ešte neposlané výsledky; každý sa rozhoduje zvlášť („Poslať klientovi…" /
+//    „Neposielam" / „Beriem na vedomie"). Manažér ich vidí ako „čaká, kým to obchodník pošle";
+// 3. história úloh zbalená, tiež po častiach.
 // Tlačidlá sú len pomôcka – každý príkaz si právo overí sám pod zámkom Lead riadku.
 
 type Person = { id: string; firstName: string; lastName: string };
@@ -58,6 +79,75 @@ function SectionLabel({ children }: { children: ReactNode }) {
     return <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{children}</p>;
 }
 
+// Značka časti: ○ robí sa · ◆ pripravené · ✓ poslané · ⊘ neposiela sa · ✗ nerobí sa · – stiahnuté. „Pripravené" a „poslané" sú
+// zámerne rôzne znaky (wave 5 §3.7) a vedome neposlaná položka nikdy nedostane ✓ (R02-2).
+const PART_GLYPH: Record<PartView["mark"], string> = {
+    MAKING: "○",
+    PREPARED: "◆",
+    PARTLY_SENT: "✓",
+    SENT: "✓",
+    DISMISSED: "⊘",
+    DECLINED: "✗",
+    WITHDRAWN: "–",
+};
+const PART_TONE: Record<PartView["mark"], string> = {
+    MAKING: "text-muted-foreground",
+    PREPARED: "text-amber-600 dark:text-amber-400",
+    PARTLY_SENT: "text-emerald-600 dark:text-emerald-400",
+    SENT: "text-emerald-600 dark:text-emerald-400",
+    DISMISSED: "text-muted-foreground",
+    DECLINED: "text-destructive",
+    WITHDRAWN: "text-muted-foreground",
+};
+
+function itemLine(i: PartItemView): string {
+    const d = i.disposition;
+    if (d.state === "SENT") return `poslané klientovi ${businessDayMonth(new Date(d.at))}`;
+    if (d.state === "DISMISSED") return `neposlané${d.reason ? `: „${d.reason}“` : ""}`;
+    return "čaká na odoslanie";
+}
+
+function PartRow({ part, actions }: { part: PartView; actions?: ReactNode }) {
+    // Položky sa rozpíšu, až keď je o čom hovoriť: viac návrhov, alebo sa niečo vedome neposlalo (Q12).
+    const detail = part.items.length > 1 || part.dismissedCount > 0;
+    return (
+        <li className="space-y-1.5 p-3">
+            <div className="flex items-start gap-3">
+                <span className={cn("mt-0.5 w-4 shrink-0 text-center", PART_TONE[part.mark])}>{PART_GLYPH[part.mark]}</span>
+                <div className="min-w-0 flex-1">
+                    <p>
+                        <span className="font-medium">{TASK_CONTENT_LABEL[part.kind]}</span>
+                        <span className="ml-2 text-muted-foreground">{partMarkLabel(part)}</span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                        {part.resolvedBy ? `${part.resolvedBy.firstName} · ` : ""}
+                        {part.resolvedAt ? businessDayMonth(new Date(part.resolvedAt)) : `zadané ${businessDayMonth(new Date(part.addedAt))}`}
+                    </p>
+                    {/* R02-1: odpoveď na otázku / konzultáciu ostáva viditeľná, kým ju obchodník používa v kontakte s klientom. */}
+                    {part.kind === "OTHER" &&
+                        part.items.map((i) =>
+                            i.text ? (
+                                <p key={`answer:${i.kind}`} className="mt-1 whitespace-pre-wrap rounded-md bg-muted/60 px-3 py-2 text-sm">
+                                    {i.text}
+                                </p>
+                            ) : null,
+                        )}
+                    {detail && (
+                        <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                            {part.items.map((i) => (
+                                <li key={`${i.kind}:${i.designId ?? i.part ?? ""}`}>
+                                    {i.label} — {itemLine(i)}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+                {actions}
+            </div>
+        </li>
+    );
+}
+
 export default function TaskCard({
     lead,
     caps,
@@ -84,10 +174,13 @@ export default function TaskCard({
     const [pending, start] = useTransition();
     const [message, setMessage] = useState("");
     const [msgKey, setMsgKey] = useState(newKey);
-    const [declining, setDeclining] = useState(false);
-    const [declineReason, setDeclineReason] = useState("");
+    const [resolving, setResolving] = useState<DealTaskContent | "ALL" | "HANDOVER" | null>(null);
+    const [resolveReason, setResolveReason] = useState("");
     const [reassigning, setReassigning] = useState(false);
     const [reassignTo, setReassignTo] = useState("");
+    const [adding, setAdding] = useState(false);
+    const [addKinds, setAddKinds] = useState<DealTaskContent[]>([]);
+    const [addMessage, setAddMessage] = useState("");
     const [dismissing, setDismissing] = useState<string | null>(null);
     const [dismissReason, setDismissReason] = useState("");
     const [actionKey, setActionKey] = useState(newKey);
@@ -102,6 +195,14 @@ export default function TaskCard({
     const canWrite = caps.work && (isOwner || caps.manage);
     const reassignTargets = open ? resolvers.filter((r) => r.id !== open.assignee.id && r.id !== lead.owner?.id) : [];
     const sendable = lead.pending.some((i) => i.kind === "PRICE" || i.kind === "DESIGN");
+    const openParts = open?.parts.filter((p) => p.status === "REQUESTED") ?? [];
+    // Druh sa dá (znova) vyžiadať, kým nie je v hre: dodaný ani zamietnutý sa v tej istej úlohe už nepýta (§2.3).
+    const addable = open
+        ? TASK_CONTENTS.filter((k) => {
+              const part = open.parts.find((p) => p.kind === k);
+              return !part || part.status === "WITHDRAWN";
+          })
+        : [];
 
     if (!open && lead.pending.length === 0 && closed.length === 0 && !canAsk) return null;
 
@@ -131,6 +232,65 @@ export default function TaskCard({
         });
     }
 
+    // Manažér: „Toto nerobím" pre jednu časť, „Zamietnuť" pre všetko, čo ešte má.
+    function decline(kinds: DealTaskContent[], reason: string) {
+        if (!open) return;
+        start(async () => {
+            const r = await resolveTaskParts({
+                taskId: open.id,
+                expectedRevision: lead.revision,
+                idempotencyKey: actionKey,
+                parts: kinds.map((kind) => ({ kind, op: "DECLINE" as const, reason })),
+            });
+            handle(r, kinds.length === openParts.length ? "Zamietnuté – krok je odomknutý" : "Zapísané – zvyšok úlohy beží ďalej", () => {
+                setResolving(null);
+                setResolveReason("");
+            });
+        });
+    }
+
+    // Manažér neprijme odovzdanie klienta – klient ostáva u obchodníka a krok sa odomkne.
+    function refuseHandover(reason: string) {
+        if (!open) return;
+        start(async () => {
+            const r = await declineHandover({ taskId: open.id, expectedRevision: lead.revision, idempotencyKey: actionKey, reason });
+            handle(r, "Odovzdanie neprijaté – krok je odomknutý", () => {
+                setResolving(null);
+                setResolveReason("");
+            });
+        });
+    }
+
+    // Vlastník: „Už netreba" pre jednu časť, „Zrušiť úlohu" pre všetko, čo sa ešte robí.
+    function withdraw(kinds: DealTaskContent[], reason: string) {
+        if (!open) return;
+        start(async () => {
+            const r = await withdrawTaskParts({ taskId: open.id, expectedRevision: lead.revision, idempotencyKey: actionKey, kinds, reason });
+            handle(r, kinds.length === openParts.length ? "Úloha zrušená" : "Stiahnuté – zvyšok úlohy beží ďalej", () => {
+                setResolving(null);
+                setResolveReason("");
+            });
+        });
+    }
+
+    function addParts() {
+        if (!open || addKinds.length === 0 || !addMessage.trim()) return;
+        start(async () => {
+            const r = await addTaskParts({
+                taskId: open.id,
+                expectedRevision: lead.revision,
+                idempotencyKey: actionKey,
+                kinds: addKinds,
+                message: addMessage.trim(),
+            });
+            handle(r, "Pridané k úlohe", () => {
+                setAdding(false);
+                setAddKinds([]);
+                setAddMessage("");
+            });
+        });
+    }
+
     function dismiss(item: PendingItem, reason: string | null) {
         start(async () => {
             const r = await dismissResults({
@@ -138,7 +298,7 @@ export default function TaskCard({
                 expectedRevision: lead.revision,
                 idempotencyKey: actionKey,
                 taskId: item.taskId,
-                items: [{ kind: item.kind, ...(item.designId ? { designId: item.designId } : {}) }],
+                items: [{ kind: item.kind, ...(item.designId ? { designId: item.designId } : {}), ...(item.part ? { part: item.part } : {}) }],
                 reason,
             });
             handle(r, item.kind === "PRICE" || item.kind === "DESIGN" ? "Zapísané – neposiela sa" : "Zobraté na vedomie", () => {
@@ -148,8 +308,9 @@ export default function TaskCard({
         });
     }
 
-    const itemKeyOf = (i: PendingItem) => `${i.taskId}:${i.kind}:${i.designId ?? ""}`;
+    const itemKeyOf = (i: PendingItem) => `${i.taskId}:${i.kind}:${i.designId ?? i.part ?? ""}`;
     const thread = open ? open.events.filter((e) => e.type !== "TASK_CREATED") : [];
+    const resolveIsMine = caps.resolver && !isOwner;
 
     return (
         <Card className={open ? "border-amber-500/60" : undefined}>
@@ -206,6 +367,62 @@ export default function TaskCard({
                                 </span>
                             </p>
                         </div>
+
+                        {/* Časti úlohy – každá má vlastný osud (§2.3) */}
+                        {open.parts.length > 0 && (
+                            <ul className="divide-y border-t">
+                                {open.parts.map((part) => (
+                                    <PartRow
+                                        key={part.kind}
+                                        part={part}
+                                        actions={
+                                            part.status === "REQUESTED" && (resolveIsMine || isOwner) && resolving !== part.kind ? (
+                                                <Button
+                                                    size="sm"
+                                                    variant="ghost"
+                                                    className="h-8 shrink-0 text-muted-foreground"
+                                                    onClick={() => {
+                                                        setResolving(part.kind);
+                                                        setResolveReason("");
+                                                    }}
+                                                >
+                                                    {resolveIsMine ? "Toto nerobím…" : "Už netreba…"}
+                                                </Button>
+                                            ) : undefined
+                                        }
+                                    />
+                                ))}
+                            </ul>
+                        )}
+
+                        {resolving && (
+                            <div className="flex flex-col gap-2 border-t bg-muted/20 p-3 sm:flex-row">
+                                <Input
+                                    autoFocus
+                                    value={resolveReason}
+                                    maxLength={500}
+                                    onChange={(e) => setResolveReason(e.target.value)}
+                                    placeholder={resolving === "HANDOVER" || resolveIsMine ? "Dôvod (uvidí obchodník)" : "Prečo to už netreba"}
+                                />
+                                <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    className="h-9"
+                                    disabled={pending || !resolveReason.trim()}
+                                    onClick={() => {
+                                        if (resolving === "HANDOVER") return refuseHandover(resolveReason.trim());
+                                        const kinds = resolving === "ALL" ? openParts.map((p) => p.kind) : [resolving];
+                                        if (resolveIsMine) decline(kinds, resolveReason.trim());
+                                        else withdraw(kinds, resolveReason.trim());
+                                    }}
+                                >
+                                    {resolving === "HANDOVER" ? "Nepreberám" : resolving === "ALL" ? (resolveIsMine ? "Zamietnuť všetko" : "Zrušiť úlohu") : "Potvrdiť"}
+                                </Button>
+                                <Button size="sm" variant="ghost" className="h-9" onClick={() => setResolving(null)}>
+                                    Späť
+                                </Button>
+                            </div>
+                        )}
 
                         {/* Vlákno správ */}
                         {(thread.length > 0 || canWrite) && (
@@ -267,17 +484,50 @@ export default function TaskCard({
                             </div>
                         )}
 
-                        {/* Akcie */}
-                        {(caps.resolver || (isOwner && caps.askManager)) && (
+                        {/* Pridanie časti – vlastník si počas behu uvedomí, že treba aj niečo ďalšie (§2.1 bod 9) */}
+                        {adding && (
                             <div className="space-y-3 border-t p-4">
-                                {!declining && !reassigning && (
+                                <p className="text-xs text-muted-foreground">Pribudne k tej istej úlohe – {open.assignee.firstName} uvidí, prečo.</p>
+                                <div className="flex flex-wrap gap-3">
+                                    {addable.map((k) => (
+                                        <label key={k} className="flex items-center gap-2 text-sm">
+                                            <Checkbox
+                                                checked={addKinds.includes(k)}
+                                                onCheckedChange={(v) => setAddKinds((ids) => (v === true ? [...ids, k] : ids.filter((x) => x !== k)))}
+                                            />
+                                            {TASK_CONTENT_LABEL[k]}
+                                        </label>
+                                    ))}
+                                </div>
+                                <div className="flex flex-col gap-2 sm:flex-row">
+                                    <Input
+                                        autoFocus
+                                        value={addMessage}
+                                        maxLength={2000}
+                                        onChange={(e) => setAddMessage(e.target.value)}
+                                        placeholder="Napíš, čo pribudlo (napr. klient volal, chce aj návrh)"
+                                    />
+                                    <Button size="sm" className="h-9" disabled={pending || addKinds.length === 0 || !addMessage.trim()} onClick={addParts}>
+                                        Pridať
+                                    </Button>
+                                    <Button size="sm" variant="ghost" className="h-9" onClick={() => setAdding(false)}>
+                                        Späť
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Akcie */}
+                        {(caps.resolver || (isOwner && caps.askManager)) && !resolving && !adding && (
+                            <div className="space-y-3 border-t p-4">
+                                {!reassigning && (
                                     <div className="flex flex-wrap items-center gap-2">
-                                        {caps.resolver && open.type === "HELP" && (
+                                        {caps.resolver && open.type === "HELP" && openParts.length > 0 && (
                                             <>
                                                 <Button size="sm" onClick={() => onFinish(open, false)}>
                                                     Hotovo…
                                                 </Button>
-                                                {(open.contents.includes("PRICE") || open.contents.includes("DESIGN")) && (
+                                                {openParts.some((p) => p.kind === "PRICE" || p.kind === "DESIGN") && (
                                                     <Button size="sm" variant="outline" onClick={() => onFinish(open, true)}>
                                                         Poslal som to sám…
                                                     </Button>
@@ -295,9 +545,36 @@ export default function TaskCard({
                                                 Presunúť…
                                             </Button>
                                         )}
-                                        {caps.resolver && (
-                                            <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeclining(true)}>
-                                                {open.type === "HANDOVER" ? "Nie, pokračuj ty…" : "Zamietnuť…"}
+                                        {resolveIsMine && open.type === "HANDOVER" && (
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                className="text-destructive hover:text-destructive"
+                                                onClick={() => {
+                                                    setResolving("HANDOVER");
+                                                    setResolveReason("");
+                                                }}
+                                            >
+                                                Nie, pokračuj ty…
+                                            </Button>
+                                        )}
+                                        {resolveIsMine && open.type === "HELP" && openParts.length > 1 && (
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                className="text-destructive hover:text-destructive"
+                                                onClick={() => {
+                                                    setResolving("ALL");
+                                                    setResolveReason("");
+                                                }}
+                                            >
+                                                Zamietnuť všetko…
+                                            </Button>
+                                        )}
+                                        {isOwner && caps.askManager && addable.length > 0 && (
+                                            <Button size="sm" variant="ghost" onClick={() => setAdding(true)}>
+                                                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                                                Pridať
                                             </Button>
                                         )}
                                         {isOwner && caps.askManager && (
@@ -305,47 +582,6 @@ export default function TaskCard({
                                                 Zrušiť úlohu…
                                             </Button>
                                         )}
-                                    </div>
-                                )}
-
-                                {caps.resolver && declining && (
-                                    <div className="space-y-2">
-                                        <p className="text-xs text-muted-foreground">
-                                            {open.type === "HANDOVER"
-                                                ? "Klient ostáva u obchodníka. Krok sa odomkne."
-                                                : "Obchodník uvidí dôvod. Krok sa odomkne."}
-                                        </p>
-                                        <div className="flex flex-col gap-2 sm:flex-row">
-                                            <Input
-                                                autoFocus
-                                                value={declineReason}
-                                                maxLength={500}
-                                                onChange={(e) => setDeclineReason(e.target.value)}
-                                                placeholder="Dôvod (uvidí obchodník)"
-                                            />
-                                            <Button
-                                                size="sm"
-                                                variant="destructive"
-                                                className="h-9"
-                                                disabled={pending || !declineReason.trim()}
-                                                onClick={() =>
-                                                    start(async () => {
-                                                        const r = await declineTask({
-                                                            taskId: open.id,
-                                                            expectedRevision: lead.revision,
-                                                            idempotencyKey: actionKey,
-                                                            reason: declineReason.trim(),
-                                                        });
-                                                        handle(r, "Zamietnuté – krok je odomknutý", () => setDeclining(false));
-                                                    })
-                                                }
-                                            >
-                                                {open.type === "HANDOVER" ? "Nepreberám" : "Zamietnuť"}
-                                            </Button>
-                                            <Button size="sm" variant="ghost" className="h-9" onClick={() => setDeclining(false)}>
-                                                Späť
-                                            </Button>
-                                        </div>
                                     </div>
                                 )}
 
@@ -423,7 +659,7 @@ export default function TaskCard({
                                                             : item.kind === "DESIGN"
                                                               ? `Návrh ${item.design?.label ?? ""}`.trim()
                                                               : item.kind === "DECLINED"
-                                                                ? "Manažér zamietol"
+                                                                ? `Manažér nerobí: ${item.part ? TASK_CONTENT_LABEL[item.part].toLowerCase() : "úlohu"}`
                                                                 : "Odpoveď manažéra"}
                                                     </span>
                                                     <span className="ml-2 text-xs text-muted-foreground">
@@ -505,18 +741,13 @@ export default function TaskCard({
                                         </span>
                                     </div>
                                     <p className="whitespace-pre-wrap text-muted-foreground">{t.text}</p>
-                                    {t.result?.price && (
-                                        <p>
-                                            Cena: {formatMoney(t.result.price.amount)}
-                                            {t.result.price.note ? ` – ${t.result.price.note}` : ""}
-                                        </p>
+                                    {t.parts.length > 0 && (
+                                        <ul className="divide-y rounded-md border">
+                                            {t.parts.map((part) => (
+                                                <PartRow key={part.kind} part={part} />
+                                            ))}
+                                        </ul>
                                     )}
-                                    {t.result?.designs?.map((d) => (
-                                        <p key={d.id}>
-                                            Návrh: {d.label ?? "bez názvu"} (v{d.version})
-                                        </p>
-                                    ))}
-                                    {t.result?.answer && <p className="whitespace-pre-wrap">Odpoveď: {t.result.answer}</p>}
                                     {t.closeReason && <p className="text-muted-foreground">Dôvod: {t.closeReason}</p>}
                                 </li>
                             ))}

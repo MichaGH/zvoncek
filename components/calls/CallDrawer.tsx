@@ -1,15 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import { RequestContentPicker } from "@/components/shared/OptionCard";
 import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import type { RequestContent } from "@/app/generated/prisma/enums";
 import type { QueueLead } from "@/lib/queries/calls";
 import type { FirstCallOutcome } from "@/lib/domain/leadFlow";
-import { REQUEST_CONTENT_LABEL, REQUEST_CONTENTS } from "@/lib/domain/clientRequests";
+import { REQUEST_CONTENT_LABEL } from "@/lib/domain/clientRequests";
 import type { OutcomeOpts } from "./CallQueue";
 
 type Step = "main" | "scheduled" | "interested" | "email" | "snooze";
@@ -18,12 +18,7 @@ type Step = "main" | "scheduled" | "interested" | "email" | "snooze";
 type PendingOutcome = { outcome: FirstCallOutcome; label: string } | null;
 
 // Wave 5 (§3.1): jeden pozitívny výsledok („majú záujem") a zaškrtnutie toho, ČO chceli – aj viac naraz.
-// Pôvodné tri tlačidlá (Chcú cenu / návrh / info) boli jedna voľba, takže druhé prianie končilo v poznámke.
-const ASK_HINT: Partial<Record<RequestContent, string>> = {
-    INFO: "kto sme, čo sme robili",
-    PRICE: "cena pre nich, nie cenník",
-    REVIEW: "čo je zlé na ich webe – pýtajú sa na to zriedka",
-};
+// Karty sú tie isté ako v akčnom okne obchodu (components/shared/OptionCard.tsx).
 
 // Trieda pre natívne date/datetime inputy:
 // text-[16px] – zabraňuje iOS auto-zoom pri focuse
@@ -184,25 +179,12 @@ export default function CallDrawer({
                                         ? `Pravdepodobne odovzdá: ${recipientPreview} (náhľad)`
                                         : "Pravdepodobne nepriradené – obchod priradí manažér (náhľad)"}
                                 </p>
-                                <p className="px-1 pb-1 text-sm font-medium">Čo chceli? (môže byť viac)</p>
-                                {REQUEST_CONTENTS.map((content) => (
-                                    <label
-                                        key={content}
-                                        className="flex items-start gap-3 rounded-lg border p-3 text-sm"
-                                    >
-                                        <Checkbox
-                                            data-vaul-no-drag
-                                            checked={asked.includes(content)}
-                                            onCheckedChange={(v) => toggleAsk(content, v === true)}
-                                        />
-                                        <span className="min-w-0">
-                                            {REQUEST_CONTENT_LABEL[content]}
-                                            {ASK_HINT[content] && (
-                                                <span className="block text-xs text-muted-foreground">{ASK_HINT[content]}</span>
-                                            )}
-                                        </span>
-                                    </label>
-                                ))}
+                                <p className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Čo chceli</p>
+                                <RequestContentPicker
+                                    value={asked}
+                                    note="Môžeš vybrať viac možností."
+                                    onToggle={(content) => toggleAsk(content, !asked.includes(content))}
+                                />
                                 <Button className="h-12 w-full" disabled={asked.length === 0} onClick={goToEmail}>
                                     {asked.length === 0 ? "Zaškrtni, čo chceli" : "Pokračovať"}
                                 </Button>

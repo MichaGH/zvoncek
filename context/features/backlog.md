@@ -6,8 +6,8 @@ Michal's approval. When an item is scheduled into a wave, move it there and dele
 why, where it came from, what is already known.
 
 BL-12 and BL-13 are temporarily retained as stable cross-reference IDs because existing designs, reviews and code
-comments cite them. Their scheduling status is authoritative in their rows: BL-13 / wave 5 is built on test; BL-12 / wave 4
-follows it. Do not renumber either wave.
+comments cite them. Their scheduling status is authoritative in their rows: both wave 5 (BL-13) and wave 4 Part A
+(BL-12) are built on test. Do not renumber either wave.
 
 | id | Item | Why / origin | Known so far |
 |---|---|---|---|
@@ -22,5 +22,6 @@ follows it. Do not renumber either wave.
 | BL-09 | **Order / WON process** — a WON step with final prices and details; what was ordered from several products (web, SEO, marketing, social media) | `01-salesrep/round2-deal-workspace.md` §7 non-goals; Michal on "Chcú objednať" (wave 3 D15): *"order is pre-made, because we also have different things, like SEO, marketing, social media… we will need to remake this in the future"* | Wave 3 removed the ORDER step and ORDER request; "Chcú objednať" is a recorded reply that offers a handover. After pricing. |
 | BL-10 | **Statistics rebuild** (`/dashboard/stats`), incl. manager turnaround from task timestamps | round 2 §7 non-goals; wave 3 task timestamps | Not scheduled. |
 | BL-11 | **"Transferred" marker and filter** in the manager's pipeline — e.g. a blue dot on deals that were moved to him, and a filter "presunuté" | Michal, 2026-09-19 (wave 3 review W3-R02, deactivation) | Data exists from wave 3 on (`DealOwnership`). |
-| BL-12 | **One task for price + návrh** — **scheduled after wave 5; wave 4 Part A is blocked**, see `01-salesrep/wave-4-proposal.md` §2 (both manager-work parts selectable in any order, partial delivery with ✓ per part) | Michal, 2026-09-19 | Wave 4 consumes wave 5's shipped remaining-to-send projection; it must not own client intent or recreate the combined send checklist. Re-review wave 4 after wave 5, then delete this row when the wave-4 design is final. |
+| BL-12 | ~~One task with several parts (cena · návrh · iné)~~ **BUILT on the test branch 2026-09-20** (wave 4 Part A) | Michal, 2026-09-19 + 2026-09-20 | Design: `01-salesrep/wave-4-proposal.md` §2; what shipped and what it still owes: `context/progress-tracker.md` ("Wave 4"). Parts B (notes) and C (order note) of that file are **not** built and wait on Q5 / Q6. Delete this row after the production rollout. |
 | BL-13 | ~~Wave 5 — remake the price / návrh / email selection~~ **BUILT on the test branch 2026-09-20** | Michal, 2026-09-19 | Design: `01-salesrep/wave-5-proposal.md`; what shipped and what it still owes: `context/progress-tracker.md` ("Wave 5"). Delete this row after the production rollout (`context/domain/db-changes.md` §5). |
+| BL-14 | **REVIEW as a manager task part** — a "rozbor webu" (web review) is a client-facing deliverable, so when a rep needs the manager's help for it, it should be its own task part, not folded into "Otázka / konzultácia" | Michal, 2026-09-21 (partA-R02 fix of R02-1) | Needs a new `DealTaskContent` value (additive enum) and its own part rules; not scheduled. The task part `OTHER` is now labelled "Otázka / konzultácia" in the UI only. |

@@ -41,7 +41,7 @@ import {
     PROJECT_TYPE_LABEL,
     STATUS_LABEL,
 } from "@/lib/dictionaries";
-import { BUSINESS_TZ, businessDate, businessDayMonth, businessDayStart, businessInputParts } from "@/lib/domain/businessTime";
+import { addBusinessCalendarDays, BUSINESS_TZ, businessDate, businessDayMonth, businessDayStart, businessInputParts } from "@/lib/domain/businessTime";
 import { CLIENT_SECTION_LABEL } from "@/lib/domain/clientSections";
 import type { DealCapabilities } from "@/lib/domain/dealCapabilities";
 import type { DealStatus } from "@/lib/domain/dealMutations";
@@ -130,6 +130,16 @@ export default function DealDetail({
     const [ownerConfirm, setOwnerConfirm] = useState<string | null | undefined>(undefined);
     const [taskAssignee, setTaskAssignee] = useState("");
     const [cancelNote, setCancelNote] = useState("");
+    // Uspatie s otvorenou úlohou: kedy sa obchod zobudí (R01-5) – bez neho by zrušená úloha nechala krok „dnes".
+    const [wakeDate, setWakeDate] = useState("");
+    // Q2: uzavretie (nie výhra) s nevybavenými požiadavkami klienta ich stiahne – s dôvodom a presnými id.
+    const openAsks = lead.openRequests;
+    const askLabels = [...new Set(openAsks.map((r) => REQUEST_CONTENT_LABEL[r.content].toLowerCase()))].join(", ");
+    // Odloženie, LOST a UNREACHABLE nevybavené požiadavky stiahnu; výhra a aktivácia nie.
+    const dropsAsks = (status: DealStatus | null) =>
+        (status === "SNOOZED" || status === "LOST" || status === "UNREACHABLE") && openAsks.length > 0;
+    const withdrawFor = (status: DealStatus, why: string) =>
+        dropsAsks(status) ? { withdraw: { ids: openAsks.map((r) => r.id), reason: why } } : {};
     const [actionKey, setActionKey] = useState(newKey);
     // Z akčného okna v zozname sa „Poslali sme ponuku" otvára tu (?zaznam=ponuka), lebo dialóg potrebuje návrhy a cenu.
     const [offerDialog, setOfferDialog] = useState<null | { historical: boolean; designId?: string }>(null);
@@ -197,8 +207,9 @@ export default function DealDetail({
     // Zmena stavu z výberu: uzavretie / uspanie s otvorenou úlohou ju výslovne zruší; uzavretie odmietne neposlané výsledky.
     function pickStatus(value: DealStatus) {
         const closing = CLOSED.includes(value);
-        if ((openTask && (closing || value === "SNOOZED")) || (closing && lead.pending.length > 0)) {
+        if ((openTask && (closing || value === "SNOOZED")) || (closing && lead.pending.length > 0) || dropsAsks(value)) {
             setCancelNote("");
+            setWakeDate("");
             setStatusConfirm(value);
             return;
         }
@@ -215,6 +226,8 @@ export default function DealDetail({
                 expectedRevision: lead.revision,
                 idempotencyKey: actionKey,
                 ...(openTask ? { cancelTask: { taskId: openTask.id, reason: cancelNote.trim() || null } } : {}),
+                ...(value === "SNOOZED" && openTask ? { snoozeUntil: wakeDate } : {}),
+                ...withdrawFor(value, cancelNote.trim()),
             }),
         );
     }
@@ -266,6 +279,8 @@ export default function DealDetail({
         clientPrice: lead.offers.lastPrice,
         gotPricelist: lead.offers.offerPricelistAt !== null,
         outstanding: lead.outstanding,
+        openRequests: lead.openRequests,
+        stepHeadline: lead.stepHeadline,
     };
 
     // Predvyplnenie „Zmeniť krok" z aktuálneho kroku (druh mimo ponuky akčného okna → „Zavolať").
@@ -512,6 +527,7 @@ export default function DealDetail({
                             revision={lead.revision}
                             price={lead.price}
                             priceNote={lead.priceNote}
+                            priceHistory={lead.priceHistory}
                             offers={lead.offers}
                             askHistory={lead.askHistory}
                             outstandingRows={lead.outstandingRows}
@@ -606,6 +622,11 @@ export default function DealDetail({
                                                 onChange={(e) => setLostReason(e.target.value)}
                                                 className="min-h-[72px]"
                                             />
+                                            {openAsks.length > 0 && (
+                                                <p className="text-xs text-amber-700 dark:text-amber-400">
+                                                    Klient chcel: {askLabels}. Uzavretím sa to nepošle – dôvod je povinný.
+                                                </p>
+                                            )}
                                             {openTask && (
                                                 <p className="text-xs text-muted-foreground">
                                                     Zruší sa aj otvorená úloha pre {openTask.assignee.firstName} (obchod uzavretý).
@@ -615,7 +636,7 @@ export default function DealDetail({
                                                 size="sm"
                                                 variant="outline"
                                                 className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                                                disabled={savingLost}
+                                                disabled={savingLost || (openAsks.length > 0 && !lostReason.trim())}
                                                 onClick={async () => {
                                                     setSavingLost(true);
                                                     report(
@@ -624,6 +645,7 @@ export default function DealDetail({
                                                             expectedRevision: lead.revision,
                                                             idempotencyKey: actionKey,
                                                             ...(openTask ? { cancelTask: { taskId: openTask.id, reason: null } } : {}),
+                                                            ...withdrawFor("LOST", lostReason.trim()),
                                                         }),
                                                     );
                                                     setActionKey(newKey());
@@ -632,7 +654,7 @@ export default function DealDetail({
                                                 }}
                                             >
                                                 <XCircle className="mr-1.5 h-3.5 w-3.5" />
-                                                {savingLost ? "Ukladám…" : "Nemajú záujem"}
+                                                {savingLost ? "Ukladám…" : openAsks.length > 0 && !lostReason.trim() ? "Napíš dôvod" : "Nemajú záujem"}
                                             </Button>
                                         </>
                                     )}
@@ -670,7 +692,7 @@ export default function DealDetail({
                                                 <div className={`space-y-1 py-3 text-sm${activity.revertedAt ? " opacity-60" : ""}`}>
                                                     <div className="flex flex-wrap items-center gap-2">
                                                         <span className={`font-medium${activity.revertedAt ? " line-through" : ""}`}>
-                                                            {activity.offer?.channel === "PHONE" ? "↳ Cena povedaná v hovore" : ACTIVITY_LABEL[activity.type]}
+                                                            {activity.offer?.channel === "PHONE" ? (activity.offer.via === "SMS" ? "↳ Cena uvedená v SMS" : "↳ Cena povedaná v hovore") : ACTIVITY_LABEL[activity.type]}
                                                         </span>
                                                         {activity.offer?.historical && (
                                                             <Badge variant="outline" className="font-normal">
@@ -858,10 +880,34 @@ export default function DealDetail({
                         {CLOSED.includes(statusConfirm) && lead.pending.length > 0 && (
                             <p className="text-muted-foreground">Neposlané výsledky ({lead.pendingText}) sa zapíšu ako neposielané – obchod uzavretý.</p>
                         )}
-                        {openTask && (
-                            <Input value={cancelNote} onChange={(e) => setCancelNote(e.target.value)} placeholder="Dôvod (nepovinné)" />
+                        {dropsAsks(statusConfirm) && (
+                            <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+                                Klient chcel: {askLabels}. {statusConfirm === "SNOOZED" ? "Odložením" : "Uzavretím"} sa to nepošle a stiahne sa to z „Chceli“.
+                            </p>
                         )}
-                        <Button className="h-11 w-full" disabled={busy} onClick={confirmStatus}>
+                        {(openTask || dropsAsks(statusConfirm)) && (
+                            <Input
+                                value={cancelNote}
+                                onChange={(e) => setCancelNote(e.target.value)}
+                                placeholder={dropsAsks(statusConfirm) ? "Dôvod (povinný)" : "Dôvod (nepovinné)"}
+                            />
+                        )}
+                        {statusConfirm === "SNOOZED" && openTask && (
+                            <label className="flex items-center gap-3">
+                                <span className="shrink-0 text-muted-foreground">Zobudiť</span>
+                                <Input
+                                    type="date"
+                                    value={wakeDate}
+                                    min={addBusinessCalendarDays(businessDate(new Date()), 1)}
+                                    onChange={(e) => setWakeDate(e.target.value)}
+                                />
+                            </label>
+                        )}
+                        <Button
+                            className="h-11 w-full"
+                            disabled={busy || (dropsAsks(statusConfirm) && !cancelNote.trim()) || (statusConfirm === "SNOOZED" && Boolean(openTask) && !wakeDate)}
+                            onClick={confirmStatus}
+                        >
                             Potvrdiť
                         </Button>
                     </div>

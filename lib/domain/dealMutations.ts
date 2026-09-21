@@ -1,4 +1,4 @@
-import type { Lead } from "@/app/generated/prisma/client";
+import type { DealTask, Lead } from "@/app/generated/prisma/client";
 import type {
     ActivitySource,
     LeadStatus,
@@ -26,7 +26,9 @@ import {
 } from "@/lib/domain/businessTime";
 import { defaultStep } from "@/lib/domain/clientRequests";
 import { hadNextAction, updateLead } from "@/lib/domain/leadWrites";
-import { outstandingOf } from "@/lib/domain/requestMutations";
+import { stepOnTaskClose } from "@/lib/domain/lockedStep";
+import { outstandingOf, withdrawOpenOnLeave } from "@/lib/domain/requestMutations";
+import type { WithdrawInput } from "@/lib/domain/clientRequests";
 import { resolveSchedule, scheduleSchema, type Schedule } from "@/lib/domain/schedule";
 import {
     assertStepAllowed,
@@ -35,7 +37,6 @@ import {
     dismissAllPending,
     openTaskOf,
     ownerTransition,
-    unlockStep,
 } from "@/lib/domain/taskMutations";
 import { z } from "zod";
 import { STATUS_LABEL } from "@/lib/dictionaries";
@@ -68,16 +69,16 @@ async function cancelForStatus(
     cancelTask: CancelTaskInput | null | undefined,
     source: ActivitySource,
     reasonText: (userReason: string | null) => string,
-): Promise<boolean> {
+): Promise<DealTask | null> {
     const open = await openTaskOf(tx, lead.id);
     if (!open) {
         if (cancelTask) throw new AccessError("STALE", "Úloha sa medzitým zmenila – obnovujem.");
-        return false;
+        return null;
     }
     if (!cancelTask) throw new AccessError("STEP_LOCKED");
     if (cancelTask.taskId !== open.id) throw new AccessError("STALE", "Úloha sa medzitým zmenila – obnovujem.");
     await cancelOpenTask(tx, actor, open, reasonText(cancelTask.reason?.trim() || null), source);
-    return true;
+    return open;
 }
 
 // Follow-up hovor o 7 obchodných kalendárnych dní od odoslania, len deň.
@@ -167,12 +168,22 @@ export async function updateDealContact(tx: Tx, actor: DealActor, lead: Lead, in
 
 // ── Cena ─────────────────────────────────────────────────────────────────────
 
+// Wave 4 D5: zmena ceny je OBCHODNÝ riadok, ktorý vidí aj obchodník – nie audit, ktorý sa k nej nikdy nedostane.
+// `via` hovorí, čo ju spôsobilo, aby jedna akcia nevyrobila v histórii dva riadky o tom istom (§5.1):
+//   EDIT = cenové okienko (vlastný riadok histórie, môže niesť dôvod)
+//   TASK = manažér ju odovzdal v úlohe   ·   SEND = odišla klientovi s inou sumou
+// TASK a SEND sa zapíšu tiež, ale rozprávanie už vedie riadok úlohy / odoslania – karta ceny ich ukáže vo svojom
+// zozname. PRICE_CHANGED nie je kontakt s klientom: nehýbe „Naposledy" (LAST_TOUCH_TYPES) a nedá sa prečiarknuť
+// (CORRECTABLE_TYPES) – oprava internej zmeny je ďalšia zmena.
+export type PriceChangeVia = "EDIT" | "TASK" | "SEND";
+
 export async function saveQuote(
     tx: Tx,
     actor: DealActor,
     lead: Lead,
     input: { price: number | null; priceNote: string | null },
     source: ActivitySource,
+    opts: { via?: PriceChangeVia; reason?: string | null } = {},
 ) {
     input = parseInput(
         z.object({ price: z.number().finite().min(0).max(10_000_000).nullable(), priceNote: z.string().max(2000).nullable() }).strict(),
@@ -180,20 +191,36 @@ export async function saveQuote(
     );
     const priceNote = input.priceNote?.trim() || null;
     const oldPrice = lead.price != null ? Number(lead.price) : null;
+    const oldNote = lead.priceNote ?? null;
     await updateLead(tx, lead.id, { price: input.price, priceNote });
-    if (oldPrice !== input.price) {
-        const fmt = (p: number | null) => (p != null ? `${p} €` : "—");
-        await tx.activity.create({
-            data: createAuditActivity({
-                leadId: lead.id,
-                userId: actor.id,
-                type: "CONTACT_UPDATED",
-                source,
-                note: `Cena: ${fmt(oldPrice)} → ${fmt(input.price)}`,
-            }),
-        });
-    }
+    // Aj samotná zmena rozpisu je zmena ceny – dovtedy sa strácala potichu (D5).
+    if (oldPrice === input.price && oldNote === priceNote) return;
+    const via: PriceChangeVia = opts.via ?? "EDIT";
+    const reason = via === "EDIT" ? (opts.reason?.trim() || null) : PRICE_CHANGE_REASON[via];
+    const fmt = (p: number | null) => (p != null ? `${p} €` : "—");
+    const what = oldPrice !== input.price ? `${fmt(oldPrice)} → ${fmt(input.price)}` : `${fmt(input.price)} – upravený rozpis`;
+    await tx.activity.create({
+        data: {
+            leadId: lead.id,
+            userId: actor.id,
+            type: "PRICE_CHANGED",
+            category: "BUSINESS",
+            source,
+            note: `Cena: ${what}${reason ? ` (${reason})` : ""}`,
+            meta: {
+                from: { amount: oldPrice, note: oldNote },
+                to: { amount: input.price, note: priceNote },
+                via,
+                reason,
+            },
+        },
+    });
 }
+
+const PRICE_CHANGE_REASON: Record<Exclude<PriceChangeVia, "EDIT">, string> = {
+    TASK: "z úlohy pre manažéra",
+    SEND: "pri odoslaní klientovi",
+};
 
 // ── Ďalší krok ───────────────────────────────────────────────────────────────
 
@@ -278,9 +305,16 @@ export async function closeDeal(
         note: string;
         cancelTask?: CancelTaskInput | null;
         primary?: Primary;
+        // Q2: pri LOST / UNREACHABLE sa nevybavené požiadavky klienta stiahnu (presné id + dôvod); výhra ich nechá ako históriu.
+        withdraw?: WithdrawInput | null;
     },
     source: ActivitySource,
 ) {
+    if (input.status === "WON") {
+        if (input.withdraw) throw new AccessError("FORBIDDEN", "Neplatné údaje.");
+    } else {
+        await withdrawOpenOnLeave(tx, { leadId: lead.id, actorId: actor.id, source, via: input.status, withdraw: input.withdraw });
+    }
     await cancelForStatus(tx, actor, lead, input.cancelTask, source, (r) => (r ? `obchod uzavretý – ${r}` : "obchod uzavretý"));
     await dismissAllPending(tx, actor, lead.id, "obchod uzavretý", source);
     const now = new Date();
@@ -315,7 +349,7 @@ export async function markLost(
     lead: Lead,
     reason: string | null,
     source: ActivitySource,
-    opts: { cancelTask?: CancelTaskInput | null; primary?: Primary; people?: ReopenPeople } = {},
+    opts: { cancelTask?: CancelTaskInput | null; primary?: Primary; people?: ReopenPeople; withdraw?: WithdrawInput | null } = {},
 ) {
     if (isClosedDealStatus(lead.status)) throw new AccessError("DEAL_CLOSED");
     await closeDeal(
@@ -328,6 +362,7 @@ export async function markLost(
             note: reason?.trim() ? `Stratená: ${reason.trim()}` : "Označené ako stratené",
             cancelTask: opts.cancelTask,
             primary: opts.primary,
+            withdraw: opts.withdraw,
         },
         source,
     );
@@ -399,12 +434,23 @@ export async function changeDealStatus(
     lead: Lead,
     status: DealStatus,
     source: ActivitySource,
-    opts: { cancelTask?: CancelTaskInput | null; primary?: Primary; people?: ReopenPeople } = {},
+    opts: {
+        cancelTask?: CancelTaskInput | null;
+        primary?: Primary;
+        people?: ReopenPeople;
+        withdraw?: WithdrawInput | null;
+        // Kedy sa uspaný obchod zobudí. Povinný, keď uspatie ruší otvorenú úlohu – inak by krok dostal „dnes" (R01-5).
+        snoozeUntil?: string | null;
+    } = {},
 ) {
     if (!(DEAL_STATUSES as readonly string[]).includes(status)) throw new AccessError("FORBIDDEN", "Neplatný stav obchodu.");
     if (status === lead.status) {
-        if (opts.cancelTask) throw new AccessError("STALE", "Úloha sa medzitým zmenila – obnovujem.");
+        if (opts.cancelTask || opts.withdraw) throw new AccessError("STALE", "Úloha sa medzitým zmenila – obnovujem.");
         return;
+    }
+    // R02-1: stiahnutie požiadaviek majú len stavy, ktoré ich spotrebúvajú (odloženie, LOST, UNREACHABLE).
+    if (opts.withdraw && status !== "SNOOZED" && status !== "LOST" && status !== "UNREACHABLE") {
+        throw new AccessError("FORBIDDEN", "Neplatné údaje.");
     }
     const wasClosed = isClosedDealStatus(lead.status);
     if (status === "WON" || status === "LOST" || status === "UNREACHABLE") {
@@ -412,7 +458,7 @@ export async function changeDealStatus(
             tx,
             actor,
             lead,
-            { status, note: `Stav zmenený na ${STATUS_LABEL[status]}`, cancelTask: opts.cancelTask, primary: opts.primary },
+            { status, note: `Stav zmenený na ${STATUS_LABEL[status]}`, cancelTask: opts.cancelTask, primary: opts.primary, withdraw: opts.withdraw },
             source,
         );
         return;
@@ -427,9 +473,21 @@ export async function changeDealStatus(
         const reopened = await tx.lead.findUniqueOrThrow({ where: { id: lead.id } });
         lead = reopened;
     }
+    // R02-1: odloženie z detailu platí rovnako ako z akčného okna – nevybavené požiadavky sa menujú a stiahnu s dôvodom.
+    if (status === "SNOOZED") {
+        await withdrawOpenOnLeave(tx, { leadId: lead.id, actorId: actor.id, source, via: "SNOOZE", withdraw: opts.withdraw });
+    }
     const cancelled = await cancelForStatus(tx, actor, lead, opts.cancelTask, source, (r) => r ?? "obchod uspaný");
     await updateLead(tx, lead.id, { status });
-    if (cancelled) await unlockStep(tx, lead);
+    // Zrušená úloha odomkne krok podľa P6, nie podľa toho, čo bolo uložené (R01-5).
+    if (cancelled) {
+        if (status === "SNOOZED" && !opts.snoozeUntil) throw new AccessError("FORBIDDEN", "Zadaj, kedy sa obchod zobudí.");
+        await stepOnTaskClose(tx, actor, lead, cancelled, source);
+    }
+    // Termín zobudenia prepíše dátum kroku (stepOnTaskClose ho práve nastavil na dnes).
+    if (status === "SNOOZED" && opts.snoozeUntil && (cancelled || lead.nextActionKind)) {
+        await updateLead(tx, lead.id, { nextActionAt: businessDayStart(opts.snoozeUntil), nextActionHasTime: false });
+    }
     await tx.activity.create({
         data: {
             ...createAuditActivity({

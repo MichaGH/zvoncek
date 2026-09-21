@@ -35,7 +35,7 @@ One row per contact, and the same row later as a deal. **Never renamed.** Soft-d
 | `nextActionKind?`, `nextActionAt?`, `nextActionHasTime`, `nextActionMode`, `nextActionNote?` | **deal phase only** — what happens next |
 | `callbackKind?`, `callbackAt?`, `callbackHasTime`, `callbackNote?` | **call phase only** — why this is in a caller's queue |
 | `offerAboutUsAt?`, `offerPricelistAt?`, `offerPriceAt?`, `offerReviewAt?` | **what the client received**: first "about us", first cenník, **last** calculated price (email or phone), first rozbor webu. A summary of the valid `OFFER_SENT` activities, always recomputed by `recomputeOffers` — never written directly |
-| `designSentAt?` | latest sent date among the lead's designs; recomputed with the above, also when a design is deleted. A lead without any `Design` row keeps its old value, and the screens show that value as "návrh sent" |
+| `designSentAt?` | latest sent date among the lead's designs; recomputed with the above, also when a design is deleted. A lead without any `Design` row keeps its old value, and the screens show that value as "návrh sent" — until a send with `untrackedDesign` is recorded for it; from then on the column is the **latest valid date across the non-deleted tracked designs and the untracked sends** (a deleted or later-created `Design` never suppresses a valid untracked send; crossing out the last one clears it). The "Dostali návrh" filter reads the same column |
 | `hadLegacySends` | `true` = the lead had sends under the old system (set once by `prisma/backfill/2026-09-offer-legacy.ts`, never changed after). Default `false` for every new lead |
 | `legacySendsReviewedAt?` | the manager confirmed what such a lead really received; until then empty contents show as "?" |
 | `quoteSentAt?`, `aboutUsSentAt?`, `priceDisclosed` | **frozen legacy**: "CP marked sent" (possibly without a price), "email o nás marked sent", "client knows a price". No code writes them any more; they are only shown as what the old record claimed, never as "yes" |
@@ -110,7 +110,8 @@ Indexes: `leadId` · `taskId` · `(userId, createdAt)` · `(category, createdAt)
 `NEXT_ACTION_CHANGED`, `NEXT_ACTION_CLEARED`, `CONTACT_UPDATED`, `STATUS_CHANGED`, `OWNER_CHANGED`,
 `OUTCOME_CORRECTED`, `TRACKER_ATTACHED`, `TRACKER_UPDATED`, `TRACKER_OPENED`, `CALLER_ASSIGNED`, `CALLER_RELEASED`,
 `CALL_REVERTED`, `DEAL_REOPENED`, `OFFER_SENT`, `CLIENT_REPLIED`, `TASK_CREATED`, `TASK_MESSAGE`, `TASK_DONE`,
-`TASK_DECLINED`, `TASK_CANCELLED`, `TASK_REASSIGNED`, `TASK_RESULT_DISMISSED`, `CLIENT_ASK_CHANGED`. (`REQUEST_CREATED` /
+`TASK_DECLINED`, `TASK_CANCELLED`, `TASK_REASSIGNED`, `TASK_RESULT_DISMISSED`, `CLIENT_ASK_CHANGED`, `TASK_PART_ADDED`,
+`TASK_PART_DONE`, `TASK_PART_DECLINED`, `TASK_PART_WITHDRAWN`, `PRICE_CHANGED`. (`REQUEST_CREATED` /
 `REQUEST_RESOLVED` were removed with `DealRequest`; the test branch had no rows of them when they were dropped.)
 
 **Task rows** (`category BUSINESS`, `taskId` set). `TASK_*` rows are internal communication with the manager — they are
@@ -118,13 +119,18 @@ Indexes: `leadId` · `taskId` · `(userId, createdAt)` · `(category, createdAt)
 
 | Type | `meta` |
 |---|---|
-| `TASK_CREATED` | `{ fp, type: "HELP" \| "HANDOVER", contents: [...], assigneeId }` |
+| `TASK_CREATED` | `{ fp, type: "HELP" \| "HANDOVER", contents: [...], assigneeId }` — `contents` is what was asked for at the start; what the task carries **now** is its parts |
 | `TASK_MESSAGE` | `{ fp }` — the text is `note` |
-| `TASK_DONE` | `{ result, fp? }` — `result` is the same snapshot as `DealTask.result`; a HANDOVER accepted by an owner change has no meta |
-| `TASK_DECLINED` | `{ fp }` — the reason is in `note` and `DealTask.closeReason` |
-| `TASK_CANCELLED` | none — the reason is in `note` and `DealTask.closeReason` |
+| `TASK_PART_ADDED` | `{ parts: [kind…], fp }` — the owner added a kind to an open task; `note` carries the message the manager reads |
+| `TASK_PART_DONE` | `{ parts: [kind…], fp? }` — the manager delivered those parts; the **main keyed row** of `resolveTaskParts` / `finishAndSend` whenever anything was delivered |
+| `TASK_PART_DECLINED` | `{ parts: [kind…], fp? }` — the manager will not do those parts; the reason is in `note` and on each part |
+| `TASK_PART_WITHDRAWN` | `{ parts: [kind…], fp? }` — the owner took those parts back, or a deal close / owner change did; without `fp` it is a secondary row of that command |
+| `TASK_DONE` | `{ result }` — the merged snapshot of every `DELIVERED` part. Written as a **secondary row without a key** whenever the parts make the task `DONE`, whatever the action was called; a HANDOVER accepted by an owner change has no meta |
+| `TASK_DECLINED` | `{ fp }` on a refused `HANDOVER` ("Nie, pokračuj ty"); as a secondary row (every part declined, nothing ever delivered) it has no meta. The reason is in `note` |
+| `TASK_CANCELLED` | none — secondary row, written when every part ended withdrawn; the reason is in `note` and `DealTask.closeReason` |
 | `TASK_REASSIGNED` | `{ fromUserId, toUserId, fp? }` |
-| `TASK_RESULT_DISMISSED` | `{ items: [{ kind: "PRICE" \| "DESIGN" \| "OTHER" \| "DECLINED", designId? }], reason, fp? }` — one row per task; the items it names are consumed ("Neposielam" / "Beriem na vedomie"); closing a deal writes one with reason "obchod uzavretý" |
+| `TASK_RESULT_DISMISSED` | `{ items: [{ kind: "PRICE" \| "DESIGN" \| "OTHER" \| "DECLINED", designId?, part? }], reason, fp? }` — one row per task; the items it names are consumed ("Neposielam" / "Beriem na vedomie"); `part` says **which declined part** is acknowledged; closing a deal writes one with reason "obchod uzavretý" |
+| `PRICE_CHANGED` | `{ from: { amount, note }, to: { amount, note }, via: "EDIT" \| "TASK" \| "SEND", reason }` — an internal price edit the rep can see (`category BUSINESS`). It is **not** a client contact: it never moves "Naposledy" and cannot be crossed out |
 
 **`OWNER_CHANGED`** `meta` (wave 3): `{ reason: DealOwnershipReason, fromUserId, toUserId, fp? , bulkOpId?, bulkFp? }` —
 `bulkOpId` / `bulkFp` mark rows of one bulk transfer (`transferDealsAs`), so a repeat with the same `operationId`
@@ -137,7 +143,7 @@ client knows); "bez kontaktu" = no contact row, only the planning row. `QUOTE_SE
 
 **`OFFER_SENT`** — "the client received offer material". `meta`:
 `{ channel: "EMAIL" | "PHONE", contents: ["ABOUT_US" | "PRICELIST" | "PRICE" | "DESIGN" | "REVIEW"…], price?: { amount: "1285.00"
-(decimal string), note }, designs?: [{ id, label, url, version }], sentOn: "YYYY-MM-DD", historical: bool,
+(decimal string), note }, designs?: [{ id, label, url, version }], via? ("SMS" = price given in our SMS, channel PHONE), untrackedDesign? (true = a návrh sent with no `Design` row; never together with `designs`), sentOn: "YYYY-MM-DD", historical: bool,
 callActivityId? (phone price → the CALL it belongs to), fulfils?: [{ taskId, kind: "PRICE" | "DESIGN", designId? }],
 fp?, correction? }`. `createdAt` = when it was recorded, `sentOn` = when the client got it. `historical: true` = a
 legacy send entered later by the manager (no next step, never fulfils a task item). `fulfils` = the returned task
@@ -153,7 +159,7 @@ carries `meta.asked` (the canonical sorted tick list) and `meta.fp`, so the same
 `IDEMPOTENCY_CONFLICT`.
 
 **`CLIENT_ASK_CHANGED`** (wave 5) — the pencil at "Chceli". `meta`: `{ added: RequestContent[], withdrawn: [{ id,
-content }], reason, fp }`. History only: it is not a client contact and never moves "Naposledy".
+content }], reason, fp }`. Written by the pencil, and (without `fp`, with `via: "SNOOZE" | "NOT_INTERESTED" | "BAD_NUMBER"`) when snoozing or closing from the sheet withdraws the open requests. History only: it is not a client contact and never moves "Naposledy".
 
 ---
 
@@ -167,18 +173,49 @@ over (`HANDOVER`). Replaces the removed `DealRequest`. Rules: `lib/domain/tasks.
 |---|---|
 | `leadId` | the deal (cascade) |
 | `type` | `DealTaskType`: `HELP` · `HANDOVER` |
-| `contents` | `DealTaskContent[]`: `HELP` has at least one of `PRICE` · `DESIGN` · `OTHER`; `HANDOVER` has none. The UI sends exactly one content today (a combined price + návrh task is `[WAVE 4]`); the command accepts several |
-| `status` | `DealTaskStatus`: `OPEN` · `DONE` (delivered / handover accepted) · `DECLINED` (manager said no, with a reason) · `CANCELLED` (owner cancelled, deal closed, owner changed, deal left without an owner) |
+| `status` | `DealTaskStatus`, **derived from the parts** and never set by hand (`taskStatusOfParts`): any part `REQUESTED` → `OPEN`; else any `DELIVERED` → `DONE`; else any `DECLINED` → `DECLINED`; else `CANCELLED`. So `DONE` means "something came back", not "everything was done"; a `HANDOVER` is `DONE` when accepted |
 | `text` | the rep's message for the manager — **only for this task**; it never changes `Lead.note` or the step note |
 | `requestedById` | the rep who asked (`RESTRICT`) |
 | `assigneeId` | the manager who has to act (`requests.resolve`); can be reassigned (`RESTRICT`) |
 | `createdAt` | drives "oldest first" and the age alert (red after `TASK_AGE_ALERT_DAYS` = 2 business days) |
 | `closedAt?`, `closedById?` | when and by whom it really ended (may differ from the assignee) |
-| `closeReason?` | required for `DECLINED` / `CANCELLED` (e.g. "obchod uzavretý", "klienta prevzal X", "obchod bez vlastníka") |
-| `result?` (jsonb) | immutable snapshot of what the manager delivered: `{ price?: { amount: "1285.00", note }, designs?: [{ id, label, url, version }], answer? }` (`taskResultSchema`). The deal's current price / design may change later; this does not |
+| `closeReason?` | set only when the whole ending has **one** reason (deal closed, takeover, owner removed, bulk transfer, every part withdrawn at once); a mixed ending leaves it `NULL` and the reasons stay on the parts |
+| `fallbackKind?`, `fallbackNote?` | the step the deal had **before** the task locked it. Written once at ask time, never rewritten: while the task is open the locked step is `defaultStep(outstanding, …, { locked: true }) ?? fallback`, so an "Iné"-only task cannot leave the card advertising send work that is already done |
 
 Indexes: `(assigneeId, status, createdAt)` ("Pre mňa", "Čaká na mňa") · `(leadId, status)`. Its events are `Activity`
 rows with `taskId` (see the task rows above).
+
+`DealTask.contents` and `DealTask.result` were **dropped** (wave 4): what a task carries and what it returned are
+its parts. `TASK_CREATED.meta.contents` and `TASK_DONE.meta.result` keep those shapes as history.
+
+## DealTaskPart — one kind of manager work inside one task (wave 4)
+
+One part per kind, so a single task can carry price + návrh + iné and the manager can deliver them **one at a
+time** (he could not save two at once anyway). Rules: `lib/domain/tasks.ts` (`taskPartState`, pure) and
+`lib/domain/taskMutations.ts` (`applyPartOps`, the only writer of part state).
+
+| Field | Meaning |
+|---|---|
+| `taskId` | the task (cascade) |
+| `kind` | `DealTaskContent`: `PRICE` · `DESIGN` · `OTHER`. **`@@unique([taskId, kind])`** is load-bearing: it keeps a returned item's address `(taskId, kind, designId)` stable, and makes a kind either `REQUESTED` or resolved, never both |
+| `status` | `DealTaskPartStatus`: `REQUESTED` (the manager has it — "robí sa") · `DELIVERED` · `DECLINED` (manager will not do it, reason required) · `WITHDRAWN` (the owner took it back, reason required) |
+| `result?` (jsonb) | written **once** on `DELIVERED`, one key per kind: `{ price }` \| `{ designs }` \| `{ answer }` (`taskResultSchema`). A corrected price is a new task, never a rewrite; the deal's current price may move afterwards, this snapshot does not |
+| `addedById`, `addedAt` | who asked for this part — with the task, or later through "+ Pridať". Re-adding a `WITHDRAWN` kind resets both |
+| `resolvedById?`, `resolvedAt?` | who delivered / declined / withdrew it and when. Always a real user; `NULL` only while `REQUESTED` |
+| `reason?` | required for `DECLINED` and `WITHDRAWN` |
+
+Indexes: `(taskId, status)` · unique `(taskId, kind)`.
+
+Rules in code (under the `Lead` row lock):
+
+- a part leaves `REQUESTED` **once per requested period**; the only way back is re-adding a `WITHDRAWN` kind
+  (`addParts`), which clears the resolver and the reason. `DELIVERED` and `DECLINED` kinds are never asked again in
+  the same task;
+- every ending is the same two steps — resolve the named parts, then recompute the task status — and the task-level
+  activity row follows the **resulting status**, never the name of the action (so declining the rest after a
+  delivery writes `TASK_DONE`);
+- a `DELIVERED` part's items survive everything (deal close, takeover, owner change) until a send consumes them or
+  someone dismisses them; a `DELIVERED` part can never be withdrawn — "Neposielam" is that path.
 
 Rules in code (under the `Lead` row lock, not constraints):
 
@@ -187,10 +224,12 @@ Rules in code (under the `Lead` row lock, not constraints):
 - an `OPEN` task **locks the next step** (see `Lead`). When the task is created the step becomes: `PRICE` → `SEND_QUOTE`,
   `DESIGN` → `SEND_DESIGN`, `OTHER` → the current step stays (the rep may change it); the note stays when the kind does
   not change (`stepAfterTask`);
-- **returned items**: a `DONE` `HELP` task returns one `PRICE` item, one `DESIGN` item per návrh, one `OTHER` item (the
-  answer); a `DECLINED` task returns one `DECLINED` item. An item is **pending** until an `OFFER_SENT` names it in
-  `meta.fulfils` or a `TASK_RESULT_DISMISSED` names it in `meta.items`. A crossed-out send does not count. Pending price
-  / návrh force the step to "Poslať…" (I10). Closing the deal dismisses everything still pending;
+- **returned items come from PARTS, not from closed tasks**: a `DELIVERED` part returns one `PRICE` item, one
+  `DESIGN` item per návrh, or one `OTHER` item (the answer); a `DECLINED` part returns one `DECLINED` item carrying
+  `part`. An **open** task therefore contributes items as soon as one part is delivered. An item is **pending**
+  until an `OFFER_SENT` names it in `meta.fulfils` or a `TASK_RESULT_DISMISSED` names it in `meta.items`. A
+  crossed-out send does not count. Pending price / návrh force the step to "Poslať…" (I10). Closing the deal
+  dismisses everything still pending;
 - an owner change ends or keeps the task (`ownerTransition`): new owner is a rep → the task stays (optionally moved to
   another manager); new owner is a manager → `HELP` `CANCELLED`, `HANDOVER` `DONE`; no owner → `CANCELLED`;
 - a user holding open deals or assigned `OPEN` tasks cannot be deactivated or change role (D14).
@@ -308,4 +347,8 @@ These live in code and must be preserved by every new mutation:
   design dates); the frozen legacy send fields are never written
 - `LeadRequest.state` and its resolver equal the recompute of the lead's rows against its valid `OFFER_SENT` rows
 - only a step the app chose itself (`SEND_QUOTE` / `SEND_DESIGN` / `SEND_EMAIL`, or none) is re-derived from the
-  outstanding work; a call, "Čakáme na klienta" and a custom step are the user's decision
+  outstanding work; a call, "Čakáme na klienta" and a custom step are the user's decision — **except while a task
+  is open**, where the locked step is a pure function of the outstanding work and the task's fallback, and the user
+  cannot replan it anyway
+- `DealTask.status` equals the recompute of its parts; a `HELP` task always has at least one part, a `HANDOVER` none
+- "Zavolať, či prišlo" is planned only when nothing is outstanding after the send

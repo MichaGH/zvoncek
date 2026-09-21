@@ -37,6 +37,8 @@ const TABLES = [
     "DesignVersion",
     "Design",
     "DealRequest",
+    "LeadRequest",
+    "DealTaskPart",
     "DealTask",
     "DealOwnership",
     "Activity",
@@ -223,17 +225,17 @@ async function seedMinimal() {
     const password = await bcrypt.hash("password123", 10);
     const mk = (username: string, firstName: string, lastName: string, role: Role, teamId?: string) =>
         prisma.user.create({ data: { username, firstName, lastName, role, password, ...(teamId ? { teamId } : {}) }, select: { id: true } });
-    const admin = await mk("admin", "Michal", "Admin", "ADMIN");
-    const sales = await mk("sales", "Jana", "Obchodníková", "SALES_REP");
-    const manager = await mk("manager", "Nikolas", "Manažér", "MANAGER");
-    const scoutleader = await mk("scoutleader", "Šimon", "Vedúci", "SCOUT_LEADER");
+    const admin = await mk("admin", "Adam", "Admin", "ADMIN");
+    const sales = await mk("sales", "Sam", "Sales", "SALES_REP");
+    const manager = await mk("manager", "Marek", "Manager", "MANAGER");
+    const scoutleader = await mk("scoutleader", "Sven", "Scoutleader", "SCOUT_LEADER");
     const obchod = await prisma.team.create({ data: { name: "Obchod", leaderId: manager.id } });
     // Obchodníčka je v tíme Obchod → jej predvolený manažér pri úlohách je vedúci tímu (Nikolas).
     await prisma.user.update({ where: { id: sales.id }, data: { teamId: obchod.id } });
     const skauti = await prisma.team.create({ data: { name: "Skauti", leaderId: scoutleader.id } });
     await prisma.user.update({ where: { id: scoutleader.id }, data: { teamId: skauti.id } });
-    await mk("telesales", "Timea", "Volajúca", "TELESALES", obchod.id);
-    const scout = await mk("scout", "Jano", "Skaut", "SCOUT", skauti.id);
+    await mk("telesales", "Tina", "Telesales", "TELESALES", obchod.id);
+    const scout = await mk("scout", "Sára", "Scout", "SCOUT", skauti.id);
     void admin;
 
     const now = Date.now();

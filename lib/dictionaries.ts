@@ -83,6 +83,11 @@ export const ACTIVITY_LABEL: Record<ActivityType, string> = {
     TASK_REASSIGNED: "Úloha presunutá",
     TASK_RESULT_DISMISSED: "Výsledok sa neposiela",
     CLIENT_ASK_CHANGED: "Upravené, čo klient chce",
+    TASK_PART_ADDED: "K úlohe pribudlo",
+    TASK_PART_DONE: "Manažér odovzdal",
+    TASK_PART_DECLINED: "Manažér to nerobí",
+    TASK_PART_WITHDRAWN: "Časť úlohy stiahnutá",
+    PRICE_CHANGED: "Cena zmenená",
 };
 
 export const ACTIVITY_CATEGORY_LABEL: Record<ActivityCategory, string> = {
@@ -167,7 +172,7 @@ export const NEXT_ACTION_LABEL: Record<NextActionKind, string> = {
 export const TASK_CONTENT_LABEL: Record<DealTaskContent, string> = {
     PRICE: "Cena",
     DESIGN: "Návrh",
-    OTHER: "Iné",
+    OTHER: "Otázka / konzultácia",
 };
 
 export const TASK_TYPE_LABEL: Record<DealTaskType, string> = {

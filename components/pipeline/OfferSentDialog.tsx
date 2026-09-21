@@ -14,22 +14,23 @@ import { recordOfferSent } from "@/lib/actions/pipeline";
 import { NEXT_ACTION_LABEL, TASK_CONTENT_LABEL } from "@/lib/dictionaries";
 import { addBusinessCalendarDays, businessDate, businessDayMonth, businessDayStart } from "@/lib/domain/businessTime";
 import { displayUrl } from "@/lib/domain/designLinks";
-import { formatMoney, legacyUnreviewed, moneyToString, type OfferContent, type OfferDialogDeal } from "@/lib/domain/offers";
+import { formatMoney, moneyToString, OFFER_CONTENT_LABEL, type OfferContent, type OfferDialogDeal } from "@/lib/domain/offers";
 import {
     contentOfOffer,
     contentOfTask,
     isSystemStep,
+    offerDefaults,
     REQUEST_CONTENT_LABEL,
     sendCompletesStep,
     sortContents,
     stepKindForOutstanding,
     stepView,
 } from "@/lib/domain/clientRequests";
-import { overlapsTask, type PendingItem } from "@/lib/domain/tasks";
+import { overlappingKinds, waitingOnQuestionHeadline, type PendingItem } from "@/lib/domain/tasks";
 
 // „Čo sme poslali" (round 2, wave 3a – §2c 5.2/5.3). Jedno miesto pre každé odoslanie ponukových materiálov.
-// Predvyplnenie je len návrh: „o nás" a „cenník" sa zaškrtnú, len ak ešte nešli (na neoverenom starom obchode nikdy),
-// „cena" pri kroku „Poslať cenu". Ďalší krok sa nikdy nenahradí potichu – voľba je vždy viditeľná.
+// Predvyplnenie je len návrh a týka sa výlučne toho, čo klient pýtal (R01-4): „cena" aj pri kroku „Poslať cenu".
+// Ďalší krok sa nikdy nenahradí potichu – voľba je vždy viditeľná.
 // Režim „historical" = doplnenie starého odoslania s pôvodným dátumom: bez ďalšieho kroku a bez úloh.
 //
 // Wave 3 (§5.1, §6.4): vrátené výsledky úloh sa ponúknu ako riadky („Posielam cenu od Michala") – zaškrtnuté idú do
@@ -37,8 +38,8 @@ import { overlapsTask, type PendingItem } from "@/lib/domain/tasks";
 // krok ostáva „Poslať…" (alebo sa zvyšok v tom istom uložení odmietne). Zamknutý krok: odoslanie je len fakt; ak sa
 // kryje s tým, na čom manažér robí, treba vybrať, čo s úlohou.
 //
-// Wave 5 (§3.4): čo klient pýtal a ešte nedostal, je predzaškrtnuté (aj cenník pri kroku „Poslať cenu"); odškrtnutie
-// netreba zdôvodňovať – riadok jednoducho ostane nevybavený. Pribudol obsah „Rozbor webu".
+// Wave 5 (§3.4): čo klient pýtal a ešte nedostal, je predzaškrtnuté; odškrtnutie netreba zdôvodňovať – riadok
+// jednoducho ostane nevybavený. Pribudol obsah „Rozbor webu". Obchod bez Design riadku má obyčajné „Návrh" (R01-5).
 
 const REFRESH_CODES = new Set(["NOT_FOUND", "STALE", "DEAL_CLOSED", "IDEMPOTENCY_CONFLICT", "UNAUTHENTICATED", "STEP_LOCKED"]);
 const SUPERSEDED = "nahradená novšou";
@@ -70,7 +71,6 @@ export default function OfferSentDialog({
     const router = useRouter();
     const [pending, start] = useTransition();
     const today = businessDate(new Date());
-    const unknownLegacy = legacyUnreviewed(deal.offers);
     const unsentDesigns = deal.designs.filter((d) => !d.sentAt).map((d) => d.id);
     const returned = historical ? [] : deal.pending;
     const priceItems = returned.filter((i) => i.kind === "PRICE");
@@ -82,12 +82,15 @@ export default function OfferSentDialog({
         (i, idx) => liveDesign(i.designId) && !designItems.slice(idx + 1).some((j) => j.designId === i.designId),
     );
 
-    // Čo klient pýtal a ešte nedostal – predvyplní sa vždy, aj keď to už raz dostal (nová požiadavka, §3.4).
+    // Čo klient pýtal a ešte nedostal – predvyplní sa vždy, aj keď to už raz dostal (nová požiadavka, §3.4). Nič, čo
+    // klient nepýtal, sa nepredvypĺňa (R01-4): odškrtnúť je jeden klik, ale zabudnúť odškrtnúť znamená falošný záznam
+    // o tom, čo klient dostal.
     const asked = historical ? [] : deal.asked;
     const [sentOn, setSentOn] = useState(historical ? "" : today);
-    const [aboutUs, setAboutUs] = useState(!historical && (asked.includes("INFO") || (!deal.offers.offerAboutUsAt && !unknownLegacy)));
-    const [pricelist, setPricelist] = useState(!historical && (asked.includes("PRICELIST") || (!deal.offers.offerPricelistAt && !unknownLegacy)));
-    const [review, setReview] = useState(!historical && asked.includes("REVIEW"));
+    const defaults = offerDefaults(asked);
+    const [aboutUs, setAboutUs] = useState(defaults.aboutUs);
+    const [pricelist, setPricelist] = useState(defaults.pricelist);
+    const [review, setReview] = useState(defaults.review);
     const [withPrice, setWithPrice] = useState(
         !historical && (asked.includes("PRICE") || newestPrice !== null || (deal.nextActionKind === "SEND_QUOTE" && deal.price != null)),
     );
@@ -100,6 +103,9 @@ export default function OfferSentDialog({
                 ? unsentDesigns
                 : [],
     );
+    // R01-5: návrh, ktorý v systéme nie je (PDF, odkaz v maili, starý obchod). Ponúka sa len tam, kde nie je z čoho vybrať.
+    const noTrackedDesign = deal.designs.length === 0;
+    const [untrackedDesign, setUntrackedDesign] = useState(!historical && noTrackedDesign && asked.includes("DESIGN"));
     const [usePriceItem, setUsePriceItem] = useState(newestPrice !== null);
     const [useDesignItems, setUseDesignItems] = useState<string[]>(usableDesignItems.map(keyOf));
     const [acceptCurrentPrice, setAcceptCurrentPrice] = useState(false);
@@ -113,10 +119,12 @@ export default function OfferSentDialog({
     const [followUpOn, setFollowUpOn] = useState(""); // prázdne = o 7 dní od odoslania
     const [copied, setCopied] = useState<string | null>(null);
     const [idempotencyKey, setIdempotencyKey] = useState(newKey);
-    const [overlap, setOverlap] = useState<"KEEP_OPEN" | "CANCEL_TASK" | null>(null);
+    const [overlap, setOverlap] = useState<"KEEP_OPEN" | "WITHDRAW_PARTS" | null>(null);
     const [cancelReason, setCancelReason] = useState("");
     // Manažér na cudzom obchode: najprv potvrdenie v tom istom okne (nie prehliadačový confirm).
     const [confirmOwner, setConfirmOwner] = useState(false);
+    // Úloha ostáva po uložení otvorená: najprv súhrn a potvrdenie v tom istom okne (wave-4-proposal.md §2.8, R02-3).
+    const [confirmPartial, setConfirmPartial] = useState(false);
     const foreignDeal = isManager && deal.owner !== null && deal.owner.id !== viewerId && !historical;
     const isOwner = deal.owner?.id === viewerId;
     // O vrátených výsledkoch („neposielam", staršia cena nahradená) rozhoduje vlastník, na obchode bez vlastníka manažér
@@ -128,16 +136,24 @@ export default function OfferSentDialog({
         ...(pricelist ? (["PRICELIST"] as const) : []),
         ...(review ? (["REVIEW"] as const) : []),
         ...(withPrice ? (["PRICE"] as const) : []),
-        ...(designIds.length ? (["DESIGN"] as const) : []),
+        ...(designIds.length || (noTrackedDesign && untrackedDesign) ? (["DESIGN"] as const) : []),
     ];
     const task = historical ? null : deal.openTask;
-    const overlapping = overlapsTask(task, contents);
+    // Wave 4 (§2.8): pýtame sa len na to, čo manažér EŠTE ROBÍ. Poslať už dodanú cenu, kým sa robí návrh, je
+    // bežný priebeh a nepýta sa nič.
+    const overlappingParts = overlappingKinds(
+        task ? { type: task.type, parts: task.openKinds.map((kind) => ({ kind, status: "REQUESTED" as const })) } : null,
+        contents,
+    );
+    const overlapping = overlappingParts.length > 0;
     // Voľba platí, len kým sa obsah naozaj kryje s úlohou (R02-2): po odškrtnutí ceny / návrhu sa skrytá voľba neposiela
     // (inak by server odmietal „zrušiť" bez prekryvu a dialóg by sa nedal uložiť). Opätovné zaškrtnutie ju ukáže znova.
     const choice = overlapping ? overlap : null;
-    const cancelling = Boolean(task) && choice === "CANCEL_TASK";
-    // Zamknutý krok: odoslanie je len fakt (krok sa nemení), pokiaľ sa úloha v tom istom uložení neruší.
-    const factOnly = Boolean(task) && !cancelling;
+    const cancelling = Boolean(task) && choice === "WITHDRAW_PARTS";
+    // Zamknutý krok: odoslanie je len fakt (krok sa nemení), pokiaľ sa v tom istom uložení nestiahne POSLEDNÁ
+    // časť, ktorá sa ešte robí – až vtedy sa úloha zavrie a krok odomkne.
+    const closesTask = cancelling && Boolean(task) && overlappingParts.length === (task?.openKinds.length ?? 0);
+    const factOnly = Boolean(task) && !closesTask;
 
     // Čo toto odoslanie použije z vrátených výsledkov.
     const fulfilPrice = withPrice && usePriceItem && newestPrice ? newestPrice : null;
@@ -163,7 +179,7 @@ export default function OfferSentDialog({
     const outstandingAfter = sortContents([
         ...asked.filter((c) => !sentContents.includes(c)),
         ...pendingAfter.flatMap((i) => (i.kind === "PRICE" || i.kind === "DESIGN" ? [i.kind] : [])),
-        ...(task && !cancelling ? task.contents.flatMap((c) => (taskContent(c) ? [taskContent(c)!] : [])) : []),
+        ...(task ? task.openKinds.filter((c) => !(cancelling && overlappingParts.includes(c))).flatMap((c) => (taskContent(c) ? [taskContent(c)!] : [])) : []),
     ]);
     const completesStep = sendCompletesStep(deal.nextActionKind, contents, deal.outstanding, outstandingAfter);
     const pendingBlocksFollowUp = pendingAfter.length > 0 || outstandingAfter.length > 0;
@@ -180,13 +196,32 @@ export default function OfferSentDialog({
     const followUpInvalid = followUp && followUpOn !== "" && followUpOn < today;
     // „Ponechať" nesmie klamať: po čiastočnom odoslaní krok padne na to, čo ostalo (§3.7) – tlačidlo teda ukazuje,
     // čím krok naozaj bude. Ručne zvolený krok (hovor, čakanie, vlastný) sa neprepisuje, takže ostáva, ako je.
-    const keptKind = isSystemStep(deal.nextActionKind) ? (stepKindForOutstanding(outstandingAfter) ?? deal.nextActionKind) : deal.nextActionKind;
+    // R02-2: keď sa úloha týmto uložením zatvorí, krok sa odvodí znova – podľa toho, čo ešte ostáva, inak sa vráti
+    // krok spred úlohy (nikdy „Poslať …“, čo práve odišlo).
+    const keptKind =
+        closesTask && task
+            ? (stepKindForOutstanding(outstandingAfter) ?? task.fallbackKind)
+            : isSystemStep(deal.nextActionKind)
+              ? (stepKindForOutstanding(outstandingAfter) ?? deal.nextActionKind)
+              : deal.nextActionKind;
     const keptLabel = keptKind
         ? (stepView(keptKind, outstandingAfter).headline ?? NEXT_ACTION_LABEL[keptKind])
         : null;
     const current = keptLabel
-        ? `${keptLabel}${keptKind === deal.nextActionKind && deal.nextActionAt ? ` · ${businessDayMonth(new Date(deal.nextActionAt))}` : ""}`
+        ? `${keptLabel}${closesTask ? " · dnes" : keptKind === deal.nextActionKind && deal.nextActionAt ? ` · ${businessDayMonth(new Date(deal.nextActionAt))}` : ""}`
         : "bez ďalšieho kroku";
+    // R02-3: úloha po tomto uložení ostáva otvorená (nič sa nezatvára) – ukáže sa súhrn a treba ho potvrdiť.
+    const partialStays = Boolean(task) && task?.type === "HELP" && factOnly && (task?.openKinds.length ?? 0) > 0 && !historical;
+    const stillMaking = task ? task.openKinds.filter((c) => !(cancelling && overlappingParts.includes(c))) : [];
+    const lockedAfterKind = outstandingAfter.length > 0 ? stepKindForOutstanding(outstandingAfter) : null;
+    const lockedAfterLabel = lockedAfterKind
+        ? (stepView(lockedAfterKind, outstandingAfter).headline ?? NEXT_ACTION_LABEL[lockedAfterKind])
+        : task
+          ? (waitingOnQuestionHeadline({ type: task.type, openKinds: stillMaking, assignee: task.assignee }, [], []) ?? NEXT_ACTION_LABEL[task.fallbackKind])
+          : null;
+    const sendingLabel = contents
+        .map((c) => (c === "PRICE" && sentAmount !== null ? `Cena ${formatMoney(sentAmount)}` : OFFER_CONTENT_LABEL[c]))
+        .join(" + ");
     const legacy = deal.offers.legacy;
     const blocked =
         contents.length === 0
@@ -200,7 +235,7 @@ export default function OfferSentDialog({
                 : overlapping && !choice
                   ? "Vyber, čo s úlohou"
                   : cancelling && !cancelReason.trim()
-                    ? "Napíš, prečo úlohu rušíš"
+                    ? "Napíš, prečo to už netreba"
                     : priceMismatch
                       ? "Potvrď, ktorú cenu posielaš"
                       : dropped.length > 0 && !dropReason.trim()
@@ -219,12 +254,18 @@ export default function OfferSentDialog({
         } else toast.error("Schránka nie je dostupná");
     }
 
-    function save(confirmed = false) {
+    function save(confirmed = false, partialOk = false) {
         if (foreignDeal && !confirmed) {
             setConfirmOwner(true);
             return;
         }
+        if (partialStays && !partialOk) {
+            setConfirmOwner(false);
+            setConfirmPartial(true);
+            return;
+        }
         setConfirmOwner(false);
+        setConfirmPartial(false);
         const dismissItems = [...superseded, ...dropped];
         start(async () => {
             const r = await recordOfferSent({
@@ -236,10 +277,11 @@ export default function OfferSentDialog({
                 historical,
                 price: withPrice && editPrice && amountNumber !== null ? { amount: amountNumber, note: priceNote.trim() || null } : null,
                 designIds: designIds.length ? designIds : undefined,
+                ...(noTrackedDesign && untrackedDesign && !designIds.length ? { untrackedDesign: true } : {}),
                 followUp: !historical && followUp,
                 ...(!historical && followUp && followUpOn ? { followUpOn } : {}),
                 ...(choice ? { overlap: choice } : {}),
-                ...(cancelling && task ? { cancelTask: { taskId: task.id, reason: cancelReason.trim() } } : {}),
+                ...(cancelling && task ? { withdrawParts: { taskId: task.id, kinds: overlappingParts, reason: cancelReason.trim() } } : {}),
                 ...(fulfils.length ? { fulfils: fulfils.map((i) => ({ taskId: i.taskId, kind: i.kind as "PRICE" | "DESIGN", ...(i.designId ? { designId: i.designId } : {}) })) } : {}),
                 ...(dismissItems.length
                     ? {
@@ -280,7 +322,7 @@ export default function OfferSentDialog({
                       ]
                           .filter(Boolean)
                           .join(", ") || "bez podrobností"}`
-                    : "Zaškrtni, čo bolo v emaili. Predvyplnené je len to, čo ešte nešlo."
+                    : "Zaškrtni, čo bolo v emaili. Predvyplnené je len to, čo klient pýtal a ešte nedostal."
             }
         >
             <div className="mx-auto w-full max-w-md space-y-3 px-4 pb-6 md:max-w-none md:px-0 md:pb-0">
@@ -289,7 +331,7 @@ export default function OfferSentDialog({
                         <Lock className="mt-0.5 h-4 w-4 shrink-0" />
                         <span>
                             Krok čaká na úlohu pre {task.assignee} (
-                            {task.type === "HANDOVER" ? "odovzdanie" : task.contents.map((c) => TASK_CONTENT_LABEL[c].toLowerCase()).join(" + ")}).
+                            {task.type === "HANDOVER" ? "odovzdanie" : task.openKinds.map((c) => TASK_CONTENT_LABEL[c].toLowerCase()).join(" + ")}).
                             Odoslanie sa zapíše, krok sa nezmení.
                         </span>
                     </p>
@@ -424,6 +466,15 @@ export default function OfferSentDialog({
                         </div>
                     );
                 })}
+                {noTrackedDesign && (
+                    <label className={row}>
+                        <Checkbox data-vaul-no-drag checked={untrackedDesign} onCheckedChange={(v) => setUntrackedDesign(v === true)} />
+                        <span className="text-sm">
+                            Návrh
+                            <span className="block text-xs text-muted-foreground">Bez záznamu v systéme – PDF, odkaz v maili alebo starý návrh</span>
+                        </span>
+                    </label>
+                )}
                 {designItems
                     .filter((i) => !liveDesign(i.designId))
                     .map((i) => (
@@ -442,15 +493,19 @@ export default function OfferSentDialog({
                     otvorená“ – tok už funguje; s čiastočným vybavením sa tu ponúkne aj vrátená cena (wave-4-proposal.md §2). */}
                 {task && overlapping && (
                     <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-                        <p>{task.assignee} práve robí to, čo posielaš. Čo s úlohou?</p>
+                        <p>
+                            {task.assignee} práve robí {overlappingParts.map((c) => TASK_CONTENT_LABEL[c].toLowerCase()).join(" + ")} – to isté,
+                            čo posielaš. Čo s tým?
+                        </p>
                         <label className="flex items-center gap-2">
                             <input type="radio" checked={overlap === "KEEP_OPEN"} onChange={() => setOverlap("KEEP_OPEN")} />
-                            Úloha ostáva otvorená ({task.assignee} robí niečo iné)
+                            Nech to dorobí ({task.assignee} na tom robí ďalej)
                         </label>
                         {isOwner && (
                             <label className="flex items-center gap-2">
-                                <input type="radio" checked={overlap === "CANCEL_TASK"} onChange={() => setOverlap("CANCEL_TASK")} />
-                                Už to netreba – zrušiť úlohu
+                                <input type="radio" checked={overlap === "WITHDRAW_PARTS"} onChange={() => setOverlap("WITHDRAW_PARTS")} />
+                                Už to netreba – stiahnuť {overlappingParts.map((c) => TASK_CONTENT_LABEL[c].toLowerCase()).join(" + ")}
+                                {!closesTask ? " (zvyšok úlohy beží ďalej)" : ""}
                             </label>
                         )}
                         {isManager && !isOwner && (
@@ -461,7 +516,7 @@ export default function OfferSentDialog({
                                 data-vaul-no-drag
                                 value={cancelReason}
                                 onChange={(e) => setCancelReason(e.target.value)}
-                                placeholder="Prečo úlohu rušíš"
+                                placeholder="Prečo to už netreba"
                                 className="text-[16px]"
                             />
                         )}
@@ -535,6 +590,31 @@ export default function OfferSentDialog({
                     </div>
                 )}
 
+                {confirmPartial && task && (
+                    <div className="space-y-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                        <p className="flex items-start gap-2 font-medium text-amber-700 dark:text-amber-400">
+                            <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+                            Úloha pre {task.assignee} ostáva otvorená
+                        </p>
+                        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                            <dt className="text-muted-foreground">Posielaš teraz</dt>
+                            <dd className="font-medium">{sendingLabel}</dd>
+                            <dt className="text-muted-foreground">{task.assignee} ešte robí</dt>
+                            <dd className="font-medium">{stillMaking.map((c) => TASK_CONTENT_LABEL[c]).join(" + ")}</dd>
+                            <dt className="text-muted-foreground">Tvoj krok ostane zamknutý</dt>
+                            <dd className="font-medium">{lockedAfterLabel}</dd>
+                        </dl>
+                        <div className="flex flex-wrap gap-2">
+                            <Button size="sm" disabled={pending} onClick={() => save(true, true)}>
+                                Áno, poslať len {sendingLabel.toLowerCase()}
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setConfirmPartial(false)}>
+                                Späť
+                            </Button>
+                        </div>
+                    </div>
+                )}
+
                 {confirmOwner && deal.owner && (
                     <div className="space-y-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
                         <p className="flex items-start gap-2 font-medium text-amber-700 dark:text-amber-400">
@@ -558,7 +638,7 @@ export default function OfferSentDialog({
 
                 <Button
                     className="h-12 w-full"
-                    disabled={pending || confirmOwner || Boolean(blocked) || followUpInvalid}
+                    disabled={pending || confirmOwner || confirmPartial || Boolean(blocked) || followUpInvalid}
                     onClick={() => save()}
                 >
                     {blocked ?? "Uložiť"}

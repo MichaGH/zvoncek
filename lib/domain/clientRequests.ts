@@ -131,6 +131,12 @@ export function sendCompletesStep(
     return (step === "SEND_QUOTE" || step === "SEND_DESIGN") && outstandingBefore.length > 0;
 }
 
+// Čo „Čo sme poslali" predzaškrtne z e-mailových obsahov (R01-4): VÝLUČNE to, čo klient pýtal a ešte nedostal. Nič
+// sa nepredvypĺňa len preto, že to ešte nikdy nešlo – falošný záznam o tom, čo klient dostal, by bol jeden klik ďaleko.
+export function offerDefaults(asked: readonly RequestContent[]): { aboutUs: boolean; pricelist: boolean; review: boolean } {
+    return { aboutUs: asked.includes("INFO"), pricelist: asked.includes("PRICELIST"), review: asked.includes("REVIEW") };
+}
+
 export function warningText(warn: readonly RequestContent[]): string | null {
     if (warn.length === 0) return null;
     return `Chceli ${sortContents(warn).map((c) => REQUEST_SHORT_LABEL[c]).join(" + ")} – ešte nedostali`;
@@ -338,7 +344,8 @@ export function defaultStep(
         nextActionAt: opts.locked ? null : businessTodayStart(opts.now ?? new Date()),
         nextActionHasTime: false,
         // Cena, ktorá sa stane dominantnou po odoslaní návrhu, je termín – nededí „rozpracované" po návrhu.
-        nextActionMode: kind === "SEND_DESIGN" ? "IN_PROGRESS" : "SCHEDULED",
+        // Zamknutý krok je VŽDY SCHEDULED (I8): „rozpracované" bez dátumu by odporovalo invariantu úlohy (wave 4 §7 P0).
+        nextActionMode: opts.locked ? "SCHEDULED" : kind === "SEND_DESIGN" ? "IN_PROGRESS" : "SCHEDULED",
         nextActionNote: defaultStepNote(kind),
     };
 }
@@ -354,6 +361,12 @@ export function normalizeAsked(asked: readonly RequestContent[]): RequestContent
 }
 
 export const ASK_REASON_MAX = 500;
+
+// Odloženie / uzavretie obchodu s nevybavenými požiadavkami: presné id-čka, ktoré klient videl, a dôvod (R01-3).
+export const withdrawInputSchema = z
+    .object({ ids: z.array(z.string().min(1)).min(1).max(50), reason: z.string().max(ASK_REASON_MAX) })
+    .strict();
+export type WithdrawInput = z.infer<typeof withdrawInputSchema>;
 
 // Čo klient pýtal v tom hovore – audit v Activity.meta.asked (§6.3). Riadky LeadRequest sú práca, toto je záznam.
 const askedMetaSchema = z.object({ asked: z.array(REQUEST_CONTENT_ENUM) });

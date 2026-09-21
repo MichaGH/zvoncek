@@ -1,24 +1,41 @@
+import { Prisma } from "@/app/generated/prisma/client";
 import type { DealTask, Lead, PrismaClient } from "@/app/generated/prisma/client";
-import type { ActivitySource, DealOwnershipReason, DealTaskContent, DealTaskType, NextActionKind } from "@/app/generated/prisma/enums";
+import type {
+    ActivitySource,
+    ActivityType,
+    DealOwnershipReason,
+    DealTaskContent,
+    DealTaskPartStatus,
+    DealTaskStatus,
+    DealTaskType,
+    NextActionKind,
+} from "@/app/generated/prisma/enums";
 import { AccessError } from "@/lib/access/errors";
 import type { LockedUser, Tx } from "@/lib/access/locks";
 import { createAuditActivity, createPlanningActivity, describeNextAction, type NextActionData } from "@/lib/activityLog";
 import { businessTodayStart } from "@/lib/domain/businessTime";
 import { hadNextAction, updateLead } from "@/lib/domain/leadWrites";
-import { moneyToString, type OfferContent } from "@/lib/domain/offers";
+import { moneyToString, offerInstant, parseOfferMeta, type OfferContent } from "@/lib/domain/offers";
 import { bumpLeadOnce } from "@/lib/domain/revision";
 import {
     ACKNOWLEDGED_TEXT,
+    dismissalReasonOfMeta,
     dismissedItemsOfMeta,
     dismissNeedsReason,
     fulfilsOfMeta,
+    helpFallback,
     itemKey,
+    parseTaskResult,
     pendingItems,
     requiredStepKinds,
+    sortTaskContents,
+    taskStatusOfParts,
+    type Consumption,
     type DismissInput,
     type ItemRef,
     type PendingItem,
     type TaskResult,
+    type TaskWithParts,
 } from "@/lib/domain/tasks";
 import { NEXT_ACTION_LABEL, TASK_CONTENT_LABEL } from "@/lib/dictionaries";
 import { can } from "@/lib/permissions";
@@ -29,7 +46,7 @@ import { can } from "@/lib/permissions";
 // má len hlavný riadok príkazu, vedľajšie riadky v tej istej transakcii ho nemajú.
 
 type Actor = { id: string; firstName: string };
-type Db = Pick<PrismaClient, "dealTask" | "activity"> | Tx;
+type Db = Pick<PrismaClient, "dealTask" | "dealTaskPart" | "activity"> | Tx;
 
 const person = (u: { firstName: string; lastName?: string }) => `${u.firstName} ${u.lastName ?? ""}`.trim();
 
@@ -37,6 +54,15 @@ const person = (u: { firstName: string; lastName?: string }) => `${u.firstName} 
 
 export async function openTaskOf(tx: Db, leadId: string): Promise<DealTask | null> {
     return tx.dealTask.findFirst({ where: { leadId, status: "OPEN" }, orderBy: { createdAt: "asc" } });
+}
+
+// Otvorená úloha aj s časťami – prekryv odoslania sa rozhoduje podľa toho, čo sa EŠTE ROBÍ (§2.8).
+export async function openTaskWithParts(tx: Db, leadId: string) {
+    return tx.dealTask.findFirst({
+        where: { leadId, status: "OPEN" },
+        orderBy: { createdAt: "asc" },
+        include: { parts: { select: { kind: true, status: true } } },
+    });
 }
 
 // Každý zápis Lead.nextAction* / Lead.status mimo príkazov úloh a výslovných foriem (zrušiť + zmeniť, prekryv)
@@ -59,47 +85,82 @@ export async function unlockStep(tx: Tx, lead: Pick<Lead, "id" | "nextActionKind
 
 // ── Vrátené položky (§6.13) ─────────────────────────────────────────────────
 
-export async function pendingByLead(db: Db, leadIds: string[]): Promise<Map<string, PendingItem[]>> {
-    const out = new Map<string, PendingItem[]>();
+// Čo úlohy obchodu vrátili. Wave 4: zdrojom je ČASŤ, nie úloha – čiastočne vybavená OTVORENÁ úloha teda
+// prispieva položkami (cena hotová, návrh sa ešte robí). Preto sa čítajú úlohy všetkých stavov.
+export const PART_SELECT = {
+    kind: true,
+    status: true,
+    result: true,
+    addedAt: true,
+    addedBy: { select: { id: true, firstName: true } },
+    resolvedAt: true,
+    resolvedBy: { select: { id: true, firstName: true } },
+    reason: true,
+} as const;
+
+export async function tasksWithPartsByLead(db: Db, leadIds: string[]): Promise<Map<string, TaskWithParts[]>> {
+    const out = new Map<string, TaskWithParts[]>();
     if (leadIds.length === 0) return out;
-    // [WAVE 4] Čiastočné vybavenie (wave-4-proposal.md §2.4): položky vráti aj OTVORENÁ úloha s čiastočným výsledkom
-    // (cena hotová, návrh ešte nie) – tento filter a returnedItems v lib/domain/tasks.ts sa rozšíria spolu.
     const tasks = await db.dealTask.findMany({
-        where: { leadId: { in: leadIds }, status: { in: ["DONE", "DECLINED"] } },
-        select: {
-            id: true,
-            leadId: true,
-            type: true,
-            status: true,
-            result: true,
-            closeReason: true,
-            closedAt: true,
-            closedBy: { select: { id: true, firstName: true } },
-        },
+        where: { leadId: { in: leadIds }, type: "HELP" },
+        select: { id: true, leadId: true, type: true, status: true, parts: { select: PART_SELECT } },
     });
-    if (tasks.length === 0) return out;
-    const withTasks = [...new Set(tasks.map((t) => t.leadId))];
+    for (const t of tasks) {
+        const list = out.get(t.leadId) ?? [];
+        list.push({ id: t.id, type: t.type, status: t.status, parts: t.parts });
+        out.set(t.leadId, list);
+    }
+    return out;
+}
+
+// Čo už niekto spotreboval – s FAKTAMI (kedy, kto, prečo), nie len odkazmi: bez nich by projekcia častí
+// nevedela vyrobiť dátum odoslania, ktorý sľubuje (wave 4 §2.5, R02-2).
+export async function consumptionByLead(db: Db, leadIds: string[]): Promise<Map<string, Consumption[]>> {
+    const out = new Map<string, Consumption[]>();
+    if (leadIds.length === 0) return out;
     const rows = await db.activity.findMany({
         where: {
-            leadId: { in: withTasks },
+            leadId: { in: leadIds },
             OR: [
                 { type: "OFFER_SENT", revertedAt: null },
                 { type: "TASK_RESULT_DISMISSED", taskId: { not: null } },
             ],
         },
-        select: { leadId: true, type: true, taskId: true, meta: true },
+        select: { id: true, leadId: true, type: true, taskId: true, meta: true, createdAt: true, user: { select: { id: true, firstName: true } } },
     });
-    for (const leadId of withTasks) {
-        const own = rows.filter((r) => r.leadId === leadId);
+    for (const r of rows) {
+        const list = out.get(r.leadId) ?? [];
+        if (r.type === "OFFER_SENT") {
+            const meta = parseOfferMeta(r.meta);
+            const at = meta ? offerInstant(meta, r.createdAt) : r.createdAt;
+            for (const ref of fulfilsOfMeta(r.meta)) {
+                list.push({ ref, state: "SENT", at, by: r.user, reason: null, activityId: r.id });
+            }
+        } else {
+            const reason = dismissalReasonOfMeta(r.meta);
+            for (const ref of dismissedItemsOfMeta(r.taskId, r.meta)) {
+                list.push({ ref, state: "DISMISSED", at: r.createdAt, by: r.user, reason, activityId: r.id });
+            }
+        }
+        out.set(r.leadId, list);
+    }
+    return out;
+}
+
+export async function pendingByLead(db: Db, leadIds: string[]): Promise<Map<string, PendingItem[]>> {
+    const out = new Map<string, PendingItem[]>();
+    if (leadIds.length === 0) return out;
+    const tasks = await tasksWithPartsByLead(db, leadIds);
+    if (tasks.size === 0) return out;
+    const consumed = await consumptionByLead(db, [...tasks.keys()]);
+    for (const [leadId, list] of tasks) {
+        const own = consumed.get(leadId) ?? [];
         out.set(
             leadId,
-            pendingItems(
-                tasks.filter((t) => t.leadId === leadId),
-                {
-                    fulfils: own.filter((r) => r.type === "OFFER_SENT").flatMap((r) => fulfilsOfMeta(r.meta)),
-                    dismissed: own.filter((r) => r.type === "TASK_RESULT_DISMISSED").flatMap((r) => dismissedItemsOfMeta(r.taskId, r.meta)),
-                },
-            ),
+            pendingItems(list, {
+                fulfils: own.filter((c) => c.state === "SENT").map((c) => c.ref),
+                dismissed: own.filter((c) => c.state === "DISMISSED").map((c) => c.ref),
+            }),
         );
     }
     return out;
@@ -147,7 +208,12 @@ export async function dismissItems(
 ): Promise<ItemRef[]> {
     const pending = opts.pending ?? (await loadPending(tx, leadId));
     const byKey = new Map(pending.map((i) => [itemKey(i), i]));
-    const refs: ItemRef[] = input.items.map((i) => ({ taskId: i.taskId, kind: i.kind, ...(i.designId ? { designId: i.designId } : {}) }));
+    const refs: ItemRef[] = input.items.map((i) => ({
+        taskId: i.taskId,
+        kind: i.kind,
+        ...(i.designId ? { designId: i.designId } : {}),
+        ...(i.part ? { part: i.part } : {}),
+    }));
     if (new Set(refs.map(itemKey)).size !== refs.length) throw new AccessError("FORBIDDEN", "Neplatné údaje.");
     for (const r of refs) {
         if (!byKey.has(itemKey(r))) throw new AccessError("STALE", "Výsledok už bol vybavený – obnovujem.");
@@ -170,7 +236,7 @@ export async function dismissItems(
                 taskId,
                 note: neposielam ? `Neposielam: ${labels}${reason ? ` – ${reason}` : ""}` : `${ACKNOWLEDGED_TEXT}: ${labels}${reason ? ` – ${reason}` : ""}`,
                 meta: {
-                    items: items.map((r) => ({ kind: r.kind, ...(r.designId ? { designId: r.designId } : {}) })),
+                    items: items.map((r) => ({ kind: r.kind, ...(r.designId ? { designId: r.designId } : {}), ...(r.part ? { part: r.part } : {}) })),
                     reason: reason ?? (neposielam ? null : ACKNOWLEDGED_TEXT),
                     ...(opts.fp ? { fp: opts.fp } : {}),
                 },
@@ -190,40 +256,283 @@ export async function dismissAllPending(tx: Tx, actor: Actor, leadId: string, re
         tx,
         actor,
         leadId,
-        { items: pending.map((i) => ({ taskId: i.taskId, kind: i.kind, ...(i.designId ? { designId: i.designId } : {}) })), reason },
+        {
+            items: pending.map((i) => ({
+                taskId: i.taskId,
+                kind: i.kind,
+                ...(i.designId ? { designId: i.designId } : {}),
+                ...(i.part ? { part: i.part } : {}),
+            })),
+            reason,
+        },
         source,
         { pending },
     );
 }
 
-// ── Uzavretie úlohy ──────────────────────────────────────────────────────────
+// ── Časti úlohy: jediné miesto, kde sa mení ich stav aj stav úlohy (wave 4 §2.4a) ──
+// Každý koniec úlohy sú tie isté dva kroky: vyrieš menované časti, potom PREPOČÍTAJ stav úlohy. Nič iné o stave
+// nerozhoduje a riadok na úrovni úlohy sa vyberá podľa VÝSLEDNÉHO stavu, nikdy podľa názvu akcie, ktorá ho spôsobila.
 
-async function closeTask(
+export type PartOp =
+    | { kind: DealTaskContent; op: "DELIVERED"; result: TaskResult }
+    | { kind: DealTaskContent; op: "DECLINED"; reason: string }
+    | { kind: DealTaskContent; op: "WITHDRAWN"; reason: string };
+
+const PART_ROW_TYPE = {
+    DELIVERED: "TASK_PART_DONE",
+    DECLINED: "TASK_PART_DECLINED",
+    WITHDRAWN: "TASK_PART_WITHDRAWN",
+} as const satisfies Record<PartOp["op"], ActivityType>;
+
+const TASK_ROW_TYPE = {
+    DONE: "TASK_DONE",
+    DECLINED: "TASK_DECLINED",
+    CANCELLED: "TASK_CANCELLED",
+} as const;
+
+export async function partsOf(tx: Db, taskId: string) {
+    return tx.dealTaskPart.findMany({ where: { taskId }, select: { kind: true, status: true, result: true, reason: true } });
+}
+
+// Zlúčený výsledok všetkých dodaných častí – to, čo TASK_DONE.meta.result nieslo aj vo wave 3.
+function mergedResult(parts: readonly { kind: DealTaskContent; status: DealTaskPartStatus; result: unknown }[]): TaskResult {
+    const out: TaskResult = {};
+    for (const p of parts) {
+        if (p.status !== "DELIVERED") continue;
+        const r = parseTaskResult(p.result);
+        if (!r) continue;
+        if (r.price) out.price = r.price;
+        if (r.designs) out.designs = [...(out.designs ?? []), ...r.designs];
+        if (r.answer) out.answer = out.answer ? `${out.answer}\n${r.answer}` : r.answer;
+    }
+    return out;
+}
+
+function opNote(ops: readonly PartOp[]): string {
+    return ops
+        .map((o) => {
+            const label = TASK_CONTENT_LABEL[o.kind];
+            if (o.op === "DELIVERED") return `${label}: ${resultNote(o.result) || "hotové"}`;
+            return `${label} – ${o.op === "DECLINED" ? "nerobím" : "stiahnuté"}: ${o.reason}`;
+        })
+        .join(" · ");
+}
+
+// Veta na karte a v histórii: „Vybavené" nikdy nezamlčí, že časť nevyšla (Q10).
+function taskCloseNote(
+    status: DealTaskStatus,
+    parts: readonly { kind: DealTaskContent; status: DealTaskPartStatus }[],
+    taskReason: string | null,
+): string {
+    const say = (p: { kind: DealTaskContent; status: DealTaskPartStatus }) => {
+        const label = TASK_CONTENT_LABEL[p.kind].toLowerCase();
+        if (p.status === "DELIVERED") return `${label} odovzdaná`;
+        if (p.status === "DECLINED") return `${label} zamietnutá`;
+        return `${label} zrušená`;
+    };
+    const detail = sortTaskContents(parts.map((p) => p.kind))
+        .map((k) => say(parts.find((p) => p.kind === k)!))
+        .join(", ");
+    const head = status === "DONE" ? "Vybavené" : status === "DECLINED" ? "Zamietnuté" : "Úloha zrušená";
+    return `${head}: ${detail}${taskReason ? ` (${taskReason})` : ""}`;
+}
+
+// Vyrieš menované časti a prepočítaj stav úlohy. `primary` = hlavný riadok príkazu (s kľúčom); keď je null,
+// hlavný riadok patrí volajúcemu (uzavretie obchodu, zmena vlastníka) a riadky častí sú vedľajšie.
+export async function applyPartOps(
     tx: Tx,
+    actor: Actor,
     task: DealTask,
-    data: { status: "DONE" | "DECLINED" | "CANCELLED"; closedById: string; closeReason?: string | null; result?: TaskResult },
+    ops: readonly PartOp[],
+    source: ActivitySource,
+    primary: { key: string; fp: string } | null,
+    opts: { taskReason?: string | null } = {},
+): Promise<{ status: DealTaskStatus; closed: boolean }> {
+    if (ops.length === 0) throw new AccessError("FORBIDDEN", "Neplatné údaje.");
+    const now = new Date();
+    for (const op of ops) {
+        // Podmienený zápis: časť musí byť ešte REQUESTED (obrana do hĺbky – všetko beží pod zámkom Lead riadku).
+        const n = await tx.dealTaskPart.updateMany({
+            where: { taskId: task.id, kind: op.kind, status: "REQUESTED" },
+            data: {
+                status: op.op,
+                resolvedById: actor.id,
+                resolvedAt: now,
+                ...(op.op === "DELIVERED" ? { result: op.result } : { reason: op.reason }),
+            },
+        });
+        if (n.count !== 1) throw new AccessError("STALE", "Časť úlohy sa medzitým zmenila – obnovujem.");
+    }
+
+    const parts = await partsOf(tx, task.id);
+    const status = taskStatusOfParts(parts);
+    const closed = status !== "OPEN";
+    if (status !== task.status) {
+        const n = await tx.dealTask.updateMany({
+            where: { id: task.id, status: task.status },
+            data: {
+                status,
+                ...(closed
+                    ? {
+                          closedAt: now,
+                          closedById: actor.id,
+                          // closeReason drží len taký koniec, ktorý má JEDEN dôvod za celú úlohu; zmiešaný koniec
+                          // necháva NULL a dôvody ostávajú na častiach.
+                          closeReason: opts.taskReason ?? null,
+                      }
+                    : {}),
+            },
+        });
+        if (n.count !== 1) throw new AccessError("STALE", "Úloha sa medzitým zmenila – obnovujem.");
+    }
+
+    // Hlavný riadok príkazu: dodanie vyhráva nad zamietnutím (jeden príkaz môže robiť oboje).
+    const leadRowOp: PartOp["op"] = ops.some((o) => o.op === "DELIVERED")
+        ? "DELIVERED"
+        : ops.some((o) => o.op === "DECLINED")
+          ? "DECLINED"
+          : "WITHDRAWN";
+    await tx.activity.create({
+        data: {
+            leadId: task.leadId,
+            userId: actor.id,
+            type: PART_ROW_TYPE[leadRowOp],
+            category: "BUSINESS",
+            source,
+            taskId: task.id,
+            note: opNote(ops),
+            meta: { parts: sortTaskContents(ops.map((o) => o.kind)), ...(primary ? { fp: primary.fp } : {}) },
+            ...(primary ? { idempotencyKey: primary.key } : {}),
+        },
+    });
+
+    // Riadok na úrovni úlohy sa píše podľa VÝSLEDNÉHO stavu (§2.4a) – aby história, pendingSummary a všetci
+    // doterajší čitatelia fungovali bez zmeny. Nikdy nenesie kľúč: ten má hlavný riadok príkazu.
+    if (closed) {
+        await tx.activity.create({
+            data: {
+                leadId: task.leadId,
+                userId: actor.id,
+                type: TASK_ROW_TYPE[status as "DONE" | "DECLINED" | "CANCELLED"],
+                category: "BUSINESS",
+                source,
+                taskId: task.id,
+                note: taskCloseNote(status, parts, opts.taskReason ?? null),
+                ...(status === "DONE" ? { meta: { result: mergedResult(parts) } } : {}),
+            },
+        });
+    }
+    await bumpLeadOnce(tx, task.leadId);
+    return { status, closed };
+}
+
+// Odmietnuté odovzdanie („Nie, pokračuj ty"): HANDOVER nemá časti, takže tu niet čo prepočítavať – je to jeden
+// koniec s jedným dôvodom. Preto NIE JE súčasťou resolveTaskParts (tá rieši výhradne časti, §2.4a / B6).
+export async function declineHandover(
+    tx: Tx,
+    actor: Actor,
+    lead: Lead,
+    task: DealTask,
+    reason: string,
+    source: ActivitySource,
+    primary: { key: string; fp: string },
 ) {
-    // Podmienený zápis: úloha musí byť ešte OPEN (obrana do hĺbky – všetko beží pod zámkom Lead riadku).
     const n = await tx.dealTask.updateMany({
         where: { id: task.id, status: "OPEN" },
+        data: { status: "DECLINED", closedAt: new Date(), closedById: actor.id, closeReason: reason },
+    });
+    if (n.count !== 1) throw new AccessError("STALE", "Úloha sa medzitým zmenila – obnovujem.");
+    await tx.activity.create({
         data: {
-            status: data.status,
-            closedAt: new Date(),
-            closedById: data.closedById,
-            closeReason: data.closeReason ?? null,
-            ...(data.result ? { result: data.result } : {}),
+            leadId: lead.id,
+            userId: actor.id,
+            type: "TASK_DECLINED",
+            category: "BUSINESS",
+            source,
+            taskId: task.id,
+            note: `Odovzdanie neprijaté: ${reason}`,
+            meta: { fp: primary.fp },
+            idempotencyKey: primary.key,
         },
+    });
+    // Krok ostáva, čím bol – klient ostáva u obchodníka; len sa odomkne a je splatný dnes (D16).
+    await unlockStep(tx, lead);
+}
+
+// Prijaté odovzdanie: HANDOVER nemá časti, takže jeho koniec neprechádza prepočtom (§2.4a posledný riadok).
+export async function acceptHandover(tx: Tx, actor: Actor, task: DealTask) {
+    const n = await tx.dealTask.updateMany({
+        where: { id: task.id, status: "OPEN" },
+        data: { status: "DONE", closedAt: new Date(), closedById: actor.id },
     });
     if (n.count !== 1) throw new AccessError("STALE", "Úloha sa medzitým zmenila – obnovujem.");
 }
 
-// Zrušenie otvorenej úlohy (vlastník, uzavretie obchodu, zmena vlastníka) – vedľajší riadok bez kľúča.
+// Zrušenie otvorenej úlohy (vlastník, uzavretie obchodu, zmena vlastníka): stiahne KAŽDÚ časť, ktorá sa ešte robí,
+// s tým istým dôvodom – a §2.4a potom pomenuje výsledný stav. Už dodané časti prežijú a čakajú na odoslanie.
+// Meno aj tvar vstupu ostávajú z wave 3, aby sa volajúci nemenili.
 export async function cancelOpenTask(tx: Tx, actor: Actor, task: DealTask, reason: string, source: ActivitySource) {
-    await closeTask(tx, task, { status: "CANCELLED", closedById: actor.id, closeReason: reason });
+    const open = (await partsOf(tx, task.id)).filter((p) => p.status === "REQUESTED");
+    if (open.length === 0) {
+        // HANDOVER (a teoreticky úloha bez častí): ostáva pôvodné správanie wave 3.
+        const n = await tx.dealTask.updateMany({
+            where: { id: task.id, status: "OPEN" },
+            data: { status: "CANCELLED", closedAt: new Date(), closedById: actor.id, closeReason: reason },
+        });
+        if (n.count !== 1) throw new AccessError("STALE", "Úloha sa medzitým zmenila – obnovujem.");
+        await tx.activity.create({
+            data: {
+                leadId: task.leadId,
+                userId: actor.id,
+                type: "TASK_CANCELLED",
+                category: "BUSINESS",
+                source,
+                taskId: task.id,
+                note: `Úloha zrušená: ${reason}`,
+            },
+        });
+        await bumpLeadOnce(tx, task.leadId);
+        return;
+    }
+    await applyPartOps(
+        tx,
+        actor,
+        task,
+        open.map((p) => ({ kind: p.kind, op: "WITHDRAWN" as const, reason })),
+        source,
+        null,
+        { taskReason: reason },
+    );
+}
+
+// „Zrušiť + zmeniť": vlastník stiahol poslednú časť a v tom istom uložení si vybral ďalší krok. Výslovne
+// zvolený krok vyhráva nad záložným (P4) – volajúci ho už overil cez assertStepAllowed.
+export async function setNextStepAfterTask(
+    tx: Tx,
+    actor: Actor,
+    lead: Lead,
+    step: { kind: NextActionKind; note: string | null },
+    source: ActivitySource,
+    now = new Date(),
+): Promise<void> {
+    const next: NextActionData = {
+        nextActionKind: step.kind,
+        nextActionAt: businessTodayStart(now),
+        nextActionHasTime: false,
+        nextActionMode: "SCHEDULED",
+        nextActionNote: step.note,
+    };
+    await updateLead(tx, lead.id, next);
     await tx.activity.create({
-        data: { leadId: task.leadId, userId: actor.id, type: "TASK_CANCELLED", category: "BUSINESS", source, taskId: task.id, note: `Úloha zrušená: ${reason}` },
+        data: createPlanningActivity({
+            leadId: lead.id,
+            userId: actor.id,
+            type: hadNextAction(lead) ? "NEXT_ACTION_CHANGED" : "NEXT_ACTION_SET",
+            source,
+            note: describeNextAction(next),
+        }),
     });
-    await bumpLeadOnce(tx, task.leadId);
 }
 
 // ── Vznik úlohy (§6.1, §6.8) ────────────────────────────────────────────────
@@ -279,14 +588,27 @@ export async function createTask(
             data: createAuditActivity({ leadId: lead.id, userId: actor.id, type: "STATUS_CHANGED", source, note: "Obchod sa zobudil – úloha pre manažéra" }),
         });
     }
+    const contents = input.type === "HELP" ? sortTaskContents(input.contents) : [];
     const task = await tx.dealTask.create({
         data: {
             leadId: lead.id,
             type: input.type,
-            contents: input.type === "HELP" ? input.contents : [],
             text: input.text,
             requestedById: actor.id,
             assigneeId: input.assignee.id,
+            // P6 (§2.6): kam sa krok vráti, keď nebude čo poslať – ručne zvolený krok pred zamknutím; systémový „Poslať …“
+            // sa nahradí neutrálnym „Zavolať“ (R02-1).
+            // Zapisuje sa RAZ a už sa neprepisuje; bez neho by „Iné"-only úloha nemala kam spadnúť (R02-3).
+            // Ručne zvolený krok sa uloží tak, ako bol; systémový „Poslať …“ (alebo žiadny) sa nahradí neutrálnym
+            // „Zavolať“ (R02-1) – jeho práca sa počas úlohy odošle a zamknutý krok by potom tvrdil, že sa má poslať znova.
+            ...(input.type === "HELP"
+                ? (() => {
+                      const fb = helpFallback({ kind: lead.nextActionKind, note: lead.nextActionNote });
+                      return { fallbackKind: fb.kind, fallbackNote: fb.note };
+                  })()
+                : { fallbackKind: lead.nextActionKind, fallbackNote: lead.nextActionNote }),
+            // Wave 4: jedna časť na každý druh práce. Stav úlohy sa od nich odteraz odvodzuje.
+            parts: { create: contents.map((kind) => ({ kind, addedById: actor.id })) },
         },
     });
     await tx.activity.create({
@@ -297,8 +619,8 @@ export async function createTask(
             category: "BUSINESS",
             source,
             taskId: task.id,
-            note: `${contentsText(input.type, task.contents)} → ${input.assignee.firstName}: ${input.text}`,
-            meta: { fp: primary.fp, type: input.type, contents: task.contents, assigneeId: input.assignee.id },
+            note: `${contentsText(input.type, contents)} → ${input.assignee.firstName}: ${input.text}`,
+            meta: { fp: primary.fp, type: input.type, contents, assigneeId: input.assignee.id },
             idempotencyKey: primary.key,
         },
     });
@@ -331,23 +653,27 @@ export async function addTaskMessage(
     await bumpLeadOnce(tx, task.leadId);
 }
 
-// ── Vybavenie (§6.3) ─────────────────────────────────────────────────────────
+// ── Odovzdanie častí (§6.3, wave 4 §2.7) ────────────────────────────────────
 
-export type FinishInput = {
+// Čo manažér odovzdáva za JEDNU časť. Vyplnené pole nie je rozhodnutie (R02-4): manažér časť VÝSLOVNE zaškrtne
+// a server odmietne hodnoty pre druh, ktorý v tomto uložení nemenoval.
+export type DeliverInput = {
     price?: { amount: number; note: string | null } | null;
     designIds?: string[];
     answer?: string | null;
 };
 
-// Overí, že výsledok pokrýva každý zaškrtnutý obsah (I5) a nič navyše; cenu uloží na obchod; návrhy prečíta pod zámkom.
-export async function buildTaskResult(tx: Tx, lead: Lead, task: DealTask, input: FinishInput): Promise<TaskResult> {
-    const wants = (c: DealTaskContent) => task.contents.includes(c);
-    const result: TaskResult = {};
-    if (wants("PRICE")) {
+// Výsledok jednej časti: presne jeden kľúč, overený pod zámkom. Návrhy sa čítajú z DB, aby sa uložilo to, čo
+// manažér naozaj potvrdil.
+export async function buildPartResult(tx: Tx, lead: Lead, kind: DealTaskContent, input: DeliverInput): Promise<TaskResult> {
+    const extra =
+        (kind !== "PRICE" && input.price) || (kind !== "DESIGN" && input.designIds?.length) || (kind !== "OTHER" && input.answer?.trim());
+    if (extra) throw new AccessError("FORBIDDEN", "Neplatné údaje.");
+    if (kind === "PRICE") {
         if (!input.price) throw new AccessError("FORBIDDEN", "Doplň cenu.");
-        result.price = { amount: moneyToString(input.price.amount), note: input.price.note?.trim() || null };
-    } else if (input.price) throw new AccessError("FORBIDDEN", "Neplatné údaje.");
-    if (wants("DESIGN")) {
+        return { price: { amount: moneyToString(input.price.amount), note: input.price.note?.trim() || null } };
+    }
+    if (kind === "DESIGN") {
         const ids = [...new Set(input.designIds ?? [])];
         if (ids.length === 0) throw new AccessError("FORBIDDEN", "Vyber návrh.");
         const found = await tx.design.findMany({
@@ -355,19 +681,17 @@ export async function buildTaskResult(tx: Tx, lead: Lead, task: DealTask, input:
             select: { id: true, label: true, targetUrl: true, currentVersion: true },
         });
         if (found.length !== ids.length) throw new AccessError("NOT_FOUND", "Návrh sa nenašiel.");
-        const noUrl = found.filter((d) => !d.targetUrl);
-        if (noUrl.length) throw new AccessError("FORBIDDEN", "Návrh potrebuje odkaz (URL) – doplň ho v karte Návrh.");
-        result.designs = ids.map((id) => {
-            const d = found.find((f) => f.id === id)!;
-            return { id: d.id, label: d.label, url: d.targetUrl!, version: d.currentVersion };
-        });
-    } else if (input.designIds?.length) throw new AccessError("FORBIDDEN", "Neplatné údaje.");
-    if (wants("OTHER")) {
-        const answer = input.answer?.trim();
-        if (!answer) throw new AccessError("FORBIDDEN", "Napíš odpoveď.");
-        result.answer = answer;
-    } else if (input.answer?.trim()) throw new AccessError("FORBIDDEN", "Neplatné údaje.");
-    return result;
+        if (found.some((d) => !d.targetUrl)) throw new AccessError("FORBIDDEN", "Návrh potrebuje odkaz (URL) – doplň ho v karte Návrh.");
+        return {
+            designs: ids.map((id) => {
+                const d = found.find((f) => f.id === id)!;
+                return { id: d.id, label: d.label, url: d.targetUrl!, version: d.currentVersion };
+            }),
+        };
+    }
+    const answer = input.answer?.trim();
+    if (!answer) throw new AccessError("FORBIDDEN", "Napíš odpoveď.");
+    return { answer };
 }
 
 export function resultNote(result: TaskResult): string {
@@ -378,62 +702,54 @@ export function resultNote(result: TaskResult): string {
     return parts.join(" · ");
 }
 
-// Úloha DONE + TASK_DONE (hlavný riadok, ak je daný kľúč) + odomknutie. Cenu na obchod ukladá volajúci (saveQuote).
-export async function markTaskDone(
+// ── Pridanie a stiahnutie častí (wave 4 §2.7) ───────────────────────────────
+
+// Druh, ktorý sa smie (znova) vyžiadať v TEJ ISTEJ úlohe: nový, alebo taký, ktorý vlastník predtým stiahol.
+// Dodaný ani zamietnutý druh sa nepýta znova – to je NOVÁ úloha (§2.4).
+export async function addParts(
     tx: Tx,
     actor: Actor,
-    lead: Lead,
     task: DealTask,
-    result: TaskResult,
-    source: ActivitySource,
-    primary: { key: string; fp: string } | null,
-    opts: { unlock?: boolean } = {},
-) {
-    await closeTask(tx, task, { status: "DONE", closedById: actor.id, result });
-    await tx.activity.create({
-        data: {
-            leadId: lead.id,
-            userId: actor.id,
-            type: "TASK_DONE",
-            category: "BUSINESS",
-            source,
-            taskId: task.id,
-            note: `Vybavené: ${resultNote(result)}`,
-            meta: { result, ...(primary ? { fp: primary.fp } : {}) },
-            ...(primary ? { idempotencyKey: primary.key } : {}),
-        },
-    });
-    if (opts.unlock !== false) await unlockStep(tx, lead);
-    await bumpLeadOnce(tx, lead.id);
-}
-
-// ── Zamietnutie (§6.6) ───────────────────────────────────────────────────────
-
-export async function declineTask(
-    tx: Tx,
-    actor: Actor,
-    lead: Lead,
-    task: DealTask,
-    reason: string,
+    kinds: readonly DealTaskContent[],
+    message: string,
     source: ActivitySource,
     primary: { key: string; fp: string },
-) {
-    await closeTask(tx, task, { status: "DECLINED", closedById: actor.id, closeReason: reason });
+): Promise<void> {
+    if (task.type !== "HELP") throw new AccessError("FORBIDDEN", "Odovzdanie nemá časti.");
+    const wanted = sortTaskContents(kinds);
+    if (wanted.length === 0) throw new AccessError("FORBIDDEN", "Vyber, čo pribúda.");
+    const existing = await partsOf(tx, task.id);
+    for (const kind of wanted) {
+        const part = existing.find((p) => p.kind === kind);
+        if (part && part.status !== "WITHDRAWN") {
+            throw new AccessError("STALE", `${TASK_CONTENT_LABEL[kind]} v tejto úlohe už je – obnovujem.`);
+        }
+        if (part) {
+            // Stiahnutá časť sa vracia do hry čistá: kto a kedy ju pridal znova, prečo sa stiahla, už neplatí.
+            const n = await tx.dealTaskPart.updateMany({
+                where: { taskId: task.id, kind, status: "WITHDRAWN" },
+                data: { status: "REQUESTED", addedById: actor.id, addedAt: new Date(), resolvedById: null, resolvedAt: null, reason: null, result: Prisma.DbNull },
+            });
+            if (n.count !== 1) throw new AccessError("STALE", "Časť úlohy sa medzitým zmenila – obnovujem.");
+        } else {
+            await tx.dealTaskPart.create({ data: { taskId: task.id, kind, addedById: actor.id } });
+        }
+    }
     await tx.activity.create({
         data: {
-            leadId: lead.id,
+            leadId: task.leadId,
             userId: actor.id,
-            type: "TASK_DECLINED",
+            type: "TASK_PART_ADDED",
             category: "BUSINESS",
             source,
             taskId: task.id,
-            note: `Zamietnuté: ${reason}`,
-            meta: { fp: primary.fp },
+            // Správa je riadok vlákna – manažér vidí, PREČO to pribudlo, bez druhého TASK_MESSAGE.
+            note: `Pridané: ${wanted.map((k) => TASK_CONTENT_LABEL[k]).join(" + ")} – ${message}`,
+            meta: { parts: wanted, fp: primary.fp },
             idempotencyKey: primary.key,
         },
     });
-    // Krok ostáva, čím bol („Poslať cenu" – stále sa musí stať), len je odomknutý a splatný dnes (D16).
-    await unlockStep(tx, lead);
+    await bumpLeadOnce(tx, task.leadId);
 }
 
 // ── Presun úlohy inému manažérovi (D17) ─────────────────────────────────────
@@ -525,13 +841,15 @@ export async function ownerTransition(
     const reason: DealOwnershipReason = resolver && open?.type === "HANDOVER" ? "HANDOVER" : opts.kind;
 
     let taskEnded = false;
+    // Úloha skončila zrušením (nie prijatým odovzdaním): krok sa odvodí naposledy, ako pri každom inom konci úlohy (R01-5).
+    let cancelled = false;
     if (open) {
         if (!target) {
             await cancelOpenTask(tx, actor, open, "obchod bez vlastníka", opts.source);
-            taskEnded = true;
+            taskEnded = cancelled = true;
         } else if (resolver) {
             if (open.type === "HANDOVER") {
-                await closeTask(tx, open, { status: "DONE", closedById: actor.id });
+                await acceptHandover(tx, actor, open);
                 await tx.activity.create({
                     data: {
                         leadId: lead.id,
@@ -545,6 +863,7 @@ export async function ownerTransition(
                 });
             } else {
                 await cancelOpenTask(tx, actor, open, `klienta prevzal ${person(target)}`, opts.source);
+                cancelled = true;
             }
             taskEnded = true;
         } else if (opts.taskAssignee && opts.taskAssignee.id !== open.assigneeId) {
@@ -553,9 +872,16 @@ export async function ownerTransition(
         }
     }
 
+    // Výslovný krok prevzatia vyhráva; inak zrušená úloha odomkne krok podľa P6 (jeden zápis aj jeden riadok histórie).
+    const derivesStep = Boolean(open && cancelled && !opts.step);
+    if (derivesStep && open) {
+        // lockedStep.ts číta z tohto modulu (aj cez requestMutations) – import až tu drží graf modulov bez cyklu.
+        const { stepOnTaskClose } = await import("@/lib/domain/lockedStep");
+        await stepOnTaskClose(tx, actor, lead, open, opts.source);
+    }
     const step: Partial<NextActionData> = opts.step
         ? opts.step
-        : taskEnded && lead.nextActionKind
+        : taskEnded && !derivesStep && lead.nextActionKind
           ? { nextActionAt: businessTodayStart(), nextActionHasTime: false }
           : {};
     await updateLead(tx, lead.id, { ownerId: target?.id ?? null, ...step });

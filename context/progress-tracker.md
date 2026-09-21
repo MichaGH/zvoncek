@@ -206,6 +206,186 @@ Still open (§6 of that file): whether `ActivitySource.CLIENTS` survives the mer
 handed-off-by, note edit/delete rules, whether a sales-rep team leader is a separate role, whether a future developer
 role shares this screen, and the parked ceník-in-app idea.
 
+## Wave 4 Part A: one task, several parts (implementation complete on the test branch, 2026-09-20; review partA-R01 fixes applied 2026-09-21, human acceptance pending)
+
+Design: `context/features/01-salesrep/wave-4-proposal.md` (rewritten from zero against the shipped wave 5; reviews R01
+and R02 resolved). Built in the order §9 asks for: prerequisites → schema → conversion → pure rules → reads → commands
+→ step rules → screens → tests → cutover → docs. **Parts B (notes) and C (order note) are not built** — they wait on
+Michal's Q5 / Q6.
+
+### Prerequisites fixed first (§7) — both were defects in code shipped by wave 5
+
+- **P0 — `defaultStep(..., { locked: true })` could store a locked step with mode `IN_PROGRESS`.** The *changed kind*
+  branch cleared the date but not the mode, so a pencil edit on a deal with an open task could leave
+  `SEND_DESIGN` + `IN_PROGRESS` + `nextActionAt = NULL`, against "an `OPEN` task ⇒ date NULL and mode SCHEDULED"
+  (wave 3 I8). Now `opts.locked` forces `SCHEDULED`. It mattered more for wave 4 because P6 runs that branch
+  constantly. Property test: `w4Pure` asserts it over every outstanding set × every current step.
+- **P1 — the follow-up call was not gated on what the client is still owed.** `finishAndSendAs` decided "Zavolať, či
+  prišlo" from returned **task items** only, and `recordOffer`'s follow-up branch asserted only I10 — neither looked at
+  `LeadRequest`. So a manager who finished price + návrh and sent them himself scheduled a call about an email while
+  the client was still owed info and cenník; the send dialog enforced the right rule, the **server** did not. Now
+  `recordOffer` reads `outstandingOf` after the reconcile: `followUp: true` with outstanding work is refused
+  (`FORBIDDEN`, after I10's precise message gets its chance), and `finishAndSendAs` passes `followUp: "IF_CLEAR"`, so
+  it degrades to the remaining send step instead of failing. Test: `w4FollowUpGate`.
+
+### Schema (S-13a, S-14, S-15, then S-13b — applied on test only)
+
+- New table **`DealTaskPart`** (`taskId`, `kind`, `status`, `result?`, `addedBy/At`, `resolvedBy/At?`, `reason?`) with
+  **`@@unique([taskId, kind])`** — load-bearing: it keeps a returned item's address `(taskId, kind, designId)` stable
+  and makes a kind either `REQUESTED` or resolved, never both. Enum `DealTaskPartStatus`.
+- `DealTask.fallbackKind` / `fallbackNote` — the step the deal had **before** the task locked it (R02-3).
+- `ActivityType += TASK_PART_ADDED, TASK_PART_DONE, TASK_PART_DECLINED, TASK_PART_WITHDRAWN` (S-14) and
+  `PRICE_CHANGED` (S-15).
+- **S-13b:** `DealTask.contents` and `DealTask.result` **dropped** after the code was switched over — what a task
+  carries and what it returned are now only its parts. Production never had either column, so nothing is owed.
+- Endpoint verified before each command (`…nhww8x` / `neondb`), both diffs reviewed before applying, `migrate diff`
+  empty afterwards. Ledger: `context/domain/db-changes.md` §1.
+
+### Test-data conversion (§6.3)
+
+`prisma/backfill/2026-09-wave4-parts.ts` + `wave4-parts-sql.ts`: dry-run → apply → verify, one part per task content,
+**12 parts from 12 tasks, no blockers, zero drift**. After the cutover parts are the source of truth and are never
+re-derived, so the script now refuses to run (`POST_CUTOVER_SQL` detects real part state a pure derivation could not
+have produced) and is kept only as the record of what ran. Production runs none of it — it has no task rows.
+
+### Code
+
+- **`lib/domain/tasks.ts`** (pure, client-safe): `taskStatusOfParts` (the task status as an order-independent function
+  of its parts), `taskPartState(task, parts, consumption)` → `{ parts, openKinds, nextStatus }`, `partItems`,
+  `partMarkLabel`, `partInPlay`, and the types that keep **part state and item fate apart** — `ItemDisposition`
+  (`WAITING` / `SENT` / `DISMISSED`) per returned item, `PartMark` for the part. `returnedItems` now reads **parts**,
+  so an open task contributes items as soon as one part is delivered. `itemKey` gained `part` for a declined part, so
+  two declined parts of one task are two acknowledgements. `overlapsTask` → `overlappingKinds` (only kinds still
+  `REQUESTED`); `OVERLAP_CHOICES` = `KEEP_OPEN` · `WITHDRAW_PARTS`.
+- **`lib/domain/taskMutations.ts`**: `applyPartOps` is the **only** writer of part state — resolve the named parts,
+  recompute the task status, write the keyed `TASK_PART_*` row and the task-level row the **resulting status** calls
+  for (§2.4a). `cancelOpenTask` keeps its name, callers and input and now withdraws every part still `REQUESTED`.
+  `addParts`, `buildPartResult` (refuses values for a kind it was not asked to deliver), `acceptHandover`,
+  `declineHandover`, `setNextStepAfterTask`, `openTaskWithParts`, `consumptionByLead`.
+- **`lib/domain/lockedStep.ts`** (new): P6 — while a task is open the step is
+  `defaultStep(outstanding, lead, { locked: true }) ?? task fallback`, recomputed on every event that changes the
+  outstanding work, always date `NULL` + `SCHEDULED`. Its own module so `taskMutations` and `requestMutations` stay
+  acyclic, and **command-owned**: putting it inside `recordOffer`'s `factOnly` branch would have wiped the step date
+  on a deal with no task at all (`keepStep`, the SMS path).
+- **Commands**: `askManagerAs` takes 1–3 kinds and stores the fallback step; `resolveTaskPartsAs` (new) replaces
+  `finishTaskAs` and absorbs `declineTaskAs`; `finishAndSendAs` works over the named parts; `withdrawTaskPartsAs` and
+  `addTaskPartsAs` (owner only) are new; `declineHandoverAs` keeps "Nie, pokračuj ty" for a `HANDOVER`, which has no
+  parts to decline. `recordOfferSentAs` and `logFollowUpAs` swap `cancelTask`-on-overlap for `withdrawParts`.
+- **Reads**: `managerWorkOf`'s `making` is the open task's `REQUESTED` kinds (a delivered part moves to `prepared`
+  without closing the task); the list row carries `openKinds` + a progress line; the detail carries each task's
+  `parts` with their item dispositions; the manager's inbox shows only what is still on **him**.
+- **Screens**: "Požiadať manažéra" is a multi-select; "Hotovo" has a per-part **"Odovzdať teraz"** toggle (a
+  pre-filled price is never a decision — R02-4); the task card lists parts with `○ ◆ ✓ ✗ –`, expands a part's items
+  when there is more than one or something was deliberately not sent, and offers "+ Pridať" / "Už netreba" /
+  "Toto nerobím" / "Zamietnuť všetko"; the send dialog asks about parts, not the whole task.
+
+### Part D — D5 price history (accepted 2026-09-20)
+
+`saveQuote` writes one `PRICE_CHANGED` **BUSINESS** row (so the deal's own rep sees it — the old `CONTACT_UPDATED`
+audit row was invisible to her), including for a **breakdown-only** edit, which used to vanish silently. `meta.via`
+(`EDIT` / `TASK` / `SEND`) keeps one user action from telling the same story twice; the price popup takes an optional
+short reason. The row is deliberately in neither whitelist: it never moves "Naposledy" and cannot be crossed out.
+The last few changes render under the current price on "Cena & ponuky".
+
+### Tests
+
+15 new groups in `prisma/backfill/check-concurrency.ts`: `w4Pure` (the status over all 64 part combinations and its
+order-independence, item addresses, the compact mark, and the P0/P6 property over every outstanding set), `w4Ask`,
+`w4Partial` (Michal's workflow end to end, both orders and all at once), `w4Selection` (R02-4), `w4StepLocked`
+(P6 through deliver / send / correction, plus B1: a deal with **no** task is untouched), `w4Fallback` (R02-3),
+`w4Terminal` (every row of the §2.4a table), `w4Items` (R02-2), `w4WithdrawAdd`, `w4SendWhileOpen`, `w4FollowUpGate`
+(P1), `w4Survives`, `w4Race`, `w4PriceHistory` (D5), `w4Conversion`.
+
+Two wave-3 expectations were **rewritten, not patched around**, because wave 4 changes the behaviour on purpose:
+"finish needs an amount" (delivering only the návrh is now legal and leaves the price open) and the overlap payloads
+(`CANCEL_TASK` → `WITHDRAW_PARTS`).
+
+### Checks (all actually run, 2026-09-20 / 21)
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | clean |
+| `npx eslint .` | only the known pre-existing `components/layout/MobileNav.tsx` error |
+| `npx next build` | succeeded (20 routes) |
+| `npx tsx prisma/backfill/check-business-time.ts` (and `TZ=UTC`) | passed |
+| `npx tsx prisma/backfill/check-client-sections.ts` | passed (totality over 4200 combinations) |
+| `npx tsx prisma/backfill/check-concurrency.ts --expect-endpoint …nhww8x --iterations 100` | **211/211** |
+| `npx tsx prisma/backfill/check-backfill-delta.ts --expect-endpoint …nhww8x --expect-db neondb --owner-username admin --caller-username telesales` | 6/6 — **after fixing a wave-5 leftover, below** |
+| wave-4 conversion dry-run / apply / verify on test | 12 parts, no blockers, zero drift |
+
+**Found while running the checks — a wave-5 leftover in a production-rollout script.**
+`prisma/backfill/2026-09-assignments.ts` classifies a lead by its first *positive* call, but its `POSITIVE` list was
+never updated when wave 5 added `CallOutcome.INTERESTED` — the outcome the call queue now writes for every handoff. So
+every deal created through the shipped wave-5 flow was classified `CONFLICT`, which **aborts the whole one-time
+production backfill**. On the test database that was 17 of Michal's click-through deals. `POSITIVE` now mirrors
+`HANDOFF_OUTCOMES` (`lib/domain/leadFlow.ts`) and the delta check passes 6/6. Nothing wave 4 did caused it; it would
+have surfaced during the production rollout instead.
+
+### Wave 4 Part A — review partA-R01 (`.ai/reviews/01-sales-rep/W4/implementation/partA-R01.md`), fixed 2026-09-21
+
+Findings 1–6 were re-read against the code and all were real. No schema change.
+
+- **partA-R01-1 correction** — `correctRecordAs` now calls `refreshLockedStep` after `correctRecord` (no-op without an open
+  task; an unlocked deal keeps the user's step).
+- **partA-R01-2 "Chceli" pencil** — `setClientAsksAs`: open task → `refreshLockedStep` unconditionally (no `isSystemStep`
+  guard); no task → wave-5 `isSystemStep` rule unchanged.
+- **partA-R01-3 phone/SMS partial withdraw** — UI: only a withdrawal that takes the *last* open part counts as
+  "cancelling"; a partial one is a fact save (`keepLockedStep`) that still asks for the reason. Server: a
+  `withdrawParts` that closes the task passes the lock gate like `cancelTask` (owner's chosen step wins); the `closed`
+  result of `applyPartOps` is now used — a fact-only save that closed the task runs `stepOnTaskClose`.
+- **partA-R01-4 forged `withdrawParts`** — `withdrawMatchesOverlap` (`lib/domain/tasks.ts`) is the one validator for both
+  send commands: exactly the requested kinds the save covers, same task, non-empty (phone: needs a told price).
+- **partA-R01-5 owner change / snooze** — `ownerTransition` (cancel branches only; an accepted HANDOVER is unchanged) and
+  `changeDealStatus` now end the task through `stepOnTaskClose` instead of bare date-filling. Michal's decision on the
+  snooze half: a snooze that cancels an open task **asks for a wake-up date** (`changeStatusAs.snoozeUntil`, required
+  server-side, date input in the detail's status sheet) instead of leaving the step due today ("zobudený" at once).
+- **partA-R01-6** — new part mark `DISMISSED` (⊘ "neposiela sa") when every returned item was deliberately not sent.
+- **partA-R01-7 tests** — new `w4ReviewR01` in `check-concurrency.ts`, built on transitions where the step *kind* visibly
+  changes (CALL ⇄ SEND_QUOTE, SEND_DESIGN → CALL). The old W4-4 correction check stays but is not the evidence.
+- **Not changed here:** partA-R01-8 (production rollout / legacy-column policy) is Michal's decision, not code; the wave-4
+  proposal header is a protected feature file and still says "nothing built".
+
+### Wave 4 Part A — review partA-R02 (`.ai/reviews/01-sales-rep/W4/implementation/partA-R02.md`), fixed 2026-09-21
+
+No schema change. R02-1/2/3/5 fixed; R02-4 and R02-6 are release gates (see the response file).
+
+- **R02-1 system fallback** — a task's fallback step is now `helpFallback(...)`: a manual step returns as it was; an
+  app-generated `SEND_*` (or no step) becomes `CALL` + "Pokračovať s klientom po odpovedi manažéra". Stored at ask time
+  **and** applied on read (`lockedStepFor`), so older tasks are covered. While only the question is left the list and
+  detail read "Čaká na <manažér> – otázka / konzultácia" (`waitingOnQuestionHeadline`); the OTHER answer shows on the task
+  card; `TASK_CONTENT_LABEL.OTHER` = "Otázka / konzultácia" (Michal's decisions, 2026-09-21).
+- **R02-2 e-mail final-part withdrawal** — `recordOfferSentAs` no longer unlocks before the send is reconciled; without a
+  follow-up it runs `stepOnTaskClose` afterwards, with one the requested call wins. The dialog's "Ponechať" now names the
+  step that will really result (fallback exposed as `openTask.fallbackKind`).
+- **R02-3 partial-send confirmation** — a second stage in `OfferSentDialog` (what is sent · what the manager still makes ·
+  the locked step · "Áno, poslať len …" / "Späť"), same idempotency key, composes with the foreign-deal confirmation.
+- **R02-5 docs** — `app-workflow.md` and `operations.md` no longer say a correction / the pencil never touch the step.
+- **Also this session (not a review item):** the five "Čo chceli" cards from the pipeline dialog are now a shared
+  component (`components/shared/OptionCard.tsx`, `RequestContentPicker`) used by the pipeline action sheet **and** the
+  `/calls` drawer (equal card heights via `auto-rows-fr`, one column on phone).
+- Tests: `w4ReviewR02` (W4A-R02-*) starts from a real Wave 5 `SEND_QUOTE` / `SEND_DESIGN`.
+- **Not verified by a human:** the new confirmation and the `/calls` cards on phone + desktop (no browser session).
+
+### Wave 4 — not resolved / to do later
+
+- **Human click-through owed** (phone + desktop, a browser session is not something this agent may open with someone's
+  credentials): asking for two or three kinds at once; the manager's "Hotovo" with one part ticked and the rest left
+  open; sending the ready price while the návrh is still being made; "+ Pridať" and "Už netreba" on a running task;
+  "Toto nerobím" on one part; a DESIGN part with two návrhy where one is sent and the other dropped; the price history
+  on "Cena & ponuky".
+- **Two questions still open for Michal** (they change display and one policy, not the data):
+  **Q12** — a part that returned two návrhy renders as one row with a compact mark (`✓ Návrh · 1 z 2`) that expands to
+  the item lines; confirm that, or ask for two top-level rows. **Q9** — a declined part changes nothing about the
+  client's request (no shortcut, no automation); built as "do nothing", confirm.
+- **Parts B and C are not built.** Part B (`LeadNote`) needs Q5 (§3.3 + §3.4 of the design: INTERNAL is manager-only to
+  **read** as well as write, bodies immutable, deletion records who and why, an old `Lead.note` labelled
+  "Staršia poznámka (autor a pôvod neznámy)"); Part C needs Q6.
+- **Part D leftovers D1–D4** were not taken (Q7 answered only for D5).
+- The wave-5 click-through (F4 in `wave-5-followups.md`) is **still open**; wave 4 was built on top of it rather than
+  after it, so both click-throughs are owed together.
+- `prisma/backfill/2026-09-wave4-parts.ts` and `wave4-parts-sql.ts` are historical: they cannot run after S-13b and
+  refuse to. Keep them until the production rollout is done, then they can go.
+
 ## Wave 5: what the client asked for vs. what they got (DONE on the test branch, 2026-09-20)
 
 Design: `context/features/01-salesrep/wave-5-proposal.md` (draft v4, reviews R01–R03 resolved). Implemented in the
@@ -294,6 +474,24 @@ a concept decision, not a quick fix (open). F3 the interaction sheet repeated it
 **fixed** on branch `feature/wave5-interaction-ui`; the state before the fix is the branch
 `backup/wave5-built-pre-ui-fix-2026-09-20`.
 
+### Wave 5 — implementation review R01, applied (2026-09-20)
+
+Review: `.ai/reviews/01-sales-rep/W5/implementation/R01.md`; answer and open questions:
+`…/R01-response.md`. **No schema change** — everything below is application code, one migration script and tests.
+
+| # | What changed | Where |
+|---|---|---|
+| 1 | The wave-5 backfill no longer has a manual cenník list (it inserted `OPEN` rows for recipients). A canonical `PRICELIST` receipt becomes a linked `SENT` row like any other content; SQL moved to `wave5-requests-sql.ts` so a test runs the real statements | `prisma/backfill/2026-09-wave5-requests.ts`, `wave5-requests-sql.ts`, `w5MigrationPricelist` |
+| 2 | "Chcú niečo poslať" no longer sends a pre-computed step: `stepFromRequests` makes the server derive it after asks and phone price are written; if the told price covered everything the sheet goes to "Kedy ďalej?" | `lib/commands/dealWork.ts`, `InteractionSheet.tsx`, `w5StepFromRequests` |
+| 3 | Snooze / close from the sheet with open asks: lists them, mandatory reason, `withdraw {ids, reason}` compared to the open rows under the lock, one revision bump, audit row | `dealWork.ts`, `InteractionSheet.tsx`, queries (`openRequests`), `w5CloseWithdraw` |
+| 4 | "Čo sme poslali" pre-ticks only what was asked (`offerDefaults`) | `clientRequests.ts`, `OfferSentDialog.tsx`, `w5DialogDefaults` |
+| 5 | Untracked návrh receipt: `untrackedDesign` (only for a deal with no `Design`), satisfies the request, `Lead.designSentAt` recomputed, correction reopens | `offers.ts`, `offerMutations.ts`, `commands/offers.ts`, dialog, `w5UntrackedDesign` |
+| 7 | Follow-up round (Michal's answers): manager LOST / UNREACHABLE withdraw open asks (WON does not); "Pozreli, chcú zmeny" / "Cena je vysoká" default to a "Požiadať manažéra" step today; "Poslali sme SMS" can carry a price (`PHONE` + `via: "SMS"`); Q1 clarified as the narrow CP mapping | `withdrawOpenOnLeave`, `clientReplies.ts`, `InteractionSheet.tsx`, `DealDetail.tsx`, `w5ManagerClose`, `w5SmsPrice` |
+| 8 | Review R02 applied: manager SNOOZED withdraws asks (`withdrawOpenOnLeave` in `changeDealStatus`); `Lead.designSentAt` = latest valid date across tracked designs **and** untracked sends, list + "Dostali návrh" filter agree; crossing out an SMS crosses out its price; SMS "keep step" is preselected only for a planned step and refused when the SMS price finished a send step; **migration SQL send instant now equals `offerInstant()` (Bratislava midnight, not UTC) — found in the follow-up review** | `dealMutations.ts`, `offerMutations.ts`, `queries/pipeline`, `InteractionSheet.tsx`, `wave5-requests-sql.ts`, `w5ManagerSnooze`, `w5UntrackedLifecycle`, `w5SmsCorrection`, `w5InstantParity` |
+| 6 | Status files: F4 stays **open** until Michal accepts the corrected sheet; nothing closed in `wave-5-followups.md` | — |
+
+Checks: see the response file (`tsc`, targeted ESLint, the new groups, the full concurrency suite, `next build`).
+
 ### Wave 5 — not resolved / to do later
 
 - **Human click-through still owed** (phone + desktop, a browser session is not something this agent may open with
@@ -301,10 +499,14 @@ a concept decision, not a quick fix (open). F3 the interaction sheet repeated it
   (including the "task stays open" note), the derived headline and the ⚠ line in the list and the detail, the
   pre-ticked "Čo sme poslali", "Chcú aj …" in the call sheet, and the "which price did they see" header.
 - **The production migration has not been rehearsed.** It needs a fresh production clone under its own env name, the
-  deployed commit, a read-only inventory and Michal's cenník list (probably empty) — `db-changes.md` §5.4.
-- **Wave 4 Part A** must now be re-reviewed against the shipped operations before it is built
-  (`wave-4-proposal.md` §2, BL-12): it has to fill `ManagerWork.making` / `prepared` from `taskPartState` and must
-  not invent a second definition of what is left to send.
+  deployed commit, a read-only inventory and Michal's cenník recipients (probably none, named at the send conversion) — `db-changes.md` §5.4.
+- **Wave 4 Part A: built on the test branch 2026-09-20** — see the "Wave 4" section above. It carried wave 5's two
+  owed prerequisite fixes with it: **P0** (`defaultStep(…, { locked: true })` left the mode `IN_PROGRESS` on a kind
+  change, against I8) and **P1** (the follow-up call was decided from task items instead of what the client is still
+  owed). Both are fixed and tested (`w4Pure`, `w4FollowUpGate`).
+- **A third wave-5 leftover surfaced while running the checks and is fixed:** `2026-09-assignments.ts` (the one-time
+  production backfill) never learned about `CallOutcome.INTERESTED`, so every deal created through the shipped wave-5
+  flow classified as `CONFLICT` and would have aborted the production run. `POSITIVE` now mirrors `HANDOFF_OUTCOMES`.
 - The design's §10.20 ("production-clone rehearsal") is by nature not part of the automated suite.
 - `LeadRequest` has no partial unique index for "one open row per content" — by design: a second open ask is a real
   second ask, and the grouping happens in the projection.

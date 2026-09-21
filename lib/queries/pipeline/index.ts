@@ -14,8 +14,20 @@ import {
 } from "@/lib/domain/dealScope";
 import { isDealView, STEP_KIND_VIEWS, viewIgnoresStatus } from "@/lib/domain/dealFilters";
 import { businessDaysBetween } from "@/lib/domain/businessTime";
-import { isStepLocked, parseTaskResult, pendingSummary, TASK_AGE_ALERT_DAYS, type PendingItem } from "@/lib/domain/tasks";
-import { pendingByLead } from "@/lib/domain/taskMutations";
+import {
+    isStepLocked,
+    partMarkLabel,
+    pendingSummary,
+    helpFallback,
+    sortTaskContents,
+    taskPartState,
+    waitingOnQuestionHeadline,
+    TASK_AGE_ALERT_DAYS,
+    type PartView,
+    type PendingItem,
+} from "@/lib/domain/tasks";
+import { consumptionByLead, pendingByLead, PART_SELECT } from "@/lib/domain/taskMutations";
+import { TASK_CONTENT_LABEL } from "@/lib/dictionaries";
 import {
     clientRequestState,
     outstandingContents,
@@ -40,6 +52,7 @@ import type {
     NextActionKind,
     NextActionMode,
     ProjectType,
+    RequestContent,
     Role,
 } from "@/app/generated/prisma/enums";
 
@@ -66,6 +79,11 @@ export const STEP_LOCKED_SQL = Prisma.sql`EXISTS (SELECT 1 FROM "DealTask" t WHE
 // Pravidlo pilulky nad Lead stĺpcami (bez rozsahu a filtrov – tie pridáva pillFilter).
 function viewWhere(view?: string): Prisma.LeadWhereInput {
     switch (view) {
+        case "work":
+            // Pracovný rad po prvých hovoroch: klientovi ešte niečo dlžíme a vlastník na tom vie konať teraz.
+            // Zdroj pravdy je LeadRequest (nie druh kroku), preto sem patrí aj SEND_DESIGN / IN_PROGRESS. Otvorená
+            // manažérska úloha ho presunie do samostatného pohľadu „Čakám na manažéra".
+            return { status: "ACTIVE", requests: { some: { state: "OPEN" } }, ...UNLOCKED_WHERE };
         case "today":
             return { status: { in: [...OPEN_STATUSES] } }; // presné pravidlo dopĺňa TODAY_SQL v SQL časti
         case "call":
@@ -83,7 +101,7 @@ function viewWhere(view?: string): Prisma.LeadWhereInput {
         case "got_price":
             return { offerPriceAt: { not: null } };
         case "got_design":
-            return { designs: { some: { deletedAt: null, sentAt: { not: null } } } };
+            return { OR: [{ designs: { some: { deletedAt: null, sentAt: { not: null } } } }, { designSentAt: { not: null } }] };
         case "unverified":
             return { hadLegacySends: true, legacySendsReviewedAt: null };
         case "waiting_manager":
@@ -195,13 +213,19 @@ type DealLead = {
 };
 
 // Otvorená úloha na riadku zoznamu (zámok, „⏳ čaká na Michala (2 dni)", „💬 Posledná správa: Jana").
+// Wave 4: `contents` je všetko, čo úloha nesie, `openKinds` len to, čo sa ešte robí – a `progress` je jedna veta
+// o tom, ako ďaleko je („Cena ✓ · Návrh robí sa").
 export type RowTask = {
     id: string;
     type: DealTaskType;
     contents: DealTaskContent[];
+    openKinds: DealTaskContent[];
+    progress: string | null;
     text: string;
     assigneeId: string;
     assignee: string;
+    // Kam sa krok vráti po zatvorení úlohy (P6) – dialóg „Čo sme poslali“ podľa toho pomenuje „Ponechať“.
+    fallbackKind: NextActionKind;
     requestedBy: string;
     createdAt: string;
     ageDays: number;
@@ -285,7 +309,7 @@ async function noAnswerStreaks(ids: string[]): Promise<Map<string, number>> {
 }
 
 // Posledné odoslanie pre každý obchod na strane (jeden dotaz) + cena, ktorú klient naposledy naozaj videl (§3.3).
-export type LastOffer = { text: string; at: string; clientPrice: { amount: string; channel: "EMAIL" | "PHONE"; sentOn: string } | null };
+export type LastOffer = { text: string; at: string; clientPrice: { amount: string; channel: "EMAIL" | "PHONE"; via?: "SMS"; sentOn: string } | null };
 
 async function lastOffers(ids: string[]): Promise<Map<string, LastOffer>> {
     if (ids.length === 0) return new Map();
@@ -309,7 +333,7 @@ async function lastOffers(ids: string[]): Promise<Map<string, LastOffer>> {
             out.set(leadId, {
                 text: last?.text ?? "",
                 at: last?.at ?? "",
-                clientPrice: price ? { amount: price.amount, channel: price.channel, sentOn: price.sentOn } : null,
+                clientPrice: price ? { amount: price.amount, channel: price.channel, ...(price.via ? { via: price.via } : {}), sentOn: price.sentOn } : null,
             });
         }
     }
@@ -325,12 +349,15 @@ async function openTasksFor(ids: string[], now: Date): Promise<Map<string, RowTa
             id: true,
             leadId: true,
             type: true,
-            contents: true,
+            status: true,
             text: true,
             createdAt: true,
             assigneeId: true,
+            fallbackKind: true,
+            fallbackNote: true,
             assignee: { select: { firstName: true } },
             requestedBy: { select: { firstName: true } },
+            parts: { select: PART_SELECT },
             activities: {
                 where: { type: "TASK_MESSAGE" },
                 orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -339,18 +366,24 @@ async function openTasksFor(ids: string[], now: Date): Promise<Map<string, RowTa
             },
         },
     });
+    const consumed = tasks.length ? await consumptionByLead(prisma, [...new Set(tasks.map((t) => t.leadId))]) : new Map();
     return new Map(
         tasks.map((t) => {
             const ageDays = Math.max(0, businessDaysBetween(t.createdAt, now));
+            const state = taskPartState(t, t.parts, consumed.get(t.leadId) ?? []);
             return [
                 t.leadId,
                 {
                     id: t.id,
                     type: t.type,
-                    contents: t.contents,
+                    // Čo úloha nesie, je odteraz výlučne v jej častiach (S-13b) – žiadna druhá kópia.
+                    contents: sortTaskContents(t.parts.map((x) => x.kind)),
+                    openKinds: state.openKinds,
+                    progress: taskProgress(state.parts),
                     text: t.text,
                     assigneeId: t.assigneeId,
                     assignee: t.assignee.firstName,
+                    fallbackKind: helpFallback({ kind: t.fallbackKind, note: t.fallbackNote }).kind,
                     requestedBy: t.requestedBy.firstName,
                     createdAt: t.createdAt.toISOString(),
                     ageDays,
@@ -368,16 +401,31 @@ function requestViewOf(
     requests: RequestHistoryInput[],
     work: ManagerWork,
     stepKind: NextActionKind | null,
+    task: { type: DealTaskType; openKinds: readonly DealTaskContent[]; assignee: string } | null = null,
 ): { state: ClientRequestState; outstanding: ReturnType<typeof outstandingContents>; headline: string | null; warning: string | null } {
     const state = clientRequestState(requests, work);
     const outstanding = outstandingContents(state);
     const view = stepView(stepKind, outstanding);
-    return { state, outstanding, headline: view.headline, warning: warningText(view.warn) };
+    // R02-1: zostala len otázka / konzultácia – nie „Poslať …“ ani konajúci „Zavolať“, ale na koho sa čaká.
+    const waiting = waitingOnQuestionHeadline(task, outstanding, work.prepared);
+    return { state, outstanding, headline: waiting ?? view.headline, warning: warningText(view.warn) };
+}
+
+// Otvorené požiadavky klienta po riadkoch – odloženie / uzavretie ich stiahne PRESNE menovanými id (R01-3).
+function openRequestsOf(state: ClientRequestState): { id: string; content: RequestContent }[] {
+    return state.outstanding.flatMap((o) => o.openIds.map((id) => ({ id, content: o.content })));
+}
+
+// „Cena ✓ · Návrh robí sa" – jedna veta na riadok zoznamu aj do schránky manažéra.
+function taskProgress(parts: readonly PartView[]): string | null {
+    if (parts.length === 0) return null;
+    return parts.map((p) => `${TASK_CONTENT_LABEL[p.kind]} ${partMarkLabel(p)}`).join(" · ");
 }
 
 function managerWorkOfRow(task: RowTask | null, pending: PendingItem[]): ManagerWork {
     return {
-        making: task && task.type === "HELP" ? task.contents : [],
+        // Wave 4: „robí sa" sú len časti, ktoré manažér ešte má – dodaná cena už patrí do „pripravené".
+        making: task && task.type === "HELP" ? task.openKinds : [],
         prepared: pending.filter((i) => i.kind === "PRICE" || i.kind === "DESIGN"),
     };
 }
@@ -392,7 +440,7 @@ function toDealRow(
     requests: RequestHistoryInput[] = [],
 ) {
     const locked = isStepLocked(task ? [{ status: "OPEN" }] : []);
-    const view = requestViewOf(requests, managerWorkOfRow(task, pending), lead.nextActionKind);
+    const view = requestViewOf(requests, managerWorkOfRow(task, pending), lead.nextActionKind, task);
     const cls = clientSection(
         {
             status: lead.status,
@@ -439,6 +487,7 @@ function toDealRow(
         stepHeadline: view.headline,
         askWarning: view.warning,
         outstanding: view.outstanding,
+        openRequests: openRequestsOf(view.state),
         lastActivity: last
             ? { type: last.type, outcome: last.outcome, note: last.note, at: last.createdAt.toISOString() }
             : null,
@@ -447,7 +496,7 @@ function toDealRow(
         clientPrice: lastOffer?.clientPrice ?? null,
         dialog: {
             ...offerDialogOf(lead),
-            openTask: task ? { id: task.id, type: task.type, contents: task.contents, assignee: task.assignee } : null,
+            openTask: task ? { id: task.id, type: task.type, contents: task.contents, openKinds: task.openKinds, assignee: task.assignee, fallbackKind: task.fallbackKind } : null,
             pending,
             asked: view.state.outstanding.filter((o) => o.openIds.length > 0).map((o) => o.content),
             outstanding: view.outstanding,
@@ -465,7 +514,10 @@ function legacyAwareDesignSentAt(lead: {
     _count: { designs: number };
 }): Date | null {
     const fromRows = lead.designs.reduce<Date | null>((max, d) => (d.sentAt && (!max || d.sentAt > max) ? d.sentAt : max), null);
-    return fromRows ?? (lead._count.designs === 0 ? lead.designSentAt : null);
+    // R02-2: Lead.designSentAt je najnovší platný dátum zo sledovaných návrhov AJ z odoslaní bez Design riadku, takže
+    // sa berie vždy a vyhráva novší – inak by obchod s neposlaným Designom zabudol na návrh poslaný mimo systému.
+    if (fromRows && lead.designSentAt) return fromRows > lead.designSentAt ? fromRows : lead.designSentAt;
+    return fromRows ?? lead.designSentAt ?? null;
 }
 
 function offerDialogOf(lead: DealLead): OfferDialogDeal {
@@ -531,7 +583,7 @@ type PillFilter = { where: Prisma.LeadWhereInput; sql: Prisma.Sql | null; order:
 // rozísť. Čo pilulka ignoruje:
 //   „Pre mňa"            – všetko okrem hľadania (schránka, nie výsek mojich obchodov; rozsah ostáva)
 //   „Čakám na manažéra"  – stav a „Od:" (všetky otvorené stavy)
-//   „Na dnes", „Neoverené" – stav (naprieč stavmi)
+//   „Na spracovanie", „Na dnes", „Neoverené" – stav (naprieč stavmi)
 // Pilulky podľa druhu kroku nezahŕňajú zamknuté obchody (§5.3).
 function pillFilter(view: string | undefined, params: Omit<DealListParams, "view" | "take">): PillFilter {
     const v = isDealView(view) ? view : undefined;
@@ -624,6 +676,7 @@ export async function getDealList(params: DealListParams): Promise<{ rows: DealR
 }
 
 export const COUNTED_VIEWS = [
+    "work",
     "today",
     "all",
     "call",
@@ -679,6 +732,7 @@ export async function getDealDetail(
                     requestedBy: { select: { id: true, firstName: true, lastName: true } },
                     assignee: { select: { id: true, firstName: true, lastName: true } },
                     closedBy: { select: { id: true, firstName: true, lastName: true } },
+                    parts: { select: PART_SELECT },
                 },
             },
             designs: {
@@ -707,15 +761,21 @@ export async function getDealDetail(
     const stepLocked = isStepLocked(lead.tasks);
     const cls = clientSection({ ...lead, stepLocked }, now);
     const pending = (await pendingByLead(prisma, [lead.id])).get(lead.id) ?? [];
+    const consumption = (await consumptionByLead(prisma, [lead.id])).get(lead.id) ?? [];
+    // Wave 4: každá úloha sa číta cez JEDNU projekciu – karta, zoznam aj server hovoria o častiach to isté (§2.5).
+    const partStates = new Map(lead.tasks.map((t) => [t.id, taskPartState(t, t.parts, consumption)]));
     const openTask = lead.tasks.find((t) => t.status === "OPEN") ?? null;
     const requests = (await requestsByLead(prisma, [lead.id])).get(lead.id) ?? [];
     const requestView = requestViewOf(
         requests,
         {
-            making: openTask && openTask.type === "HELP" ? openTask.contents : [],
+            making: openTask && openTask.type === "HELP" ? (partStates.get(openTask.id)?.openKinds ?? []) : [],
             prepared: pending.filter((i) => i.kind === "PRICE" || i.kind === "DESIGN"),
         },
         lead.nextActionKind,
+        openTask && openTask.type === "HELP"
+            ? { type: openTask.type, openKinds: partStates.get(openTask.id)?.openKinds ?? [], assignee: openTask.assignee.firstName }
+            : null,
     );
     let noAnswerStreak = 0;
     for (const a of lead.activities) {
@@ -777,6 +837,23 @@ export async function getDealDetail(
                 priceDisclosed: lead.priceDisclosed,
             },
         },
+        // Wave 4 D5: krátka história ceny na karte – čo sa zmenilo, kto a prečo. Obchodník ju vidí (BUSINESS riadok);
+        // riadky spred D5 sú staršie CONTACT_UPDATED audity a do tohto zoznamu už nepatria (database-map.md).
+        priceHistory: lead.activities
+            .filter((a) => a.type === "PRICE_CHANGED")
+            .slice(0, 6)
+            .map((a) => {
+                const meta = priceChangeOf(a.meta);
+                return {
+                    id: a.id,
+                    at: a.createdAt.toISOString(),
+                    by: a.user.firstName,
+                    from: meta?.from ?? null,
+                    to: meta?.to ?? null,
+                    via: meta?.via ?? "EDIT",
+                    reason: meta?.reason ?? null,
+                };
+            }),
         lostReason: lead.lostReason,
         closedAt: lead.closedAt?.toISOString() ?? null,
         pipelineEnteredAt: lead.pipelineEnteredAt?.toISOString() ?? null,
@@ -784,11 +861,22 @@ export async function getDealDetail(
         owner: lead.owner,
         handedOffBy: lead.handedOffBy,
         stepLocked,
-        openTask: openTask ? { id: openTask.id, type: openTask.type, contents: openTask.contents, assignee: openTask.assignee.firstName } : null,
+        openTask: openTask
+            ? {
+                  id: openTask.id,
+                  type: openTask.type,
+                  contents: sortTaskContents(openTask.parts.map((p) => p.kind)),
+                  // Prekryv odoslania sa rozhoduje podľa toho, čo sa EŠTE robí (§2.8) – nie podľa celého obsahu úlohy.
+                  openKinds: partStates.get(openTask.id)?.openKinds ?? [],
+                  assignee: openTask.assignee.firstName,
+                  fallbackKind: helpFallback({ kind: openTask.fallbackKind, note: openTask.fallbackNote }).kind,
+              }
+            : null,
         // Wave 5 (§3.2, §3.7): „Chceli" ako história udalostí + zoskupená nevybavená práca a jej nadpis / varovanie.
         askHistory: requestView.state.history,
         outstandingRows: requestView.state.outstanding,
         outstanding: requestView.outstanding,
+        openRequests: openRequestsOf(requestView.state),
         // Predvyplnenie dialógu „Čo sme poslali": len to, čo klient PÝTA a ešte nedostal (§3.4).
         asked: requestView.state.outstanding.filter((o) => o.openIds.length > 0).map((o) => o.content),
         stepHeadline: requestView.headline,
@@ -797,14 +885,16 @@ export async function getDealDetail(
         tasks: lead.tasks.map((t) => ({
             id: t.id,
             type: t.type,
-            contents: t.contents,
+            contents: sortTaskContents(t.parts.map((p) => p.kind)),
             status: t.status,
             text: t.text,
             createdAt: t.createdAt.toISOString(),
             ageDays: Math.max(0, businessDaysBetween(t.createdAt, now)),
             closedAt: t.closedAt?.toISOString() ?? null,
             closeReason: t.closeReason,
-            result: parseTaskResult(t.result),
+            // Wave 4: čo úloha nesie, po častiach – vrátane osudu každej vrátenej položky (§2.3, §2.5).
+            parts: partStates.get(t.id)?.parts ?? [],
+            openKinds: partStates.get(t.id)?.openKinds ?? [],
             requestedBy: { id: t.requestedBy.id, name: `${t.requestedBy.firstName} ${t.requestedBy.lastName}`.trim(), firstName: t.requestedBy.firstName },
             assignee: { id: t.assignee.id, name: `${t.assignee.firstName} ${t.assignee.lastName}`.trim(), firstName: t.assignee.firstName },
             closedBy: t.closedBy ? { id: t.closedBy.id, name: `${t.closedBy.firstName} ${t.closedBy.lastName}`.trim(), firstName: t.closedBy.firstName } : null,
@@ -835,7 +925,7 @@ export async function getDealDetail(
                 taskId: a.taskId,
                 revertedAt: a.revertedAt?.toISOString() ?? null,
                 correctionReason: correction,
-                offer: offer ? { sentOn: offer.sentOn, historical: offer.historical, channel: offer.channel } : null,
+                offer: offer ? { sentOn: offer.sentOn, historical: offer.historical, channel: offer.channel, via: offer.via ?? null } : null,
             };
         }),
         // Súhrn sledovania návrhu – bez tokenov, URL a IP (spravovanie návrhov má manažér vo vlastnej karte).
@@ -855,6 +945,18 @@ export async function getDealDetail(
             };
         }),
     };
+}
+
+// Zmena ceny (meta – lib/domain/dealMutations.ts saveQuote).
+const priceChangeSchema = z.object({
+    from: z.object({ amount: z.number().nullable(), note: z.string().nullable() }),
+    to: z.object({ amount: z.number().nullable(), note: z.string().nullable() }),
+    via: z.enum(["EDIT", "TASK", "SEND"]),
+    reason: z.string().nullable(),
+});
+function priceChangeOf(meta: unknown) {
+    const parsed = priceChangeSchema.safeParse(meta);
+    return parsed.success ? parsed.data : null;
 }
 
 // Dôvod opravy prečiarknutého záznamu (meta.correction – lib/domain/offerMutations.ts correctRecord).

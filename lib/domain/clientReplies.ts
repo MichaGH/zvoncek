@@ -27,6 +27,9 @@ export type ClientReply = {
     // Wave 5 (§3.5): odpoveď, ktorá JE požiadavkou klienta – predzaškrtne „Chcú aj …". Riadok vzniká vždy nanovo,
     // aj keď to isté už raz dostali.
     asks?: RequestContent[];
+    // Odpoveď, pri ktorej sa rep zvyčajne neobíde bez manažéra (prepracovať návrh, zjednať cenu): akčné okno ponúkne
+    // krok „Požiadať manažéra" na dnes ako predvolený. Je to len ponuka – rep môže zvoliť aj hovor či čakanie.
+    managerStep?: boolean;
 };
 
 // Krok „Poslať …" sa NIKDY nevyberá – vyplýva z toho, čo klient ešte nedostal (wave-5-workflow.md §1). Odpovede
@@ -34,14 +37,14 @@ export type ClientReply = {
 export const CLIENT_REPLIES: ClientReply[] = [
     { key: "NOT_LOOKED_YET", label: "Ešte sa na to nepozreli", outcome: "POSITIVE", nextKind: "CALL", days: 2, needsDate: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT"] },
     // Prepracovaný návrh je návrh, ktorý klient ešte nedostal → požiadavka + krok „Poslať návrh", bez ďalšej otázky.
-    { key: "WANTS_CHANGES", label: "Pozreli, chcú zmeny", outcome: "POSITIVE", asks: ["DESIGN"], decidesStep: true },
+    { key: "WANTS_CHANGES", label: "Pozreli, chcú zmeny", outcome: "POSITIVE", asks: ["DESIGN"], managerStep: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT", "CUSTOM"] },
     // Znovu poslané NIE je nové odoslanie – klient nedostal nič nové (wave-5-workflow.md §4).
     { key: "RESEND", label: "Neprišlo im to – poslali sme znova", outcome: "POSITIVE", nextKind: "CALL", days: 2, needsDate: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT"] },
     { key: "WILL_CONTACT_US", label: "Ozvú sa sami", outcome: "POSITIVE", nextKind: "WAITING_FOR_CLIENT", days: 7, nextKinds: ["WAITING_FOR_CLIENT", "CALL"] },
     { key: "DECIDING", label: "Majú poradu / rozhodujú sa", outcome: "POSITIVE", nextKind: "CALL", days: 7, needsDate: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT"] },
     // Kľúč ostáva čitateľný v starej histórii, ale ako dnešná voľba bol nejasný (kto to rieši a čo má rep urobiť?).
     { key: "SOMEONE_ELSE", label: "Rieši to niekto iný", outcome: "POSITIVE", nextKind: "CALL", days: 3, needsDate: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT"], group: "legacy" },
-    { key: "PRICE_HIGH", label: "Cena je vysoká", outcome: "POSITIVE", nextKind: "CALL", days: 3, needsDate: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT", "CUSTOM"] },
+    { key: "PRICE_HIGH", label: "Cena je vysoká", outcome: "POSITIVE", nextKind: "CALL", days: 3, needsDate: true, managerStep: true, nextKinds: ["CALL", "WAITING_FOR_CLIENT", "CUSTOM"] },
     // Obyčajná odpoveď (wave 3, D15): zapíše sa, ďalší krok vyberá obchodník; odovzdanie manažérovi je samostatná akcia.
     { key: "WANTS_TO_ORDER", label: "Chcú objednať", outcome: "WANTS_TO_ORDER", nextKind: "CALL", days: 1, needsDate: true, nextKinds: ["CALL", "CUSTOM"] },
     // Nahradené cestou „Chcú niečo…" (wave 5): kľúče ostávajú platné pre staré záznamy a testy, v ponuke nie sú.

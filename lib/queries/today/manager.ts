@@ -2,7 +2,7 @@ import prisma from "@/lib/db";
 import type { AccessUser } from "@/lib/access/user";
 import type { Role } from "@/app/generated/prisma/enums";
 import { businessDaysBetween, businessDayStart, businessTodayStart, isOverdue } from "@/lib/domain/businessTime";
-import { TASK_AGE_ALERT_DAYS } from "@/lib/domain/tasks";
+import { sortTaskContents, TASK_AGE_ALERT_DAYS } from "@/lib/domain/tasks";
 import { ROLE_PERMISSIONS } from "@/lib/permissions";
 import { weekStartKey } from "@/lib/queries/today";
 
@@ -33,9 +33,10 @@ export async function getManagerToday(viewer: Pick<AccessUser, "id">) {
             select: {
                 id: true,
                 type: true,
-                contents: true,
                 text: true,
                 createdAt: true,
+                // Wave 4: manažéra zaujíma, čo je ešte NA ŇOM – nie celý obsah úlohy (§2.9).
+                parts: { select: { kind: true, status: true } },
                 requestedBy: { select: { firstName: true, lastName: true } },
                 lead: { select: { id: true, number: true, companyName: true, website: true } },
             },
@@ -145,7 +146,8 @@ export async function getManagerToday(viewer: Pick<AccessUser, "id">) {
         tasks: tasks.map((t) => ({
             id: t.id,
             type: t.type,
-            contents: t.contents,
+            contents: sortTaskContents(t.parts.filter((p) => p.status === "REQUESTED").map((p) => p.kind)),
+            done: sortTaskContents(t.parts.filter((p) => p.status === "DELIVERED").map((p) => p.kind)),
             text: t.text,
             createdAt: t.createdAt.toISOString(),
             overdue: businessDaysBetween(t.createdAt, now) >= TASK_AGE_ALERT_DAYS,

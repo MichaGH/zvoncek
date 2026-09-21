@@ -21,6 +21,10 @@ const target: InteractionTarget = {
     task: null,
     pending: [],
     outstanding: ["PRICE", "DESIGN"],
+    openRequests: [
+        { id: "preview-req-price", content: "PRICE" },
+        { id: "preview-req-design", content: "DESIGN" },
+    ],
     clientPrice: { amount: "1180.00", channel: "EMAIL", sentOn: "2026-09-15T00:00:00.000Z" },
     gotPricelist: true,
 };

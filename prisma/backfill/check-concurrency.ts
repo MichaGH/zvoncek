@@ -482,11 +482,11 @@ tests.revision = async () => {
         ["taskMessage", async () => tasks.taskMessageAs(rep, { taskId: await openTaskId(), expectedRevision: await leadRev(id), idempotencyKey: key(), text: "chce modrú" })],
         ["reassignTask", async () => tasks.reassignTaskAs(manager, { taskId: await openTaskId(), expectedRevision: await leadRev(id), idempotencyKey: key(), assigneeId: manager2.id })],
         ["logFollowUp fact-only", async () => work.logFollowUpAs(manager, { leadId: id, outcome: "POSITIVE", keepLockedStep: true, expectedRevision: await leadRev(id), idempotencyKey: key() })],
-        ["finishTask", async () => tasks.finishTaskAs(manager2, { taskId: await openTaskId(), expectedRevision: await leadRev(id), idempotencyKey: key(), price: { amount: 1285, note: null } })],
+        ["resolveTaskParts", async () => tasks.resolveTaskPartsAs(manager2, { taskId: await openTaskId(), expectedRevision: await leadRev(id), idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 1285, note: null } }] })],
         ["dismissResults", async () => tasks.dismissResultsAs(rep, { leadId: id, expectedRevision: await leadRev(id), idempotencyKey: key(), taskId: await openTaskId(), items: [{ kind: "PRICE" }], reason: "klient už nechce" })],
         ["logFollowUp", async () => work.logFollowUpAs(rep, { leadId: id, outcome: "WANTS_DESIGN", expectedRevision: await leadRev(id), idempotencyKey: key() })],
         ["askManager HANDOVER", async () => tasks.askManagerAs(rep, { leadId: id, expectedRevision: await leadRev(id), idempotencyKey: key(), type: "HANDOVER", text: "chce detaily", assigneeId: manager.id })],
-        ["declineTask", async () => tasks.declineTaskAs(manager, { taskId: await openTaskId(), expectedRevision: await leadRev(id), idempotencyKey: key(), reason: "pokračuj ty" })],
+        ["declineHandover", async () => tasks.declineHandoverAs(manager, { taskId: await openTaskId(), expectedRevision: await leadRev(id), idempotencyKey: key(), reason: "pokračuj ty" })],
         ["takeover", async () => tasks.takeoverAs(manager, { leadId: id, expectedRevision: await leadRev(id), idempotencyKey: key(), step: { kind: "CALL", schedule: { kind: "daysFromToday", days: 1 } } })],
         ["changeOwner", async () => pipeline.changeOwnerAs(manager, id, { ownerId: rep.id, expectedRevision: await leadRev(id), idempotencyKey: key() })],
         ["changeStatus SNOOZED", async () => pipeline.changeStatusAs(manager, id, { status: "SNOOZED", expectedRevision: await leadRev(id), idempotencyKey: key() })],
@@ -819,11 +819,21 @@ tests.r02PipelineOrder = async () => {
     // Wave 3: „Pre mňa" = úlohy pridelené mne, najstaršia prvá, aj pri > 50 (fixture úloh priamo, poradie je vec dopytu).
     for (const id of inProgress) {
         await prisma.lead.update({ where: { id }, data: { ownerId: requester.id } });
-        await prisma.dealTask.create({ data: { leadId: id, type: "HELP", contents: ["OTHER"], text: "x", requestedById: requester.id, assigneeId: owner.id } });
+        await prisma.dealTask.create({
+            data: { leadId: id, type: "HELP", text: "x", requestedById: requester.id, assigneeId: owner.id, parts: { create: [{ kind: "OTHER", addedById: requester.id }] } },
+        });
     }
     const oldest = await mk("oldesttask", { nextActionKind: null, nextActionAt: null, ownerId: requester.id });
     await prisma.dealTask.create({
-        data: { leadId: oldest, type: "HELP", contents: ["PRICE"], text: "x", requestedById: requester.id, assigneeId: owner.id, createdAt: new Date("2000-01-01T00:00:00Z") },
+        data: {
+            leadId: oldest,
+            type: "HELP",
+            text: "x",
+            requestedById: requester.id,
+            assigneeId: owner.id,
+            createdAt: new Date("2000-01-01T00:00:00Z"),
+            parts: { create: [{ kind: "PRICE", addedById: requester.id }] },
+        },
     });
     const req = await getDealList({ scope, owner: mine, view: "inbox", viewerId: owner.id, take: 50 });
     check("R-02: oldest task first in 'Pre mňa' with > 50 tasks", req.rows[0]?.id === oldest && req.hasMore, `first=${req.rows[0]?.id === oldest ? "oldest" : "other"} rows=${req.rows.length}`);
@@ -980,9 +990,21 @@ tests.w1TodayParity = async () => {
     await mk("snoozednodate", { status: "SNOOZED", nextActionKind: "CALL", nextActionAt: null });
     await mk("snoozedfuture", { status: "SNOOZED", nextActionKind: "CALL", nextActionAt: day(30) });
     const locked = await mk("locked", { nextActionKind: "SEND_QUOTE", nextActionAt: null });
-    await prisma.dealTask.create({ data: { leadId: locked, type: "HELP", contents: ["PRICE"], text: "x", requestedById: rep.id, assigneeId: manager.id } });
+    await prisma.dealTask.create({
+        data: { leadId: locked, type: "HELP", text: "x", requestedById: rep.id, assigneeId: manager.id, parts: { create: [{ kind: "PRICE", addedById: rep.id }] } },
+    });
     const doneTask = await mk("donetask", { nextActionKind: "SEND_QUOTE", nextActionAt: day(-1) });
-    await prisma.dealTask.create({ data: { leadId: doneTask, type: "HELP", contents: ["PRICE"], text: "x", status: "DONE", requestedById: rep.id, assigneeId: manager.id } });
+    await prisma.dealTask.create({
+        data: {
+            leadId: doneTask,
+            type: "HELP",
+            text: "x",
+            status: "DONE",
+            requestedById: rep.id,
+            assigneeId: manager.id,
+            parts: { create: [{ kind: "PRICE", status: "DELIVERED", addedById: rep.id }] },
+        },
+    });
 
     const scope = dealScope(manager);
     const sqlToday = await getDealList({ scope, owner: "all", view: "today", take: 5000 });
@@ -1032,9 +1054,18 @@ tests.r06TaskCount = async () => {
         ids.push(l.id);
     }
     // 51 pre manažéra, 1 pre iného manažéra (nesmie sa započítať)
-    await prisma.dealTask.createMany({
-        data: ids.map((leadId, i) => ({ leadId, type: "HELP" as const, contents: ["OTHER" as const], text: "x", requestedById: rep.id, assigneeId: i === 51 ? other.id : manager.id })),
-    });
+    for (const [i, leadId] of ids.entries()) {
+        await prisma.dealTask.create({
+            data: {
+                leadId,
+                type: "HELP",
+                text: "x",
+                requestedById: rep.id,
+                assigneeId: i === 51 ? other.id : manager.id,
+                parts: { create: [{ kind: "OTHER", addedById: rep.id }] },
+            },
+        });
+    }
     const today = await getManagerToday(manager);
     check("R-06: task count exact beyond 50 (only mine), preview bounded", today.taskCount === 51 && today.tasks.length <= 10, `count=${today.taskCount} preview=${today.tasks.length}`);
 };
@@ -1811,12 +1842,21 @@ async function w3() {
             step: { kind: "SEND_QUOTE", note: null },
             ...extra,
         });
-    const finish = async (m: AccessUser, leadId: string, extra: Partial<Parameters<typeof tasks.finishTaskAs>[1]> = {}) =>
-        tasks.finishTaskAs(m, {
+    // Wave 4: manažér odovzdáva ČASTI. Pomocník drží staré testy čitateľné – cena, ak sa nepovie inak.
+    const finish = async (m: AccessUser, leadId: string, extra: { price?: { amount: number; note: string | null }; designs?: { id: string; version: number }[]; answer?: string } = {}) =>
+        tasks.resolveTaskPartsAs(m, {
             taskId: (await openTask(leadId))!.id,
             expectedRevision: await leadRev(leadId),
             idempotencyKey: key(),
-            ...extra,
+            parts: [
+                ...(extra.designs ? [{ kind: "DESIGN" as const, op: "DELIVER" as const, designs: extra.designs }] : []),
+                ...(extra.answer !== undefined ? [{ kind: "OTHER" as const, op: "DELIVER" as const, answer: extra.answer }] : []),
+                ...(extra.designs || extra.answer !== undefined
+                    ? extra.price
+                        ? [{ kind: "PRICE" as const, op: "DELIVER" as const, price: extra.price }]
+                        : []
+                    : [{ kind: "PRICE" as const, op: "DELIVER" as const, price: extra.price ?? { amount: 1285, note: null } }]),
+            ],
         });
     const follow = async (u: AccessUser, leadId: string, extra: Partial<Parameters<typeof work.logFollowUpAs>[1]>) =>
         work.logFollowUpAs(u, { leadId, outcome: "POSITIVE", expectedRevision: await leadRev(leadId), idempotencyKey: key(), ...extra });
@@ -1977,8 +2017,8 @@ tests.w3AutoStep = async () => {
     check(
         "W3-1b: pending design narrows a new price task to 'Poslať návrh'; other with 'Zavolať' → RESULT_PENDING",
         codeOf(done) === "OK" && codeOf(otherCall) === "ERR:RESULT_PENDING" && codeOf(priceTask) === "OK" &&
-            p1.nextActionKind === "SEND_DESIGN" && t.status === "OPEN" && t.contents.join() === "PRICE",
-        `${codeOf(done)} ${codeOf(otherCall)} ${codeOf(priceTask)} ${p1.nextActionKind} ${t.status} ${t.contents}`,
+            p1.nextActionKind === "SEND_DESIGN" && t.status === "OPEN" && (await partRows(t.id)).map((p) => p.kind).join() === "PRICE",
+        `${codeOf(done)} ${codeOf(otherCall)} ${codeOf(priceTask)} ${p1.nextActionKind} ${t.status} ${(await partRows(t.id)).map((p) => p.kind).join()}`,
     );
 
     // Predvolený manažér: vedúci tímu; bez tímu naposledy oslovený; bez oboch nikto.
@@ -2030,7 +2070,7 @@ tests.w3R01 = async () => {
     const id2 = await makeDeal(rep);
     await ask(rep, id2, manager.id);
     const t2 = (await openTask(id2))!;
-    const base2 = { taskId: t2.id, idempotencyKey: key(), price: { amount: 700, note: null }, sentOn: today };
+    const base2 = { taskId: t2.id, idempotencyKey: key(), parts: [{ kind: "PRICE" as const, op: "DELIVER" as const, price: { amount: 700, note: null } }], sentOn: today };
     const optOut = await tasks.finishAndSendAs(manager, { ...base2, expectedRevision: await leadRev(id2), followUp: false as unknown as true });
     const fs = await tasks.finishAndSendAs(manager, { ...base2, idempotencyKey: key(), expectedRevision: await leadRev(id2) });
     const l2 = await lead(id2);
@@ -2040,7 +2080,7 @@ tests.w3R01 = async () => {
     await finish(manager, id3, { designs: [{ id: dz.id, version: dz.currentVersion }] });
     await ask(rep, id3, manager.id, { step: undefined });
     const t3 = (await openTask(id3))!;
-    const fs3 = await tasks.finishAndSendAs(manager, { taskId: t3.id, expectedRevision: await leadRev(id3), idempotencyKey: key(), price: { amount: 800, note: null }, sentOn: today });
+    const fs3 = await tasks.finishAndSendAs(manager, { taskId: t3.id, expectedRevision: await leadRev(id3), idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 800, note: null } }], sentOn: today });
     const l3 = await lead(id3);
     check(
         "R01-2: finish-and-send never leaves 'Poslať…' for what was sent: opt-out refused, default = 'Zavolať'; an older unsent návrh keeps 'Poslať návrh'",
@@ -2082,11 +2122,11 @@ tests.w3R01 = async () => {
     const id5 = await makeDeal(rep);
     await ask(rep, id5, manager.id);
     const t5 = (await openTask(id5))!;
-    const keepButCancel = await send(rep, id5, { contents: ["PRICE"], price: { amount: 1, note: null }, overlap: "KEEP_OPEN", cancelTask: { taskId: t5.id, reason: "x" } });
-    const cancelNoReason = await send(rep, id5, { contents: ["PRICE"], price: { amount: 1, note: null }, overlap: "CANCEL_TASK", cancelTask: { taskId: t5.id, reason: " " } });
-    const cancelNoOverlap = await send(rep, id5, { contents: ["ABOUT_US"], cancelTask: { taskId: t5.id, reason: "netreba" } });
+    const keepButCancel = await send(rep, id5, { contents: ["PRICE"], price: { amount: 1, note: null }, overlap: "KEEP_OPEN", withdrawParts: { taskId: t5.id, kinds: ["PRICE"], reason: "x" } });
+    const cancelNoReason = await send(rep, id5, { contents: ["PRICE"], price: { amount: 1, note: null }, overlap: "WITHDRAW_PARTS", withdrawParts: { taskId: t5.id, kinds: ["PRICE"], reason: " " } });
+    const cancelNoOverlap = await send(rep, id5, { contents: ["ABOUT_US"], withdrawParts: { taskId: t5.id, kinds: ["PRICE"], reason: "netreba" } });
     check(
-        "R01-5: send with KEEP_OPEN + cancelTask, CANCEL_TASK without a reason, or cancelTask without the choice are refused; the task stays OPEN",
+        "R01-5: send with KEEP_OPEN + withdrawParts, WITHDRAW_PARTS without a reason, or withdrawParts without the choice are refused; the task stays OPEN",
         codeOf(keepButCancel) !== "OK" && codeOf(cancelNoReason) !== "OK" && codeOf(cancelNoOverlap) !== "OK" && (await openTask(id5))?.id === t5.id,
         `${codeOf(keepButCancel)} ${codeOf(cancelNoReason)} ${codeOf(cancelNoOverlap)}`,
     );
@@ -2301,9 +2341,9 @@ tests.w3Overlap = async () => {
     const phoneKeep = await follow(rep, id, { keepLockedStep: true, phonePrice: { amount: 1000 }, overlap: "KEEP_OPEN" });
     const afterKeep = await lead(id);
     const stillOpen = await openTask(id);
-    const managerCancel = await send(manager, id, { contents: ["PRICE"], overlap: "CANCEL_TASK", cancelTask: { taskId: stillOpen!.id, reason: "netreba" } });
+    const managerCancel = await send(manager, id, { contents: ["PRICE"], overlap: "WITHDRAW_PARTS", withdrawParts: { taskId: stillOpen!.id, kinds: ["PRICE"], reason: "netreba" } });
     const before = await leadRev(id);
-    const cancel = await send(rep, id, { contents: ["PRICE"], overlap: "CANCEL_TASK", cancelTask: { taskId: stillOpen!.id, reason: "cenu som zistil sám" }, followUp: true });
+    const cancel = await send(rep, id, { contents: ["PRICE"], overlap: "WITHDRAW_PARTS", withdrawParts: { taskId: stillOpen!.id, kinds: ["PRICE"], reason: "cenu som zistil sám" }, followUp: true });
     const afterCancel = await lead(id);
     const t = await prisma.dealTask.findUniqueOrThrow({ where: { id: stillOpen!.id } });
     check(
@@ -2337,27 +2377,38 @@ tests.w3Finish = async () => {
     await ask(rep, id, manager.id, { contents: ["PRICE", "DESIGN"], step: { kind: "SEND_DESIGN" } });
     const noUrl = await design(manager, id, "bezurl", null);
     const good = await design(manager, id, "smrek");
-    const noAmount = await finish(manager, id, { designs: [{ id: good.id, version: good.currentVersion }] });
+    // Wave 4: odovzdať sa dá aj SAMOTNÝ návrh – cena ostáva otvorená a úloha beží ďalej (§2.1 bod 5).
     const withNoUrl = await finish(manager, id, { price: { amount: 1285, note: null }, designs: [{ id: noUrl.id, version: 1 }] });
     const byRep = await finish(rep, id, { price: { amount: 1285, note: null }, designs: [{ id: good.id, version: 1 }] });
     const task = (await openTask(id))!;
     const k = key();
     const rev = await leadRev(id);
-    const input = { taskId: task.id, expectedRevision: rev, idempotencyKey: k, price: { amount: 1285, note: "Web 900 · eshop 385" }, designs: [{ id: good.id, version: good.currentVersion }] };
-    const done = await tasks.finishTaskAs(manager, input);
-    const replay = await tasks.finishTaskAs(manager, input);
-    const conflict = await tasks.finishTaskAs(manager, { ...input, price: { amount: 1300, note: null } });
+    const input = {
+        taskId: task.id,
+        expectedRevision: rev,
+        idempotencyKey: k,
+        parts: [
+            { kind: "PRICE" as const, op: "DELIVER" as const, price: { amount: 1285, note: "Web 900 · eshop 385" } },
+            { kind: "DESIGN" as const, op: "DELIVER" as const, designs: [{ id: good.id, version: good.currentVersion }] },
+        ],
+    };
+    const done = await tasks.resolveTaskPartsAs(manager, input);
+    const replay = await tasks.resolveTaskPartsAs(manager, input);
+    const conflict = await tasks.resolveTaskPartsAs(manager, {
+        ...input,
+        parts: [{ ...input.parts[0], price: { amount: 1300, note: null } }, input.parts[1]],
+    });
     const l = await lead(id);
     const t = await prisma.dealTask.findUniqueOrThrow({ where: { id: task.id } });
     const d = await detail(id, rep);
     const p = await pending(id);
     check(
-        "W3-4: finish needs an amount and a návrh with a URL; the rep cannot finish; DONE saves the price + result, step due today, one bump",
-        codeOf(noAmount) !== "OK" && codeOf(withNoUrl) !== "OK" && codeOf(byRep) === "ERR:FORBIDDEN" && codeOf(done) === "OK" &&
+        "W3-4 / wave 4: a návrh without a URL is refused, the rep cannot deliver; delivering both parts saves the price + result, closes the task, step due today, one bump",
+        codeOf(withNoUrl) !== "OK" && codeOf(byRep) === "ERR:FORBIDDEN" && codeOf(done) === "OK" &&
             Number(l.price) === 1285 && l.priceNote === "Web 900 · eshop 385" && t.status === "DONE" && t.closedById === manager.id &&
             l.nextActionKind === "SEND_DESIGN" && l.nextActionAt !== null && bt.businessDate(l.nextActionAt) === today && l.revision === rev + 1 &&
             d?.section === "TODAY" && p.length === 2,
-        `${codeOf(noAmount)} ${codeOf(withNoUrl)} ${codeOf(byRep)} ${codeOf(done)} price=${l.price} status=${t.status} section=${d?.section} pending=${p.length}`,
+        `${codeOf(withNoUrl)} ${codeOf(byRep)} ${codeOf(done)} price=${l.price} status=${t.status} section=${d?.section} pending=${p.length}`,
     );
     check("W3-4: finish retry with the same key = OK, with a changed amount = conflict", codeOf(replay) === "OK" && codeOf(conflict) === "ERR:IDEMPOTENCY_CONFLICT", `${codeOf(replay)} ${codeOf(conflict)}`);
 
@@ -2367,7 +2418,15 @@ tests.w3Finish = async () => {
     const t2 = (await openTask(id2))!;
     const k2 = key();
     const rev2 = await leadRev(id2);
-    const fsInput = { taskId: t2.id, expectedRevision: rev2, idempotencyKey: k2, price: { amount: 990, note: null }, extraContents: ["ABOUT_US" as const], sentOn: today, followUp: true as const };
+    const fsInput = {
+        taskId: t2.id,
+        expectedRevision: rev2,
+        idempotencyKey: k2,
+        parts: [{ kind: "PRICE" as const, op: "DELIVER" as const, price: { amount: 990, note: null } }],
+        extraContents: ["ABOUT_US" as const],
+        sentOn: today,
+        followUp: true as const,
+    };
     const fs = await tasks.finishAndSendAs(manager, fsInput);
     const fsReplay = await tasks.finishAndSendAs(manager, fsInput);
     const fsConflict = await tasks.finishAndSendAs(manager, { ...fsInput, followUpOn: bt.addBusinessCalendarDays(today, 3) });
@@ -2387,13 +2446,13 @@ tests.w3Finish = async () => {
     const id3 = await makeDeal(rep);
     await ask(rep, id3, manager.id);
     const t3 = (await openTask(id3))!;
-    const noReason = await tasks.declineTaskAs(manager, { taskId: t3.id, expectedRevision: await leadRev(id3), idempotencyKey: key(), reason: " " });
-    const dec = await tasks.declineTaskAs(manager, { taskId: t3.id, expectedRevision: await leadRev(id3), idempotencyKey: key(), reason: "zavolaj im a zisti, čo chcú" });
+    const noReason = await tasks.resolveTaskPartsAs(manager, { taskId: t3.id, expectedRevision: await leadRev(id3), idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DECLINE", reason: " " }] });
+    const dec = await tasks.resolveTaskPartsAs(manager, { taskId: t3.id, expectedRevision: await leadRev(id3), idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DECLINE", reason: "zavolaj im a zisti, čo chcú" }] });
     const l3 = await lead(id3);
     const p3 = await pending(id3);
     check(
-        "W3-4: decline needs a reason, keeps the step (SEND_QUOTE, due today), the reason waits as 'zamietnuté'",
-        codeOf(noReason) !== "OK" && codeOf(dec) === "OK" && l3.nextActionKind === "SEND_QUOTE" && l3.nextActionAt !== null &&
+        "W3-4: decline needs a reason and unlocks the step due today – a system 'Poslať cenu' is not restored (R02-1), the neutral CALL is – and the reason waits as 'zamietnuté'",
+        codeOf(noReason) !== "OK" && codeOf(dec) === "OK" && l3.nextActionKind === "CALL" && l3.nextActionAt !== null &&
             bt.businessDate(l3.nextActionAt) === today && p3.length === 1 && p3[0].kind === "DECLINED" && p3[0].text === "zavolaj im a zisti, čo chcú",
         `${codeOf(noReason)} ${codeOf(dec)} step=${l3.nextActionKind} pending=${JSON.stringify(p3.map((i) => i.kind))}`,
     );
@@ -2572,7 +2631,7 @@ tests.w3Handover = async () => {
     const id3 = await makeDeal(rep);
     await ask(rep, id3, manager.id, { type: "HANDOVER", contents: [], step: undefined, text: "detaily" });
     const t3 = (await prisma.dealTask.findFirstOrThrow({ where: { leadId: id3 } })).id;
-    const dec = await tasks.declineTaskAs(manager, { taskId: t3, expectedRevision: await leadRev(id3), idempotencyKey: key(), reason: "pokračuj ty" });
+    const dec = await tasks.declineHandoverAs(manager, { taskId: t3, expectedRevision: await leadRev(id3), idempotencyKey: key(), reason: "pokračuj ty" });
     const l3 = await lead(id3);
     check("W3-6: 'Nie, pokračuj ty' → DECLINED, rep keeps the deal, step unlocked and due", codeOf(dec) === "OK" && l3.ownerId === rep.id && l3.nextActionAt !== null && (await prisma.dealTask.findUniqueOrThrow({ where: { id: t3 } })).status === "DECLINED", codeOf(dec));
 
@@ -2712,7 +2771,7 @@ tests.w3Deactivation = async () => {
     const task = (await openTask(race))!;
     const rev = await leadRev(race);
     const [f, r] = await Promise.all([
-        tasks.finishTaskAs(manager2, { taskId: task.id, expectedRevision: rev, idempotencyKey: key(), price: { amount: 1, note: null } }),
+        tasks.resolveTaskPartsAs(manager2, { taskId: task.id, expectedRevision: rev, idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 1, note: null } }] }),
         tasks.reassignTaskAs(admin, { taskId: task.id, expectedRevision: rev, idempotencyKey: key(), assigneeId: admin.id }),
     ]);
     check("W3-8: finish vs reassign on the same revision → exactly one wins", [f, r].filter((x) => codeOf(x) === "OK").length === 1, `${codeOf(f)} ${codeOf(r)}`);
@@ -2795,11 +2854,23 @@ tests.w3LockParity = async () => {
                     data: {
                         leadId: l.id,
                         type: ts === "OPEN-HANDOVER" ? "HANDOVER" : "HELP",
-                        contents: ts === "OPEN-HANDOVER" ? [] : ["PRICE"],
                         status: ts === "OPEN-HELP" || ts === "OPEN-HANDOVER" ? "OPEN" : ts,
                         text: "x",
                         requestedById: rep.id,
                         assigneeId: manager.id,
+                        ...(ts === "OPEN-HANDOVER"
+                            ? {}
+                            : {
+                                  parts: {
+                                      create: [
+                                          {
+                                              kind: "PRICE" as const,
+                                              status: ts === "OPEN-HELP" ? ("REQUESTED" as const) : ts === "DONE" ? ("DELIVERED" as const) : ts === "DECLINED" ? ("DECLINED" as const) : ("WITHDRAWN" as const),
+                                              addedById: rep.id,
+                                          },
+                                      ],
+                                  },
+                              }),
                     },
                 });
             }
@@ -3403,7 +3474,7 @@ tests.w5CloseReopen = async () => {
     const l2 = await lead(id2);
 
     check(
-        "W5-9: closing leaves the request rows untouched; reopening with outstanding work gives that send step today, and 'Zavolať' only when nothing is outstanding",
+        "W5-9: WON (the deliberate exception) leaves the request rows untouched; reopening with outstanding work gives that send step today, and 'Zavolať' only when nothing is outstanding",
         codeOf(won) === "OK" && closedRows.length === 1 && closedRows[0].state === "OPEN" &&
             codeOf(reopen) === "OK" && l1.nextActionKind === "SEND_DESIGN" && l1.nextActionAt !== null &&
             l2.nextActionKind === "CALL" && l2.nextActionNote === REOPEN_STEP_NOTE,
@@ -3562,6 +3633,1723 @@ tests.w5Race = async () => {
             (open === "PRICE" || open === "INFO") &&
             codeOf(closed) === "ERR:DEAL_CLOSED",
         `${JSON.stringify(tally(both))} offers=${offerCount} sent=${sent} open=${open} closed=${codeOf(closed)}`,
+    );
+};
+
+// ── Wave 5 implementation review R01 (.ai/reviews/01-sales-rep/W5/implementation/R01-response.md) ──────────────
+
+// R01-1: cenník sa do migrácie nedostane ako otvorená práca. Spúšťa PRESNÉ SQL migračného skriptu (wave5-requests-sql.ts)
+// dvakrát v transakcii, ktorá sa vráti späť – test nič netrvalo nezapíše do ostatných obchodov testovacej DB.
+tests.w5MigrationPricelist = async () => {
+    const { interested, send, rows } = await w5();
+    const sql = await import("./wave5-requests-sql");
+    const rep = await makeUser("SALES_REP");
+    const id = await interested(rep, ["INFO"]);
+    await send(rep, id, { contents: ["PRICELIST"] }); // prevod starých odoslaní by pridal PRICELIST do tohto kanonického odoslania
+    const offer = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "OFFER_SENT" } });
+    const src = sql.RECEIPT_SOURCES.find((s) => s.content === "PRICELIST")!;
+    const before = (await rows(id)).filter((r) => r.content === "PRICELIST").length;
+
+    class Rollback extends Error {}
+    type Seen = { first: number; second: number; mine: Awaited<ReturnType<typeof rows>>; openPricelist: number };
+    const box: { seen?: Seen } = {};
+    try {
+        await prisma.$transaction(
+            async (tx) => {
+                const first = Number(await tx.$executeRawUnsafe(sql.insertReceipts(src.content, src.sent)));
+                const second = Number(await tx.$executeRawUnsafe(sql.insertReceipts(src.content, src.sent)));
+                const mine = await tx.leadRequest.findMany({ where: { leadId: id, content: "PRICELIST" } });
+                const openPricelist = await tx.leadRequest.count({ where: { content: "PRICELIST", origin: "MIGRATED_RECEIPT", state: "OPEN" } });
+                box.seen = { first, second, mine, openPricelist };
+                throw new Rollback();
+            },
+            { timeout: 60_000, maxWait: 30_000 },
+        );
+    } catch (error) {
+        if (!(error instanceof Rollback)) throw error;
+    }
+    const s = box.seen as Seen;
+    const row = s?.mine[0];
+    check(
+        "R01-1: a PRICELIST receipt migrates to ONE linked SENT row (never an OPEN one); a second run adds nothing; no migrated PRICELIST row is left open",
+        Boolean(s) && before === 0 && s.first >= 1 && s.second === 0 && s.mine.length === 1 &&
+            row.state === "SENT" && row.origin === "MIGRATED_RECEIPT" && row.resolvedActivityId === offer.id &&
+            row.resolvedAt !== null && row.requestedById === null && row.migrationKey === `w5:receipt:${id}:PRICELIST` &&
+            s.openPricelist === 0,
+        `first=${s?.first} second=${s?.second} rows=${s?.mine.length} state=${row?.state} linked=${row?.resolvedActivityId === offer.id} openPricelist=${s?.openPricelist}`,
+    );
+};
+
+// R01-2: „Chcú niečo poslať" krok nevyberá – server ho odvodí z toho, čo ostane nevybavené po zápise požiadaviek a povedanej cene.
+tests.w5StepFromRequests = async () => {
+    const { interested, rows, lead, follow, send } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const price = { amount: 1200, note: null };
+
+    // Cena z telefónu spĺňa PRICE; zostáva INFO → „Poslať info", nie „Poslať cenu".
+    const a = await interested(rep, ["INFO"]);
+    const ka = key();
+    const revA = await leadRev(a);
+    const ra = await follow(rep, a, { asked: ["PRICE"], phonePrice: price, stepFromRequests: true, idempotencyKey: ka });
+    const la = await lead(a);
+    const rowsA = await rows(a);
+    const retry = await follow(rep, a, { asked: ["PRICE"], phonePrice: price, stepFromRequests: true, idempotencyKey: ka, expectedRevision: revA });
+    const changed = await follow(rep, a, { asked: ["PRICE", "INFO"], phonePrice: price, stepFromRequests: true, idempotencyKey: ka, expectedRevision: revA });
+
+    // PRICE + DESIGN s cenou z telefónu → zostáva návrh (rozpracované).
+    const b = await interested(rep, ["INFO"]);
+    const rb = await follow(rep, b, { asked: ["PRICE", "DESIGN"], phonePrice: price, stepFromRequests: true });
+    const lb = await lead(b);
+
+    // Cena z telefónu pokryla všetko → nič na poslanie: server odmietne (klient by mal ísť cez výber kroku), nič sa nezapíše.
+    const c = await interested(rep, ["INFO"]);
+    await send(rep, c, { contents: ["ABOUT_US"] });
+    const before = (await rows(c)).length;
+    const rc = await follow(rep, c, { asked: ["PRICE"], phonePrice: price, stepFromRequests: true });
+    const after = (await rows(c)).length;
+
+    // Neplatné kombinácie.
+    const d = await interested(rep, ["INFO"]);
+    const withKind = await follow(rep, d, { asked: ["PRICE"], stepFromRequests: true, nextKind: "CALL" });
+    const noAsk = await follow(rep, d, { stepFromRequests: true });
+    const wrongOutcome = await follow(rep, d, { asked: ["PRICE"], stepFromRequests: true, outcome: "SNOOZE", schedule: { kind: "monthsFromToday", months: 2 } });
+
+    check(
+        "R01-2: with the phone price the derived step is what is STILL outstanding (INFO → send info; DESIGN → návrh), a retry replays, a changed payload conflicts",
+        codeOf(ra) === "OK" && la.nextActionKind === "SEND_EMAIL" &&
+            rowsA.find((r) => r.content === "PRICE")?.state === "SENT" && rowsA.find((r) => r.content === "INFO")?.state === "OPEN" &&
+            codeOf(retry) === "OK" && (await rows(a)).length === rowsA.length &&
+            codeOf(changed) === "ERR:IDEMPOTENCY_CONFLICT" &&
+            codeOf(rb) === "OK" && lb.nextActionKind === "SEND_DESIGN" && lb.nextActionMode === "IN_PROGRESS",
+        `${codeOf(ra)} step=${la.nextActionKind} rows=${rowsA.map((r) => `${r.content}:${r.state}`).join(",")} retry=${codeOf(retry)} changed=${codeOf(changed)} | ${codeOf(rb)} ${lb.nextActionKind}/${lb.nextActionMode}`,
+    );
+    check(
+        "R01-2: nothing left outstanding → refused and nothing written; the flag with an explicit step, without asks or on another outcome is invalid",
+        codeOf(rc) === "ERR:STALE" && before === after && codeOf(withKind) !== "OK" && codeOf(noAsk) !== "OK" && codeOf(wrongOutcome) !== "OK",
+        `${codeOf(rc)} rows ${before}→${after} | ${codeOf(withKind)} ${codeOf(noAsk)} ${codeOf(wrongOutcome)}`,
+    );
+};
+
+// R01-3: odloženie / uzavretie obchodu s nevybavenými požiadavkami klienta – menovanie presných id + dôvod, stiahnutie pod
+// tým istým zámkom, jedna revízia, opakovanie, obnovenie po zmene v inej karte, znovuotvorenie bez oživenia.
+tests.w5CloseWithdraw = async () => {
+    const { interested, rows, lead, follow, asks, pipeline } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+    const { REOPEN_STEP_NOTE } = await import("../../lib/domain/dealMutations");
+    const snooze = { outcome: "SNOOZE" as const, schedule: { kind: "monthsFromToday" as const, months: 2 } };
+    const idsOf = async (id: string) => (await rows(id)).filter((r) => r.state === "OPEN").map((r) => r.id);
+
+    // Snooze: bez id / bez dôvodu / so zlým zoznamom sa neuloží, nič sa nezmení.
+    const a = await interested(rep, ["DESIGN", "PRICE"]);
+    const ids = await idsOf(a);
+    const rev0 = await leadRev(a);
+    const none = await follow(rep, a, { ...snooze });
+    const noReason = await follow(rep, a, { ...snooze, withdraw: { ids, reason: "  " } });
+    const partial = await follow(rep, a, { ...snooze, withdraw: { ids: [ids[0]], reason: "už nechcú" } });
+    const foreignId = await follow(rep, a, { ...snooze, withdraw: { ids: [...ids, "cl_not_mine_000000000"], reason: "už nechcú" } });
+    const untouched = (await rows(a)).every((r) => r.state === "OPEN") && (await leadRev(a)) === rev0;
+
+    const k = key();
+    const ok = await follow(rep, a, { ...snooze, withdraw: { ids, reason: "už nechcú" }, idempotencyKey: k });
+    const la = await lead(a);
+    const withdrawn = await rows(a);
+    const audit = await prisma.activity.count({ where: { leadId: a, type: "CLIENT_ASK_CHANGED" } });
+    const replay = await follow(rep, a, { ...snooze, withdraw: { ids, reason: "už nechcú" }, idempotencyKey: k, expectedRevision: rev0 });
+    const conflict = await follow(rep, a, { ...snooze, withdraw: { ids, reason: "iný dôvod" }, idempotencyKey: k, expectedRevision: rev0 });
+    const auditAfter = await prisma.activity.count({ where: { leadId: a, type: "CLIENT_ASK_CHANGED" } });
+
+    check(
+        "R01-3: snoozing with open asks needs their exact ids and a reason (missing / blank / partial / foreign id refused, nothing written); one save withdraws them all under one revision bump",
+        codeOf(none) !== "OK" && codeOf(noReason) !== "OK" && codeOf(partial) === "ERR:STALE" && codeOf(foreignId) === "ERR:STALE" && untouched &&
+            codeOf(ok) === "OK" && la.status === "SNOOZED" && la.revision === rev0 + 1 &&
+            withdrawn.every((r) => r.state === "WITHDRAWN" && r.reason === "už nechcú" && r.resolvedById === rep.id && r.resolvedActivityId === null) &&
+            audit === 1 && codeOf(replay) === "OK" && auditAfter === 1 && codeOf(conflict) === "ERR:IDEMPOTENCY_CONFLICT",
+        `none=${codeOf(none)} blank=${codeOf(noReason)} partial=${codeOf(partial)} foreign=${codeOf(foreignId)} → ${codeOf(ok)} ${la.status} rev+${la.revision - rev0} audit=${audit}/${auditAfter} replay=${codeOf(replay)} conflict=${codeOf(conflict)}`,
+    );
+
+    // Iná karta pridala požiadavku po tom, čo táto videla zoznam → STALE, nič sa nestiahne.
+    const b = await interested(rep, ["INFO"]);
+    const seen = await idsOf(b);
+    await asks(rep, b, { add: ["PRICE"] });
+    const stale = await follow(rep, b, { outcome: "NOT_INTERESTED", lostReason: "nie", withdraw: { ids: seen, reason: "nie" } });
+    const bStillOpen = (await idsOf(b)).length === 2 && (await lead(b)).status === "ACTIVE";
+
+    // Uzavretie (LOST) a zlé číslo (UNREACHABLE) stiahnu; bez withdraw sa neuloží; „withdraw" mimo odloženia / uzavretia je neplatné.
+    const c = await interested(rep, ["PRICELIST", "REVIEW"]);
+    const cIds = await idsOf(c);
+    const closeNoWithdraw = await follow(rep, c, { outcome: "NOT_INTERESTED", lostReason: "nie" });
+    const wrongOutcome = await follow(rep, c, { withdraw: { ids: cIds, reason: "x" } });
+    const lost = await follow(rep, c, { outcome: "NOT_INTERESTED", lostReason: "majú dodávateľa", withdraw: { ids: cIds, reason: "majú dodávateľa" } });
+    const lc = await lead(c);
+
+    const d = await interested(rep, ["INFO"]);
+    const bad = await follow(rep, d, { outcome: "BAD_NUMBER", withdraw: { ids: await idsOf(d), reason: "zlé číslo" } });
+    const ld = await lead(d);
+
+    // Znovuotvorenie: stiahnutá požiadavka sa neoživí – bez nevybavenej práce ide pevné „Zavolať".
+    const reopen = await pipeline.reopenDealAs(manager, c, { expectedRevision: await leadRev(c), idempotencyKey: key() });
+    const lc2 = await lead(c);
+
+    // Obchod bez otvorených požiadaviek sa odkladá ako predtým, bez withdraw.
+    const e2 = await interested(rep, ["INFO"]);
+    await asks(rep, e2, { withdraw: await idsOf(e2), reason: "už nechcú" });
+    const plain = await follow(rep, e2, { ...snooze });
+
+    check(
+        "R01-3: a request changed in another tab → STALE and nothing is withdrawn; LOST / UNREACHABLE withdraw; closing without them or a withdraw on another outcome is refused; reopening does not revive them; a deal with nothing open snoozes as before",
+        codeOf(stale) === "ERR:STALE" && bStillOpen &&
+            codeOf(closeNoWithdraw) !== "OK" && codeOf(wrongOutcome) !== "OK" &&
+            codeOf(lost) === "OK" && lc.status === "LOST" && (await rows(c)).every((r) => r.state === "WITHDRAWN") &&
+            codeOf(bad) === "OK" && ld.status === "UNREACHABLE" &&
+            codeOf(reopen) === "OK" && lc2.nextActionKind === "CALL" && lc2.nextActionNote === REOPEN_STEP_NOTE && (await idsOf(c)).length === 0 &&
+            codeOf(plain) === "OK",
+        `stale=${codeOf(stale)} kept=${bStillOpen} | noWithdraw=${codeOf(closeNoWithdraw)} wrongOutcome=${codeOf(wrongOutcome)} | lost=${codeOf(lost)} ${lc.status} bad=${codeOf(bad)} ${ld.status} | reopen=${codeOf(reopen)} ${lc2.nextActionKind} | plain=${codeOf(plain)}`,
+    );
+};
+
+// R01-4: čo sa predzaškrtne v „Čo sme poslali" – len to, čo klient pýtal (čistá funkcia, ktorú používa dialóg).
+tests.w5DialogDefaults = async () => {
+    const cr = await import("../../lib/domain/clientRequests");
+    const designOnly = cr.offerDefaults(["DESIGN"]);
+    const nothing = cr.offerDefaults([]);
+    const some = cr.offerDefaults(["INFO", "REVIEW"]);
+    check(
+        "R01-4: a návrh-only request (or nothing asked) preticks no e-mail content; only what was asked is ticked",
+        !designOnly.aboutUs && !designOnly.pricelist && !designOnly.review &&
+            !nothing.aboutUs && !nothing.pricelist && !nothing.review &&
+            some.aboutUs && !some.pricelist && some.review,
+        `design=${JSON.stringify(designOnly)} none=${JSON.stringify(nothing)} info+review=${JSON.stringify(some)}`,
+    );
+};
+
+// R01-5: návrh poslaný mimo systému (deal bez Design riadku) – platný záznam, ktorý splní požiadavku, sa dá prečiarknuť
+// a vráti ju; s Design riadkom sa obísť nedá; meta ani súhrn nepoužijú žiadne Design.sentAt.
+tests.w5UntrackedDesign = async () => {
+    const { interested, rows, lead, send, offers, design } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+
+    const id = await interested(rep, ["DESIGN"]);
+    const noIds = await send(rep, id, { contents: ["DESIGN"] });
+    const both = await send(rep, id, { contents: ["DESIGN"], untrackedDesign: true, designIds: ["x"] });
+    const wrongContent = await send(rep, id, { contents: ["ABOUT_US"], untrackedDesign: true });
+    const k = key();
+    const ok = await send(rep, id, { contents: ["DESIGN"], untrackedDesign: true, idempotencyKey: k, expectedRevision: await leadRev(id) });
+    const l1 = await lead(id);
+    const req = (await rows(id))[0];
+    const offer = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "OFFER_SENT" } });
+    const meta = offer.meta as { untrackedDesign?: boolean; designs?: unknown; contents?: string[] } | null;
+    const retry = await send(rep, id, { contents: ["DESIGN"], untrackedDesign: true, idempotencyKey: k, expectedRevision: 0 });
+    const offersAfterRetry = await prisma.activity.count({ where: { leadId: id, type: "OFFER_SENT" } });
+    const designRows = await prisma.design.count({ where: { leadId: id } });
+
+    // Prečiarknutie vráti požiadavku aj stĺpec návrhu.
+    const fix = await offers.correctRecordAs(manager, offer.id, "poslané omylom");
+    const l2 = await lead(id);
+    const req2 = (await rows(id))[0];
+
+    // Deal s Design riadkom: „návrh bez záznamu" sa odmietne.
+    const withDesign = await interested(rep, ["DESIGN"]);
+    await design(manager, withDesign, "smrek1");
+    const bypass = await send(rep, withDesign, { contents: ["DESIGN"], untrackedDesign: true, expectedRevision: await leadRev(withDesign) });
+
+    // Starý údaj obchodu bez návrhov ostane, kým sa preň nezapíše odoslanie bez záznamu.
+    const legacy = await interested(rep, ["INFO"]);
+    const legacyAt = new Date("2026-01-05T10:00:00.000Z");
+    await prisma.lead.update({ where: { id: legacy }, data: { designSentAt: legacyAt } });
+    await send(rep, legacy, { contents: ["ABOUT_US"] });
+    const l3 = await lead(legacy);
+
+    check(
+        "R01-5: DESIGN without ids and without the untracked flag is refused; the flag with ids / on other contents is refused; the flag records DESIGN with no Design row, satisfies the request, sets designSentAt and creates no Design",
+        codeOf(noIds) !== "OK" && codeOf(both) !== "OK" && codeOf(wrongContent) !== "OK" &&
+            codeOf(ok) === "OK" && meta?.untrackedDesign === true && meta?.designs === undefined && meta?.contents?.join() === "DESIGN" &&
+            req.state === "SENT" && req.resolvedActivityId === offer.id && l1.designSentAt !== null && designRows === 0 &&
+            codeOf(retry) === "OK" && offersAfterRetry === 1,
+        `noIds=${codeOf(noIds)} both=${codeOf(both)} wrong=${codeOf(wrongContent)} ok=${codeOf(ok)} untracked=${meta?.untrackedDesign} req=${req.state} designSentAt=${l1.designSentAt?.toISOString()} designRows=${designRows} retry=${codeOf(retry)}/${offersAfterRetry}`,
+    );
+    check(
+        "R01-5: crossing out the untracked send reopens the request and clears designSentAt; a deal that HAS a Design cannot use the flag; an old designSentAt survives unrelated sends",
+        codeOf(fix) === "OK" && req2.state === "OPEN" && l2.designSentAt === null &&
+            codeOf(bypass) !== "OK" &&
+            l3.designSentAt?.getTime() === legacyAt.getTime(),
+        `fix=${codeOf(fix)} req=${req2.state} designSentAt=${l2.designSentAt} | bypass=${codeOf(bypass)} | legacy=${l3.designSentAt?.toISOString()}`,
+    );
+};
+
+// Q2: manažér uzavrie obchod v detaile – LOST / UNREACHABLE stiahnu otvorené požiadavky (id + dôvod), WON ich nechá.
+tests.w5ManagerClose = async () => {
+    const { interested, rows, pipeline } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+    const openIds = async (id: string) => (await rows(id)).filter((r) => r.state === "OPEN").map((r) => r.id);
+
+    const a = await interested(rep, ["DESIGN", "PRICE"]);
+    const ids = await openIds(a);
+    const noWithdraw = await pipeline.changeStatusAs(manager, a, { status: "LOST", expectedRevision: await leadRev(a), idempotencyKey: key() });
+    const blank = await pipeline.changeStatusAs(manager, a, { status: "LOST", expectedRevision: await leadRev(a), idempotencyKey: key(), withdraw: { ids, reason: " " } });
+    const partial = await pipeline.changeStatusAs(manager, a, { status: "UNREACHABLE", expectedRevision: await leadRev(a), idempotencyKey: key(), withdraw: { ids: [ids[0]], reason: "x" } });
+    const still = (await openIds(a)).length === 2;
+    const ok = await pipeline.changeStatusAs(manager, a, { status: "UNREACHABLE", expectedRevision: await leadRev(a), idempotencyKey: key(), withdraw: { ids, reason: "zlé číslo" } });
+
+    const b = await interested(rep, ["INFO"]);
+    const lostNo = await pipeline.markLostAs(manager, b, { reason: "nie", expectedRevision: await leadRev(b), idempotencyKey: key() });
+    const lostOk = await pipeline.markLostAs(manager, b, { reason: "nie", expectedRevision: await leadRev(b), idempotencyKey: key(), withdraw: { ids: await openIds(b), reason: "nie" } });
+
+    const c = await interested(rep, ["PRICE"]);
+    const wonWith = await pipeline.changeStatusAs(manager, c, { status: "WON", expectedRevision: await leadRev(c), idempotencyKey: key(), withdraw: { ids: await openIds(c), reason: "x" } });
+    const won = await pipeline.changeStatusAs(manager, c, { status: "WON", expectedRevision: await leadRev(c), idempotencyKey: key() });
+
+    check(
+        "Q2: manager LOST / UNREACHABLE with open asks needs exact ids + a reason and withdraws them; WON leaves them and refuses a withdraw",
+        codeOf(noWithdraw) !== "OK" && codeOf(blank) !== "OK" && codeOf(partial) === "ERR:STALE" && still && codeOf(ok) === "OK" &&
+            (await rows(a)).every((r) => r.state === "WITHDRAWN" && r.reason === "zlé číslo") &&
+            codeOf(lostNo) !== "OK" && codeOf(lostOk) === "OK" && (await openIds(b)).length === 0 &&
+            codeOf(wonWith) !== "OK" && codeOf(won) === "OK" && (await openIds(c)).length === 1,
+        `no=${codeOf(noWithdraw)} blank=${codeOf(blank)} partial=${codeOf(partial)} ok=${codeOf(ok)} | lost=${codeOf(lostNo)}/${codeOf(lostOk)} | won+w=${codeOf(wonWith)} won=${codeOf(won)}`,
+    );
+};
+
+// Cena uvedená v našej SMS je fakt o tom, čo klient vie (kanál PHONE + via SMS, viazaný na SMS_SENT); iné kontakty ju nesmú niesť.
+tests.w5SmsPrice = async () => {
+    const { interested, rows, follow, lead } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const id = await interested(rep, ["PRICE"]);
+    const sms = await follow(rep, id, {
+        contact: "SMS", note: "Cena webu je 990 €", phonePrice: { amount: 990, note: null },
+        nextKind: "CALL", schedule: { kind: "daysFromToday", days: 3 },
+    });
+    const smsRow = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "SMS_SENT" } });
+    const offer = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "OFFER_SENT" } });
+    const meta = offer.meta as { channel?: string; via?: string; callActivityId?: string; price?: { amount?: string } } | null;
+    const reqs = await rows(id);
+    const l = await lead(id);
+    const none = await follow(rep, id, { contact: "NONE", phonePrice: { amount: 1, note: null }, nextKind: "CALL", schedule: { kind: "daysFromToday", days: 3 } });
+    const other = await interested(rep, ["INFO"]);
+    const noSms = await follow(rep, other, {
+        contact: "SMS", note: "Ahoj", nextKind: "CALL", schedule: { kind: "daysFromToday", days: 3 },
+    });
+    check(
+        "SMS with a price: one SMS_SENT + one OFFER_SENT (PHONE via SMS, linked to the SMS), the open PRICE request is satisfied, the price is the deal's; NONE cannot carry a price; a plain SMS writes no offer",
+        codeOf(sms) === "OK" && meta?.channel === "PHONE" && meta.via === "SMS" && meta.callActivityId === smsRow.id && meta.price?.amount === "990" &&
+            reqs.find((r) => r.content === "PRICE")?.state === "SENT" && Number(l.price) === 990 &&
+            codeOf(none) !== "OK" && codeOf(noSms) === "OK" &&
+            (await prisma.activity.count({ where: { leadId: other, type: "OFFER_SENT" } })) === 0,
+        `${codeOf(sms)} ${meta?.channel}/${meta?.via} linked=${meta?.callActivityId === smsRow.id} req=${reqs[0]?.state} price=${l.price} none=${codeOf(none)} plain=${codeOf(noSms)}`,
+    );
+};
+
+// „Poslali sme SMS" + ponechať krok: zapíše sa len SMS (a cena z nej), krok, dátum a stav ostávajú; jedna revízia.
+tests.w5SmsKeepStep = async () => {
+    const { interested, follow, lead } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const id = await interested(rep, ["DESIGN"]);
+    const before = await lead(id);
+    const rev0 = await leadRev(id);
+    const planningCount = () => prisma.activity.count({ where: { leadId: id, type: { in: ["NEXT_ACTION_CHANGED", "NEXT_ACTION_SET", "NEXT_ACTION_CLEARED"] } } });
+    const planningBefore = await planningCount();
+    const kept = await follow(rep, id, { contact: "SMS", note: "Návrh pošleme zajtra", keepStep: true });
+    const after = await lead(id);
+    const sms = await prisma.activity.count({ where: { leadId: id, type: "SMS_SENT" } });
+    const planning = (await planningCount()) - planningBefore;
+    // R02-4: cena v SMS dokončuje systémový krok – ponechať sa nedá; zámerne naplánovaný hovor sa ponechať dá.
+    const priceOnSystem = await follow(rep, id, { contact: "SMS", note: "Cena 500 €", keepStep: true, phonePrice: { amount: 500, note: null } });
+    const call = await follow(rep, id, { contact: "CALL", keepStep: true });
+    const withStep = await follow(rep, id, { contact: "SMS", note: "x", keepStep: true, nextKind: "CALL", schedule: { kind: "daysFromToday", days: 2 } });
+    await follow(rep, id, { nextKind: "CALL", schedule: { kind: "daysFromToday", days: 5 } });
+    const callStep = await lead(id);
+    const priceOnPlan = await follow(rep, id, { contact: "SMS", note: "Cena 500 €", keepStep: true, phonePrice: { amount: 500, note: null } });
+    const planAfter = await lead(id);
+    check(
+        "SMS + keepStep: only the SMS is recorded, step / date / status stay, one bump; a price in the SMS may keep a deliberate CALL but NOT a system send step; keepStep on a call or with an explicit step is refused",
+        codeOf(kept) === "OK" && sms === 1 && after.nextActionKind === before.nextActionKind &&
+            after.nextActionAt?.getTime() === before.nextActionAt?.getTime() && after.status === before.status && after.revision === rev0 + 1 &&
+            planning === 0 && codeOf(priceOnSystem) === "ERR:FORBIDDEN" && codeOf(call) !== "OK" && codeOf(withStep) !== "OK" &&
+            codeOf(priceOnPlan) === "OK" && planAfter.nextActionKind === "CALL" && planAfter.nextActionAt?.getTime() === callStep.nextActionAt?.getTime(),
+        `${codeOf(kept)} step ${before.nextActionKind}→${after.nextActionKind} rev+${after.revision - rev0} planningRows=${planning} priceOnSystem=${codeOf(priceOnSystem)} call=${codeOf(call)} withStep=${codeOf(withStep)} priceOnPlan=${codeOf(priceOnPlan)} ${planAfter.nextActionKind}`,
+    );
+};
+
+// R02-3: prečiarknutá SMS potiahne so sebou cenu, ktorá v nej zaznela – jedna revízia, prepočet aj požiadavky; opačne nie.
+tests.w5SmsCorrection = async () => {
+    const { interested, follow, lead, rows, offers } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+    const id = await interested(rep, ["PRICE"]);
+    await follow(rep, id, { contact: "SMS", note: "Cena 990 €", phonePrice: { amount: 990, note: null }, nextKind: "CALL", schedule: { kind: "daysFromToday", days: 3 } });
+    const sms = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "SMS_SENT" } });
+    const priced = await lead(id);
+    const req1 = (await rows(id))[0].state;
+    const rev = await leadRev(id);
+    const [a, b] = await Promise.all([offers.correctRecordAs(manager, sms.id, "neodoslané"), offers.correctRecordAs(rep, sms.id, "neodoslané")]);
+    const offer = await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "OFFER_SENT" } });
+    const l = await lead(id);
+    const req2 = (await rows(id))[0].state;
+
+    // Opačný smer: prečiarknutá cena nechá SMS platnú.
+    const id2 = await interested(rep, ["PRICE"]);
+    await follow(rep, id2, { contact: "SMS", note: "Cena 700 €", phonePrice: { amount: 700, note: null }, nextKind: "CALL", schedule: { kind: "daysFromToday", days: 3 } });
+    const offer2 = await prisma.activity.findFirstOrThrow({ where: { leadId: id2, type: "OFFER_SENT" } });
+    await offers.correctRecordAs(manager, offer2.id, "zlá suma");
+    const sms2 = await prisma.activity.findFirstOrThrow({ where: { leadId: id2, type: "SMS_SENT" } });
+
+    check(
+        "R02-3: crossing out an SMS crosses out the price it carried in the same transaction (one bump, the PRICE request reopens, the deal's price knowledge clears); two concurrent corrections → one wins; crossing out only the price leaves the SMS",
+        priced.offerPriceAt !== null && req1 === "SENT" &&
+            [a, b].filter((r) => codeOf(r) === "OK").length === 1 && offer.revertedAt !== null &&
+            l.offerPriceAt === null && req2 === "OPEN" && l.revision === rev + 1 &&
+            sms2.revertedAt === null,
+        `priced=${Boolean(priced.offerPriceAt)} req ${req1}→${req2} results=${codeOf(a)},${codeOf(b)} offerReverted=${offer.revertedAt !== null} offerPriceAt=${l.offerPriceAt} rev+${l.revision - rev} | smsKept=${sms2.revertedAt === null}`,
+    );
+};
+
+// R02-1: manažér odkladá obchod v detaile – rovnaké pravidlo ako v akčnom okne (id + dôvod, stiahnutie, jedna revízia).
+tests.w5ManagerSnooze = async () => {
+    const { interested, rows, pipeline, ask, openTask, bt } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+    const st = async (id: string, extra: Record<string, unknown>, status: "SNOOZED" | "ACTIVE" = "SNOOZED") =>
+        pipeline.changeStatusAs(manager, id, { status, expectedRevision: await leadRev(id), idempotencyKey: (extra.idempotencyKey as string) ?? key(), ...extra } as never);
+    const openIds = async (id: string) => (await rows(id)).filter((r) => r.state === "OPEN").map((r) => r.id);
+
+    const a = await interested(rep, ["DESIGN", "PRICE"]);
+    const ids = await openIds(a);
+    const none = await st(a, {});
+    const blank = await st(a, { withdraw: { ids, reason: " " } });
+    const partial = await st(a, { withdraw: { ids: [ids[0]], reason: "x" } });
+    const untouched = (await openIds(a)).length === 2 && (await prisma.lead.findUniqueOrThrow({ where: { id: a } })).status === "ACTIVE";
+    const rev0 = await leadRev(a);
+    const k = key();
+    const ok = await st(a, { withdraw: { ids, reason: "ozvať sa neskôr" }, idempotencyKey: k });
+    const la = await prisma.lead.findUniqueOrThrow({ where: { id: a } });
+    const audit = await prisma.activity.count({ where: { leadId: a, type: "CLIENT_ASK_CHANGED" } });
+    const replay = await pipeline.changeStatusAs(manager, a, { status: "SNOOZED", expectedRevision: rev0, idempotencyKey: k, withdraw: { ids, reason: "ozvať sa neskôr" } });
+    const auditAfter = await prisma.activity.count({ where: { leadId: a, type: "CLIENT_ASK_CHANGED" } });
+    // withdraw pri stave, ktorý ho nespotrebúva
+    const wake = await st(a, { withdraw: { ids, reason: "x" } }, "ACTIVE");
+
+    // Otvorená úloha + otvorené požiadavky naraz.
+    const b = await interested(rep, ["PRICE"]);
+    const t = await ask(rep, b, manager.id, { contents: ["PRICE"] });
+    const bIds = await openIds(b);
+    const taskOnly = await st(b, { cancelTask: { taskId: (await openTask(b))!.id, reason: "x" } });
+    const wakeOn = bt.addBusinessCalendarDays(bt.businessDate(new Date()), 3);
+    const both = await st(b, { cancelTask: { taskId: (await openTask(b))!.id, reason: "x" }, withdraw: { ids: bIds, reason: "nechcú" }, snoozeUntil: wakeOn });
+
+    check(
+        "R02-1: a manager's SNOOZED needs the exact open ask ids + a reason (none / blank / partial refused, nothing written), withdraws them once under one bump, replays by key, and a withdraw on ACTIVE is refused",
+        codeOf(none) === "ERR:FORBIDDEN" && codeOf(blank) !== "OK" && codeOf(partial) === "ERR:STALE" && untouched &&
+            codeOf(ok) === "OK" && la.status === "SNOOZED" && la.revision === rev0 + 1 && audit === 1 &&
+            (await rows(a)).every((r) => r.state === "WITHDRAWN") && codeOf(replay) === "OK" && auditAfter === 1 &&
+            codeOf(wake) !== "OK",
+        `none=${codeOf(none)} blank=${codeOf(blank)} partial=${codeOf(partial)} ok=${codeOf(ok)} ${la.status} rev+${la.revision - rev0} audit=${audit}/${auditAfter} replay=${codeOf(replay)} wake=${codeOf(wake)}`,
+    );
+    check(
+        "R02-1: with an open task AND open asks the snooze needs both the task cancellation and the withdrawal",
+        codeOf(t) === "OK" && codeOf(taskOnly) !== "OK" && codeOf(both) === "OK" && (await rows(b)).every((r) => r.state === "WITHDRAWN") && (await openTask(b)) === null,
+        `task=${codeOf(t)} taskOnly=${codeOf(taskOnly)} both=${codeOf(both)}`,
+    );
+};
+
+// R02-2: Lead.designSentAt = najnovší platný dátum zo sledovaných návrhov aj z odoslaní bez Design riadku.
+tests.w5UntrackedLifecycle = async () => {
+    const { interested, send, offers, design, lead, queries, dealScope } = await w5();
+    const rep = await makeUser("SALES_REP");
+    const manager = await makeUser("MANAGER");
+    const tracking = await import("../../lib/commands/tracking");
+
+    // (a) len zmazaný Design pred odoslaním bez záznamu
+    const a = await interested(rep, ["DESIGN"]);
+    const d0 = await design(manager, a, "stary");
+    await tracking.removeDesignAs(manager, d0.id);
+    const sentA = await send(rep, a, { contents: ["DESIGN"], untrackedDesign: true });
+    const la = await lead(a);
+
+    // (b) Design vytvorený PO odoslaní, potom nesúvisiace odoslanie, (c) potom sa Design zmaže
+    const b = await interested(rep, ["DESIGN"]);
+    await send(rep, b, { contents: ["DESIGN"], untrackedDesign: true });
+    const at = (await lead(b)).designSentAt;
+    const d1 = await design(manager, b, "novy");
+    await send(rep, b, { contents: ["ABOUT_US"] });
+    const lb = await lead(b);
+    await tracking.removeDesignAs(manager, d1.id);
+    const lc = await lead(b);
+
+    // (d) korekcia odoslania bez záznamu, kým existuje iný neposlaný Design
+    const c = await interested(rep, ["DESIGN"]);
+    await send(rep, c, { contents: ["DESIGN"], untrackedDesign: true });
+    const offer = await prisma.activity.findFirstOrThrow({ where: { leadId: c, type: "OFFER_SENT" } });
+    await design(manager, c, "neposlany");
+    const fix = await offers.correctRecordAs(manager, offer.id, "omyl");
+    const ld = await lead(c);
+
+    const list = await queries.getDealList({ scope: dealScope(rep), owner: { userId: rep.id }, view: "got_design", take: 500 });
+    const inFilter = list.rows.some((r) => r.id === b);
+
+    check(
+        "R02-2: designSentAt is the latest valid date across tracked designs AND untracked sends — a deleted Design does not suppress it, a later Design (and its deletion) does not clear it, crossing the send out with another unsent Design present clears it; the 'Dostali návrh' filter agrees",
+        codeOf(sentA) === "OK" && la.designSentAt !== null &&
+            at !== null && lb.designSentAt?.getTime() === at.getTime() && lc.designSentAt?.getTime() === at.getTime() &&
+            codeOf(fix) === "OK" && ld.designSentAt === null && inFilter,
+        `a=${la.designSentAt?.toISOString()} b=${lb.designSentAt?.toISOString()}=${at?.toISOString()} afterDelete=${lc.designSentAt?.toISOString()} d=${ld.designSentAt} filter=${inFilter}`,
+    );
+};
+
+// R02-6: okamih odoslania v migračnom SQL je PRESNE offerInstant() z TypeScriptu – inak by sa migrovaná požiadavka po
+// prvom prepočte považovala za novšiu než jej odoslanie a znova by sa otvorila (polnoc UTC vs. polnoc Bratislavy).
+tests.w5InstantParity = async () => {
+    const { interested, send, bt, today } = await w5();
+    const sql = await import("./wave5-requests-sql");
+    const { offerInstant, parseOfferMeta } = await import("../../lib/domain/offers");
+    const rep = await makeUser("SALES_REP");
+    const id = await interested(rep, ["INFO"]);
+    await send(rep, id, { contents: ["ABOUT_US"] }); // dnešný záznam: čas zápisu
+    await send(rep, id, { contents: ["PRICELIST"], sentOn: bt.addBusinessCalendarDays(today, -3) }); // spätne datované
+    const created = new Date();
+    for (const [sentOn, historical] of [["2026-03-15", true], ["2026-01-05", false], ["2026-07-01", true]] as const) {
+        await prisma.activity.create({
+            data: {
+                leadId: id, userId: rep.id, type: "OFFER_SENT", category: "BUSINESS", source: "PIPELINE",
+                note: "parita", meta: { channel: "EMAIL", contents: ["DESIGN"], price: null, sentOn, historical, migrated: true, correction: null },
+                createdAt: created,
+            },
+        });
+    }
+    const rows = await prisma.activity.findMany({ where: { leadId: id, type: "OFFER_SENT" }, select: { id: true, createdAt: true, meta: true } });
+    const viaSql = await prisma.$queryRawUnsafe<{ id: string; instant: Date }[]>(
+        `SELECT a.id, ${sql.instantSql} AS instant FROM "Activity" a WHERE a."leadId" = $1 AND a.type = 'OFFER_SENT'`,
+        id,
+    );
+    const sqlById = new Map(viaSql.map((r) => [r.id, new Date(r.instant).getTime()]));
+    const diffs = rows.flatMap((r) => {
+        const meta = parseOfferMeta(r.meta);
+        if (!meta) return [`${r.id}: unparsable`];
+        const want = offerInstant(meta, r.createdAt).getTime();
+        return sqlById.get(r.id) === want ? [] : [`${meta.sentOn}: sql=${new Date(sqlById.get(r.id) ?? 0).toISOString()} ts=${new Date(want).toISOString()}`];
+    });
+    // Koniec-koncov: migrovaný riadok po prvom prepočte NEZMENÍ stav (v transakcii, ktorá sa vráti späť).
+    const rq = await import("../../lib/domain/requestMutations");
+    class Rollback extends Error {}
+    const box: { state?: string; linked?: boolean } = {};
+    try {
+        await prisma.$transaction(
+            async (tx) => {
+                await tx.$executeRawUnsafe(sql.insertReceipts("DESIGN", "DESIGN"));
+                await rq.reconcileRequests(tx as never, id);
+                const row = await tx.leadRequest.findFirstOrThrow({ where: { leadId: id, content: "DESIGN" } });
+                box.state = row.state;
+                box.linked = row.resolvedActivityId !== null;
+                throw new Rollback();
+            },
+            { timeout: 60_000, maxWait: 30_000 },
+        );
+    } catch (error) {
+        if (!(error instanceof Rollback)) throw error;
+    }
+    check(
+        "R02-6: the migration SQL's send instant equals offerInstant() for today's, backdated and historical rows (Bratislava midnight, not UTC), and a migrated historical receipt stays SENT after the first reconcile",
+        rows.length === 5 && diffs.length === 0 && box.state === "SENT" && box.linked === true,
+        `rows=${rows.length} diffs=${diffs.join(" | ") || "none"} afterReconcile=${box.state}/${box.linked}`,
+    );
+};
+
+// ── Wave 4: jedna úloha, viac častí (wave-4-proposal.md §2.13) ───────────────
+
+// W4-0 čisté pravidlá (§2.13): stav úlohy je funkcia častí a NEZÁVISÍ od poradia; adresa zamietnutej časti;
+// a vlastnosť P6 – zamknutý krok je vždy bez dátumu, SCHEDULED a spĺňa I10.
+tests.w4Pure = async () => {
+    const t = await import("../../lib/domain/tasks");
+    const cr = await import("../../lib/domain/clientRequests");
+    const statuses = ["REQUESTED", "DELIVERED", "DECLINED", "WITHDRAWN"] as const;
+
+    // Každá kombinácia troch častí × každé poradie → vždy ten istý stav úlohy.
+    const wrong: string[] = [];
+    for (const a of statuses) {
+        for (const b of statuses) {
+            for (const c of statuses) {
+                const parts = [{ status: a }, { status: b }, { status: c }];
+                const want = a === "REQUESTED" || b === "REQUESTED" || c === "REQUESTED"
+                    ? "OPEN"
+                    : [a, b, c].includes("DELIVERED")
+                      ? "DONE"
+                      : [a, b, c].includes("DECLINED")
+                        ? "DECLINED"
+                        : "CANCELLED";
+                const got = t.taskStatusOfParts(parts);
+                const shuffled = t.taskStatusOfParts([parts[2], parts[0], parts[1]]);
+                if (got !== want || shuffled !== want) wrong.push(`${a}/${b}/${c}: ${got}/${shuffled} want ${want}`);
+            }
+        }
+    }
+    check(
+        "W4-0 (§2.4): the task status is a pure, order-independent function of its parts over all 64 combinations",
+        wrong.length === 0,
+        wrong.slice(0, 3).join(" | ") || "all 64 combinations agree",
+    );
+
+    // Adresa položky: zamietnutie nesie ČASŤ, návrh svoje id, ostatné nič. Staré riadky (bez part) si kľúč nezmenia.
+    const keys = [
+        t.itemKey({ taskId: "T", kind: "PRICE" }),
+        t.itemKey({ taskId: "T", kind: "DESIGN", designId: "d1" }),
+        t.itemKey({ taskId: "T", kind: "DECLINED", part: "PRICE" }),
+        t.itemKey({ taskId: "T", kind: "DECLINED", part: "OTHER" }),
+        t.itemKey({ taskId: "T", kind: "DECLINED" }),
+    ];
+    check(
+        "W4-0 (§2.4): two declined parts of one task are two distinct item addresses; an old whole-task decline keeps its key",
+        new Set(keys).size === 5 && keys[2] === "T:DECLINED:PRICE" && keys[4] === "T:DECLINED:",
+        keys.join(" · "),
+    );
+
+    // Značka časti nikdy nepovie „poslané", kým niečo naozaj neodišlo, a nikdy „pripravené", keď sa to vedome neposiela.
+    const marks = (sent: number, dismissed: number, waiting: number) => {
+        const items = [
+            ...Array.from({ length: sent }, () => ({ disposition: { state: "SENT" as const, at: "x", activityId: "a" } })),
+            ...Array.from({ length: dismissed }, () => ({ disposition: { state: "DISMISSED" as const, at: "x", by: null, reason: null, activityId: "a" } })),
+            ...Array.from({ length: waiting }, () => ({ disposition: { state: "WAITING" as const } })),
+        ];
+        const mark = t.partMarkOf("DELIVERED", { total: items.length, sentCount: sent, dismissedCount: dismissed, waitingCount: waiting });
+        return t.partMarkLabel({ mark, items: items as never, sentCount: sent, dismissedCount: dismissed, waitingCount: waiting, reason: null });
+    };
+    check(
+        "W4-0 (§2.3, R02-2): the compact mark never claims a client receipt for a deliberately unsent item, and never says 'pripravené' when nothing is left to send",
+        marks(0, 0, 2) === "pripravené" && marks(1, 0, 1).startsWith("1 z 2") && marks(0, 1, 0).startsWith("neposiela sa") &&
+            marks(1, 1, 0).includes("neposlané") && marks(2, 0, 0) === "poslané klientovi (2)",
+        [marks(0, 0, 2), marks(1, 0, 1), marks(0, 1, 0), marks(1, 1, 0), marks(2, 0, 0)].join(" · "),
+    );
+
+    // P6: zamknutý krok je pre KAŽDÚ nevybavenú množinu bez dátumu, SCHEDULED, a jeho druh spĺňa I10.
+    const contents = cr.REQUEST_CONTENTS;
+    const subsets: (typeof contents)[number][][] = [];
+    for (let mask = 0; mask < 1 << contents.length; mask++) {
+        subsets.push(contents.filter((_, i) => mask & (1 << i)));
+    }
+    const bad: string[] = [];
+    for (const set of subsets) {
+        for (const current of [null, "CALL", "SEND_QUOTE", "SEND_DESIGN", "SEND_EMAIL", "WAITING_FOR_CLIENT"] as const) {
+            const step = cr.defaultStep(set, {
+                nextActionKind: current,
+                nextActionAt: new Date(),
+                nextActionHasTime: true,
+                nextActionMode: "IN_PROGRESS",
+                nextActionNote: null,
+            }, { locked: true });
+            if (!step) {
+                if (set.length > 0) bad.push(`${set.join("+")}/${current}: null for a non-empty set`);
+                continue;
+            }
+            if (step.nextActionAt !== null || step.nextActionHasTime || step.nextActionMode !== "SCHEDULED") {
+                bad.push(`${set.join("+")}/${current}: ${step.nextActionAt}/${step.nextActionMode}`);
+            }
+            const required = t.requiredStepKinds(set.includes("DESIGN") ? [{ kind: "DESIGN" }] : set.includes("PRICE") ? [{ kind: "PRICE" }] : []);
+            if (required && !required.includes(step.nextActionKind!)) bad.push(`${set.join("+")}: ${step.nextActionKind} violates I10`);
+        }
+    }
+    check(
+        "W4-0 (P0 / P6): for every outstanding set and every current step, the LOCKED step has no date and mode SCHEDULED, and its kind satisfies I10",
+        bad.length === 0,
+        bad.slice(0, 3).join(" | ") || `${subsets.length} sets × 6 current steps`,
+    );
+};
+
+
+// Pomocníci nad časťami – testy sa pýtajú na to isté, čo číta appka.
+const partRows = (taskId: string) => prisma.dealTaskPart.findMany({ where: { taskId }, orderBy: { kind: "asc" } });
+const partStatus = async (taskId: string) => Object.fromEntries((await partRows(taskId)).map((p) => [p.kind, p.status]));
+const taskRow = (taskId: string) => prisma.dealTask.findUniqueOrThrow({ where: { id: taskId } });
+const rowsOf = (leadId: string, types: string[]) =>
+    prisma.activity.findMany({
+        where: { leadId, type: { in: types as never } },
+        select: { type: true, idempotencyKey: true, note: true, meta: true, createdAt: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+
+// W4-1 vznik: 1–3 druhy naraz = jedna úloha s jednou časťou na druh; duplicita neprejde; krok sa odvodí z celku;
+// a krok PRED zamknutím sa uloží ako záložný (P6 / R02-3).
+tests.w4Ask = async () => {
+    const { tasks, lead, ask, openTask, follow } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+
+    const id = await makeDeal(rep);
+    const dup = await ask(rep, id, manager.id, { contents: ["PRICE", "PRICE"], step: undefined });
+    const three = await ask(rep, id, manager.id, { contents: ["PRICE", "DESIGN", "OTHER"], step: undefined });
+    const t = (await openTask(id))!;
+    const l = await lead(id);
+    const parts = await partRows(t.id);
+    check(
+        "W4-1: one task carries 1–3 parts (one per kind), duplicates are refused, the step follows the whole set (návrh wins) and the step has no date",
+        codeOf(dup) !== "OK" && codeOf(three) === "OK" && parts.length === 3 && parts.every((p) => p.status === "REQUESTED") &&
+            parts.length === 3 && l.nextActionKind === "SEND_DESIGN" && l.nextActionAt === null && l.nextActionMode === "SCHEDULED",
+        `${codeOf(dup)} ${codeOf(three)} parts=${parts.map((p) => p.kind).join("+")} step=${l.nextActionKind}/${l.nextActionAt}`,
+    );
+
+    // Záložný krok: to, čo obchod mal PRED zamknutím – sem sa vráti, keď nebude čo poslať.
+    const id2 = await makeDeal(rep);
+    await follow(rep, id2, { contact: "NONE", nextKind: "CALL", schedule: { kind: "daysFromToday", days: 3 } });
+    const before = await lead(id2);
+    await ask(rep, id2, manager.id, { contents: ["OTHER"], step: undefined });
+    const t2 = (await openTask(id2))!;
+    const l2 = await lead(id2);
+    check(
+        "W4-1 (R02-3): the deal's step before the lock is stored as the task's fallback; an 'Iné'-only task keeps that step, without a date",
+        t2.fallbackKind === "CALL" && t2.fallbackKind === before.nextActionKind && l2.nextActionKind === "CALL" && l2.nextActionAt === null,
+        `fallback=${t2.fallbackKind} step=${l2.nextActionKind}/${l2.nextActionAt}`,
+    );
+    void tasks;
+};
+
+// W4-2 Michalov postup (§2.1): cena späť → úloha OTVORENÁ, krok zamknutý a stále „Poslať návrh"; rep pošle cenu
+// samu; návrh späť → úloha DONE a krok odomknutý. Oba poradia aj naraz.
+tests.w4Partial = async () => {
+    const { tasks, lead, ask, openTask, send, design, pending, detail, bt, today } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const d = await design(manager, id, "variantA");
+    await ask(rep, id, manager.id, { contents: ["PRICE", "DESIGN"], step: undefined });
+    const t = (await openTask(id))!;
+
+    const onlyPrice = await tasks.resolveTaskPartsAs(manager, {
+        taskId: t.id,
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 1285, note: null } }],
+    });
+    const afterPrice = await lead(id);
+    const statusAfterPrice = await taskRow(t.id);
+    const p1 = await pending(id);
+    check(
+        "W4-2: delivering the price leaves the task OPEN, the step locked and still 'Poslať návrh'; the price waits as prepared",
+        codeOf(onlyPrice) === "OK" && statusAfterPrice.status === "OPEN" && afterPrice.nextActionKind === "SEND_DESIGN" &&
+            afterPrice.nextActionAt === null && p1.length === 1 && p1[0].kind === "PRICE" && Number(afterPrice.price) === 1285,
+        `${codeOf(onlyPrice)} task=${statusAfterPrice.status} step=${afterPrice.nextActionKind}/${afterPrice.nextActionAt} pending=${p1.map((i) => i.kind).join(",")}`,
+    );
+
+    // Klient povedal „cenu pošli teraz, na návrhu rob ďalej" – rep prejde zamknutým krokom a cenu pošle (§2.1 bod 5).
+    const sentPrice = await send(rep, id, { contents: ["PRICE"], fulfils: [{ taskId: t.id, kind: "PRICE" }] });
+    const afterSend = await lead(id);
+    const stillOpen = await taskRow(t.id);
+    check(
+        "W4-2: the ready price can be sent while the task runs – no overlap question, the task stays OPEN, the step stays locked on 'Poslať návrh'",
+        codeOf(sentPrice) === "OK" && stillOpen.status === "OPEN" && afterSend.nextActionKind === "SEND_DESIGN" && afterSend.nextActionAt === null &&
+            (await pending(id)).length === 0,
+        `${codeOf(sentPrice)} task=${stillOpen.status} step=${afterSend.nextActionKind}/${afterSend.nextActionAt}`,
+    );
+
+    const designBack = await tasks.resolveTaskPartsAs(manager, {
+        taskId: t.id,
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        parts: [{ kind: "DESIGN", op: "DELIVER", designs: [{ id: d.id, version: d.currentVersion }] }],
+    });
+    const closed = await taskRow(t.id);
+    const afterDesign = await lead(id);
+    const view = await detail(id, rep);
+    check(
+        "W4-2: the last part closes the task (DONE), the step unlocks to today, the návrh waits to be sent, and the card shows both parts",
+        codeOf(designBack) === "OK" && closed.status === "DONE" && afterDesign.nextActionKind === "SEND_DESIGN" &&
+            afterDesign.nextActionAt !== null && bt.businessDate(afterDesign.nextActionAt) === today &&
+            (await pending(id)).filter((i) => i.kind === "DESIGN").length === 1 &&
+            view?.tasks[0].parts.length === 2 && view.tasks[0].parts.find((p) => p.kind === "PRICE")?.mark === "SENT" &&
+            view.tasks[0].parts.find((p) => p.kind === "DESIGN")?.mark === "PREPARED",
+        `${codeOf(designBack)} task=${closed.status} step=${afterDesign.nextActionKind} marks=${view?.tasks[0].parts.map((p) => `${p.kind}:${p.mark}`).join(",")}`,
+    );
+
+    // Opačné poradie a všetko naraz.
+    const id2 = await makeDeal(rep);
+    const d2 = await design(manager, id2, "variantB");
+    await ask(rep, id2, manager.id, { contents: ["PRICE", "DESIGN"], step: undefined });
+    const t2 = (await openTask(id2))!;
+    await tasks.resolveTaskPartsAs(manager, {
+        taskId: t2.id,
+        expectedRevision: await leadRev(id2),
+        idempotencyKey: key(),
+        parts: [{ kind: "DESIGN", op: "DELIVER", designs: [{ id: d2.id, version: d2.currentVersion }] }],
+    });
+    const midway = await taskRow(t2.id);
+    await tasks.resolveTaskPartsAs(manager, {
+        taskId: t2.id,
+        expectedRevision: await leadRev(id2),
+        idempotencyKey: key(),
+        parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 999, note: null } }],
+    });
+    const end2 = await taskRow(t2.id);
+
+    const id3 = await makeDeal(rep);
+    const d3 = await design(manager, id3, "variantC");
+    await ask(rep, id3, manager.id, { contents: ["PRICE", "DESIGN", "OTHER"], step: undefined });
+    const t3 = (await openTask(id3))!;
+    const allAtOnce = await tasks.resolveTaskPartsAs(manager, {
+        taskId: t3.id,
+        expectedRevision: await leadRev(id3),
+        idempotencyKey: key(),
+        parts: [
+            { kind: "PRICE", op: "DELIVER", price: { amount: 500, note: null } },
+            { kind: "DESIGN", op: "DELIVER", designs: [{ id: d3.id, version: d3.currentVersion }] },
+            { kind: "OTHER", op: "DELIVER", answer: "hosting je v cene" },
+        ],
+    });
+    const end3 = await taskRow(t3.id);
+    const p3 = await pending(id3);
+    check(
+        "W4-2: both orders reach the same end, and all three parts in one save close the task with all three items waiting",
+        midway.status === "OPEN" && end2.status === "DONE" && codeOf(allAtOnce) === "OK" && end3.status === "DONE" && p3.length === 3,
+        `reverse=${midway.status}→${end2.status} atOnce=${codeOf(allAtOnce)}/${end3.status} items=${p3.map((i) => i.kind).join(",")}`,
+    );
+};
+
+// W4-3 (R02-4): vyplnené pole nie je rozhodnutie – odovzdá sa LEN to, čo manažér menoval; hodnoty pre nemenovaný
+// druh sú neplatné.
+tests.w4Selection = async () => {
+    const { tasks, ask, openTask, design, pipeline } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    // Obchod má starú cenu – tú dialóg predvyplní, ale odovzdať sa nesmie bez výslovného zaškrtnutia.
+    await pipeline.saveQuoteAs(manager, id, { price: 700, priceNote: "stará" });
+    const d = await design(manager, id, "variantA");
+    await ask(rep, id, manager.id, { contents: ["PRICE", "DESIGN"], step: undefined });
+    const t = (await openTask(id))!;
+
+    const onlyDesign = await tasks.resolveTaskPartsAs(manager, {
+        taskId: t.id,
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        parts: [{ kind: "DESIGN", op: "DELIVER", designs: [{ id: d.id, version: d.currentVersion }] }],
+    });
+    const after = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { price: true, priceNote: true } });
+    const status = await partStatus(t.id);
+    const pricePart = (await partRows(t.id)).find((p) => p.kind === "PRICE");
+
+    const crossValues = await tasks.resolveTaskPartsAs(manager, {
+        taskId: t.id,
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 10, note: null }, answer: "navyše" }],
+    });
+    check(
+        "W4-3 (R02-4): delivering only the návrh leaves PRICE requested, writes no price result and does not touch the deal's price; values for a kind that was not named are refused",
+        codeOf(onlyDesign) === "OK" && status.PRICE === "REQUESTED" && status.DESIGN === "DELIVERED" && pricePart?.result === null &&
+            Number(after.price) === 700 && after.priceNote === "stará" && codeOf(crossValues) === "ERR:FORBIDDEN",
+        `${codeOf(onlyDesign)} ${JSON.stringify(status)} price=${after.price} cross=${codeOf(crossValues)}`,
+    );
+};
+
+// W4-4 (§2.6, P6): zamknutý krok presne nasleduje nevybavenú prácu – pri každej udalosti bez dátumu a v režime
+// SCHEDULED. B1: obchod BEZ úlohy sa nesmie dotknúť. B3: uzavretie úlohy nemení režim.
+tests.w4StepLocked = async () => {
+    const { tasks, lead, ask, openTask, send, follow, design, offers } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const d = await design(manager, id, "variantA");
+    await ask(rep, id, manager.id, { contents: ["PRICE", "DESIGN"], step: undefined });
+    const t = (await openTask(id))!;
+    const locked: string[] = [];
+    const snap = async (label: string) => {
+        const l = await lead(id);
+        locked.push(`${label}=${l.nextActionKind}/${l.nextActionAt === null ? "null" : "date"}/${l.nextActionMode}`);
+        return l;
+    };
+    await snap("ask");
+    await tasks.resolveTaskPartsAs(manager, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 1285, note: null } }] });
+    await snap("priceDelivered");
+    const sent = await send(rep, id, { contents: ["PRICE"], fulfils: [{ taskId: t.id, kind: "PRICE" }] });
+    await snap("priceSent");
+    // R02-5: kým je úloha otvorená, oprava odoslania krok ZNOVA odvodí – rep ho opraviť nemôže, tak to musí appka.
+    const offerId = (await prisma.activity.findFirstOrThrow({ where: { leadId: id, type: "OFFER_SENT", revertedAt: null } })).id;
+    const corrected = await offers.correctRecordAs(rep, offerId, "zlá suma v maili");
+    const afterCorrection = await snap("correction");
+    await tasks.resolveTaskPartsAs(manager, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), parts: [{ kind: "DESIGN", op: "DELIVER", designs: [{ id: d.id, version: d.currentVersion }] }] });
+    const closed = await snap("closed");
+    const allLocked = locked.slice(0, 4).every((s) => s.includes("/null/SCHEDULED"));
+    check(
+        "W4-4 (P6 / R02-5): the locked step follows outstanding through deliver / send / correction – always without a date and SCHEDULED; a correction while locked re-derives it; closing keeps the mode",
+        codeOf(sent) === "OK" && codeOf(corrected) === "OK" && allLocked && afterCorrection.nextActionKind === "SEND_DESIGN" &&
+            closed.nextActionMode === "SCHEDULED" && closed.nextActionAt !== null,
+        locked.join(" · "),
+    );
+
+    // B1: SMS s cenou na obchode BEZ úlohy („keepStep") sa kroku nesmie dotknúť – ani druhu, ani dátumu, ani režimu.
+    const id2 = await makeDeal(rep);
+    await follow(rep, id2, { contact: "NONE", nextKind: "CALL", schedule: { kind: "daysFromToday", days: 4 } });
+    const beforeSms = await lead(id2);
+    const sms = await follow(rep, id2, { contact: "SMS", keepStep: true, phonePrice: { amount: 500 }, note: "cena 500" });
+    const afterSms = await lead(id2);
+    check(
+        "W4-4 (B1): an SMS with a price on a deal with NO task keeps the step, its date and its mode untouched",
+        codeOf(sms) === "OK" && afterSms.nextActionKind === beforeSms.nextActionKind &&
+            afterSms.nextActionAt?.getTime() === beforeSms.nextActionAt?.getTime() && afterSms.nextActionMode === beforeSms.nextActionMode,
+        `${codeOf(sms)} ${beforeSms.nextActionKind}/${beforeSms.nextActionAt?.toISOString()} → ${afterSms.nextActionKind}/${afterSms.nextActionAt?.toISOString()}`,
+    );
+};
+
+// W4-5 (R02-3): keď už niet čo poslať, zamknutý krok padá na ZÁLOŽNÝ – a vlastná voľba používateľa sa vráti.
+tests.w4Fallback = async () => {
+    const { tasks, lead, ask, openTask, follow, send, bt, today } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    await follow(rep, id, { contact: "NONE", nextKind: "CALL", schedule: { kind: "daysFromToday", days: 5 } });
+    await ask(rep, id, manager.id, { contents: ["OTHER"], step: undefined });
+    const t = (await openTask(id))!;
+    const onlyOther = await lead(id);
+
+    // „Iné" nie je systémový krok a CALL tiež nie – P6 ho napriek tomu smie dočasne vytlačiť (§2.6).
+    const added = await tasks.addTaskPartsAs(rep, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["PRICE"], message: "klient volal, chce aj cenu" });
+    const withPrice = await lead(id);
+    const back = await tasks.withdrawTaskPartsAs(rep, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["PRICE"], reason: "cenu si zistím sám" });
+    const restored = await lead(id);
+    check(
+        "W4-5 (R02-3): an 'Iné'-only task keeps the deliberate call; adding PRICE moves the locked step to 'Poslať cenu' although CALL is not a system step; withdrawing it restores the call",
+        onlyOther.nextActionKind === "CALL" && codeOf(added) === "OK" && withPrice.nextActionKind === "SEND_QUOTE" && withPrice.nextActionAt === null &&
+            codeOf(back) === "OK" && restored.nextActionKind === "CALL" && restored.nextActionAt === null,
+        `${onlyOther.nextActionKind} → ${codeOf(added)}/${withPrice.nextActionKind} → ${codeOf(back)}/${restored.nextActionKind}`,
+    );
+
+    // PRICE + OTHER: cena odíde, ostane len „Iné" → krok sa už nesmie tváriť, že treba niečo poslať.
+    const id2 = await makeDeal(rep);
+    await follow(rep, id2, { contact: "NONE", nextKind: "CALL", schedule: { kind: "daysFromToday", days: 5 } });
+    await ask(rep, id2, manager.id, { contents: ["PRICE", "OTHER"], step: undefined });
+    const t2 = (await openTask(id2))!;
+    await tasks.resolveTaskPartsAs(manager, { taskId: t2.id, expectedRevision: await leadRev(id2), idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 300, note: null } }] });
+    await send(rep, id2, { contents: ["PRICE"], fulfils: [{ taskId: t2.id, kind: "PRICE" }] });
+    const afterSend = await lead(id2);
+    const answered = await tasks.resolveTaskPartsAs(manager, { taskId: t2.id, expectedRevision: await leadRev(id2), idempotencyKey: key(), parts: [{ kind: "OTHER", op: "DELIVER", answer: "áno, ide to" }] });
+    const afterClose = await lead(id2);
+    check(
+        "W4-5 (R02-3): once the sendable part is gone the locked step becomes the fallback instead of lying about 'Poslať cenu'; closing the task makes it due today",
+        afterSend.nextActionKind === "CALL" && afterSend.nextActionAt === null && codeOf(answered) === "OK" &&
+            afterClose.nextActionKind === "CALL" && afterClose.nextActionAt !== null && bt.businessDate(afterClose.nextActionAt) === today,
+        `afterSend=${afterSend.nextActionKind}/${afterSend.nextActionAt} afterClose=${afterClose.nextActionKind}/${afterClose.nextActionAt}`,
+    );
+};
+
+// W4-6 (R02-1): každý koniec úlohy. Stav aj riadok na úrovni úlohy určuje VÝSLEDNÝ stav, nie názov akcie –
+// zamietnutie po dodávke je „Vybavené", nie „Zamietnuté".
+tests.w4Terminal = async () => {
+    const { tasks, ask, openTask, pipeline } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const start = async (contents: ("PRICE" | "DESIGN" | "OTHER")[]) => {
+        const id = await makeDeal(rep);
+        await ask(rep, id, manager.id, { contents, step: undefined });
+        return { id, t: (await openTask(id))! };
+    };
+    const deliverPrice = (amount = 100) => ({ kind: "PRICE" as const, op: "DELIVER" as const, price: { amount, note: null } });
+    const resolve = async (id: string, taskId: string, parts: Parameters<typeof tasks.resolveTaskPartsAs>[1]["parts"]) =>
+        tasks.resolveTaskPartsAs(manager, { taskId, expectedRevision: await leadRev(id), idempotencyKey: key(), parts });
+
+    // 1. dodať všetko  2. dodať a zvyšok zamietnuť v jednom príkaze
+    const a = await start(["PRICE"]);
+    await resolve(a.id, a.t.id, [deliverPrice()]);
+    const b = await start(["PRICE", "OTHER"]);
+    await resolve(b.id, b.t.id, [deliverPrice(), { kind: "OTHER", op: "DECLINE", reason: "to nevie nikto" }]);
+    // 3. zamietnuť všetko, nič sa nedodalo  4. zamietnuť zvyšok PO dodávke (kľúčový riadok tabuľky)
+    const c = await start(["PRICE", "OTHER"]);
+    await resolve(c.id, c.t.id, [
+        { kind: "PRICE", op: "DECLINE", reason: "nemám podklady" },
+        { kind: "OTHER", op: "DECLINE", reason: "to nevie nikto" },
+    ]);
+    const d = await start(["PRICE", "OTHER"]);
+    await resolve(d.id, d.t.id, [deliverPrice()]);
+    await resolve(d.id, d.t.id, [{ kind: "OTHER", op: "DECLINE", reason: "to nevie nikto" }]);
+    // 5. stiahnuť poslednú časť bez dodávky  6. stiahnuť poslednú PO dodávke
+    const e = await start(["PRICE"]);
+    await tasks.withdrawTaskPartsAs(rep, { taskId: e.t.id, expectedRevision: await leadRev(e.id), idempotencyKey: key(), kinds: ["PRICE"], reason: "netreba" });
+    const f = await start(["PRICE", "OTHER"]);
+    await resolve(f.id, f.t.id, [deliverPrice()]);
+    await tasks.withdrawTaskPartsAs(rep, { taskId: f.t.id, expectedRevision: await leadRev(f.id), idempotencyKey: key(), kinds: ["OTHER"], reason: "netreba" });
+    // 7. uzavretie obchodu bez dodávky  8. uzavretie obchodu PO dodávke
+    const g = await start(["PRICE"]);
+    await pipeline.markLostAs(manager, g.id, { reason: "test", expectedRevision: await leadRev(g.id), idempotencyKey: key(), cancelTask: { taskId: g.t.id, reason: null } });
+    const h = await start(["PRICE", "OTHER"]);
+    await resolve(h.id, h.t.id, [deliverPrice()]);
+    await pipeline.markLostAs(manager, h.id, { reason: "test", expectedRevision: await leadRev(h.id), idempotencyKey: key(), cancelTask: { taskId: h.t.id, reason: null } });
+
+    const states = await Promise.all([a, b, c, d, e, f, g, h].map((x) => taskRow(x.t.id)));
+    const wantStatus = ["DONE", "DONE", "DECLINED", "DONE", "CANCELLED", "DONE", "CANCELLED", "DONE"];
+    const taskRows = await Promise.all(
+        [a, b, c, d, e, f, g, h].map(async (x) => (await rowsOf(x.id, ["TASK_DONE", "TASK_DECLINED", "TASK_CANCELLED"])).map((r) => r.type).join("+")),
+    );
+    const wantRows = ["TASK_DONE", "TASK_DONE", "TASK_DECLINED", "TASK_DONE", "TASK_CANCELLED", "TASK_DONE", "TASK_CANCELLED", "TASK_DONE"];
+    // Hlavný keyed riadok príkazu, ktorý zvyšok zamietol PO dodávke, je TASK_PART_DECLINED – ale úloha je DONE.
+    const dPartRows = (await rowsOf(d.id, ["TASK_PART_DONE", "TASK_PART_DECLINED"])).map((r) => `${r.type}:${r.idempotencyKey ? "keyed" : "plain"}`);
+    check(
+        "W4-6 (R02-1): every ending follows the RESULTING status – decline / withdraw / deal close after a delivery all end as DONE with a TASK_DONE row, never TASK_CANCELLED",
+        states.map((s) => s.status).join(",") === wantStatus.join(",") && taskRows.join(",") === wantRows.join(",") &&
+            dPartRows.join(",") === "TASK_PART_DONE:keyed,TASK_PART_DECLINED:keyed",
+        `status=${states.map((s) => s.status).join(",")} rows=${taskRows.join(",")} d=${dPartRows.join(",")}`,
+    );
+
+    // Dodaná položka prežije každý koniec (§2.10) – aj uzavretie obchodu ju len „neposiela", nikdy nezmaže.
+    const deliveredStates = await Promise.all([d, f, h].map(async (x) => (await partStatus(x.t.id)).PRICE));
+    check(
+        "W4-6: a delivered part survives a declined rest, a withdrawn rest and a closed deal",
+        deliveredStates.every((s) => s === "DELIVERED"),
+        deliveredStates.join(","),
+    );
+};
+
+// W4-7 (R02-2): osud každej VRÁTENEJ POLOŽKY je vlastný. Vedome neposlaný návrh sa nikdy nesmie tváriť ako
+// „klient ho dostal".
+tests.w4Items = async () => {
+    const { tasks, ask, openTask, send, design, detail } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const dA = await design(manager, id, "variantA");
+    const dB = await design(manager, id, "variantB");
+    await ask(rep, id, manager.id, { contents: ["DESIGN"], step: undefined });
+    const t = (await openTask(id))!;
+    await tasks.resolveTaskPartsAs(manager, {
+        taskId: t.id,
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        parts: [{ kind: "DESIGN", op: "DELIVER", designs: [{ id: dA.id, version: dA.currentVersion }, { id: dB.id, version: dB.currentVersion }] }],
+    });
+    const bothWaiting = (await detail(id, rep))!.tasks[0].parts[0];
+
+    await send(rep, id, { contents: ["DESIGN"], designIds: [dA.id], fulfils: [{ taskId: t.id, kind: "DESIGN", designId: dA.id }] });
+    const oneSent = (await detail(id, rep))!.tasks[0].parts[0];
+
+    await tasks.dismissResultsAs(rep, {
+        leadId: id,
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        taskId: t.id,
+        items: [{ kind: "DESIGN", designId: dB.id }],
+        reason: "klient chce len A",
+    });
+    const oneDismissed = (await detail(id, rep))!.tasks[0].parts[0];
+    const dispositions = oneDismissed.items.map((i) => i.disposition.state).sort().join(",");
+    const dismissed = oneDismissed.items.find((i) => i.disposition.state === "DISMISSED")?.disposition;
+    check(
+        "W4-7 (R02-2): a DESIGN part returning two návrhy tracks each item on its own – waiting, sent (with its date) and deliberately not sent (with who and why); the part never reads as fully received",
+        bothWaiting.mark === "PREPARED" && bothWaiting.items.length === 2 &&
+            oneSent.mark === "PARTLY_SENT" && oneSent.sentCount === 1 && oneSent.waitingCount === 1 &&
+            oneDismissed.mark === "PARTLY_SENT" && oneDismissed.dismissedCount === 1 && oneDismissed.waitingCount === 0 &&
+            dispositions === "DISMISSED,SENT" && dismissed?.state === "DISMISSED" && dismissed.reason === "klient chce len A" &&
+            oneSent.items.some((i) => i.disposition.state === "SENT" && typeof i.disposition.at === "string"),
+        `both=${bothWaiting.mark} sent=${oneSent.mark}/${oneSent.sentCount} end=${oneDismissed.mark}/${oneDismissed.dismissedCount} ${dispositions}`,
+    );
+
+    // Zamietnutá ČASŤ vracia vlastné potvrdenie – dve zamietnuté časti sú dve potvrdenia, nie jedno (§2.4).
+    const id2 = await makeDeal(rep);
+    await ask(rep, id2, manager.id, { contents: ["PRICE", "OTHER"], step: undefined });
+    const t2 = (await openTask(id2))!;
+    await tasks.resolveTaskPartsAs(manager, {
+        taskId: t2.id,
+        expectedRevision: await leadRev(id2),
+        idempotencyKey: key(),
+        parts: [
+            { kind: "PRICE", op: "DECLINE", reason: "nemám podklady" },
+            { kind: "OTHER", op: "DECLINE", reason: "to nevie nikto" },
+        ],
+    });
+    const { loadPending } = await import("../../lib/domain/taskMutations");
+    const declined = await loadPending(prisma, id2);
+    const one = await tasks.dismissResultsAs(rep, {
+        leadId: id2,
+        expectedRevision: await leadRev(id2),
+        idempotencyKey: key(),
+        taskId: t2.id,
+        items: [{ kind: "DECLINED", part: "PRICE" }],
+        reason: null,
+    });
+    const left = await loadPending(prisma, id2);
+    check(
+        "W4-7: two declined parts are two separate acknowledgements; dismissing one leaves the other",
+        declined.length === 2 && declined.every((i) => i.kind === "DECLINED") && new Set(declined.map((i) => i.part)).size === 2 &&
+            codeOf(one) === "OK" && left.length === 1 && left[0].part === "OTHER",
+        `declined=${declined.map((i) => i.part).join(",")} ${codeOf(one)} left=${left.map((i) => i.part).join(",")}`,
+    );
+};
+
+// W4-8: stiahnutie a pridanie častí – kto smie, čo sa smie a čo sa už nikdy nepýta znova.
+tests.w4WithdrawAdd = async () => {
+    const { tasks, lead, ask, openTask, design, bt, today } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const rep2 = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const d = await design(manager, id, "variantA");
+    await ask(rep, id, manager.id, { contents: ["PRICE", "DESIGN"], step: undefined });
+    const t = (await openTask(id))!;
+
+    const byManager = await tasks.withdrawTaskPartsAs(manager, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["PRICE"], reason: "x" });
+    const byStranger = await tasks.withdrawTaskPartsAs(rep2, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["PRICE"], reason: "x" });
+    const noReason = await tasks.withdrawTaskPartsAs(rep, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["PRICE"], reason: " " });
+    const stepTooEarly = await tasks.withdrawTaskPartsAs(rep, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["PRICE"], reason: "netreba", step: { kind: "CALL", note: null } });
+    const ok = await tasks.withdrawTaskPartsAs(rep, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["PRICE"], reason: "cenu si zistím sám" });
+    const afterWithdraw = await taskRow(t.id);
+    const statuses = await partStatus(t.id);
+    check(
+        "W4-8: only the owner withdraws a part, a reason is required, a new step is refused while the task stays open; the rest of the task runs on",
+        codeOf(byManager) === "ERR:FORBIDDEN" && codeOf(byStranger) !== "OK" && codeOf(noReason) !== "OK" && codeOf(stepTooEarly) === "ERR:FORBIDDEN" &&
+            codeOf(ok) === "OK" && afterWithdraw.status === "OPEN" && statuses.PRICE === "WITHDRAWN" && statuses.DESIGN === "REQUESTED",
+        `${codeOf(byManager)} ${codeOf(byStranger)} ${codeOf(noReason)} ${codeOf(stepTooEarly)} ${codeOf(ok)} ${JSON.stringify(statuses)}`,
+    );
+
+    // Stiahnutý druh sa smie vyžiadať znova; dodaný ani zamietnutý nikdy (§2.4).
+    const readd = await tasks.addTaskPartsAs(rep, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["PRICE"], message: "predsa len ju treba" });
+    const afterReadd = await partRows(t.id);
+    const priceAgain = afterReadd.find((p) => p.kind === "PRICE");
+    const duplicate = await tasks.addTaskPartsAs(rep, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["DESIGN"], message: "znova" });
+    const noMessage = await tasks.addTaskPartsAs(rep, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["OTHER"], message: " " });
+    const byManagerAdd = await tasks.addTaskPartsAs(manager, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["OTHER"], message: "pridávam" });
+    check(
+        "W4-8: a withdrawn kind returns to REQUESTED with a clean record; a kind already in play, an empty message and a non-owner are refused",
+        codeOf(readd) === "OK" && priceAgain?.status === "REQUESTED" && priceAgain.resolvedAt === null && priceAgain.reason === null &&
+            codeOf(duplicate) === "ERR:STALE" && codeOf(noMessage) !== "OK" && codeOf(byManagerAdd) === "ERR:FORBIDDEN",
+        `${codeOf(readd)} price=${priceAgain?.status}/${priceAgain?.reason} ${codeOf(duplicate)} ${codeOf(noMessage)} ${codeOf(byManagerAdd)}`,
+    );
+
+    // Dodaná časť sa nestiahne – na to je „Neposielam" (§2.10).
+    await tasks.resolveTaskPartsAs(manager, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), parts: [{ kind: "DESIGN", op: "DELIVER", designs: [{ id: d.id, version: d.currentVersion }] }] });
+    const deliveredWithdraw = await tasks.withdrawTaskPartsAs(rep, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["DESIGN"], reason: "netreba" });
+    const addDelivered = await tasks.addTaskPartsAs(rep, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), kinds: ["DESIGN"], message: "ešte raz" });
+    // Zvolený krok pri zatváraní sa prijme LEN vtedy, keď klientovi nič nedlhujeme – tu čaká dodaný návrh.
+    const planWhileOwed = await tasks.withdrawTaskPartsAs(rep, {
+        taskId: t.id,
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        kinds: ["PRICE"],
+        reason: "netreba",
+        step: { kind: "CALL", note: "ozvem sa" },
+    });
+    check(
+        "W4-8: a delivered part can be neither withdrawn nor re-added, and a chosen step is refused while a delivered návrh is still waiting to be sent (I10)",
+        codeOf(deliveredWithdraw) === "ERR:STALE" && codeOf(addDelivered) === "ERR:STALE" && codeOf(planWhileOwed) === "ERR:STALE" &&
+            (await taskRow(t.id)).status === "OPEN",
+        `${codeOf(deliveredWithdraw)} ${codeOf(addDelivered)} ${codeOf(planWhileOwed)}`,
+    );
+
+    // „Zrušiť + zmeniť" na čistom obchode: posledná časť sa stiahne a rep si v tom istom uložení zvolí krok.
+    const id2 = await makeDeal(rep);
+    await ask(rep, id2, manager.id, { contents: ["PRICE"], step: undefined });
+    const t2 = (await openTask(id2))!;
+    const closeAndPlan = await tasks.withdrawTaskPartsAs(rep, {
+        taskId: t2.id,
+        expectedRevision: await leadRev(id2),
+        idempotencyKey: key(),
+        kinds: ["PRICE"],
+        reason: "netreba",
+        step: { kind: "CALL", note: "ozvem sa" },
+    });
+    const afterPlan = await lead(id2);
+    check(
+        "W4-8: withdrawing the LAST open part with a chosen step closes the task (CANCELLED) and plans that step today",
+        codeOf(closeAndPlan) === "OK" && (await taskRow(t2.id)).status === "CANCELLED" && afterPlan.nextActionKind === "CALL" &&
+            afterPlan.nextActionNote === "ozvem sa" && afterPlan.nextActionAt !== null && bt.businessDate(afterPlan.nextActionAt) === today,
+        `${codeOf(closeAndPlan)} step=${afterPlan.nextActionKind}/${afterPlan.nextActionNote}`,
+    );
+};
+
+// W4-9 (§2.8): odoslanie počas otvorenej úlohy. Otázka padne LEN na to, čo sa ešte robí – a „už to netreba"
+// stiahne presne tie časti, nie celú úlohu.
+tests.w4SendWhileOpen = async () => {
+    const { tasks, lead, ask, openTask, send, design } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const d = await design(manager, id, "variantA");
+    await ask(rep, id, manager.id, { contents: ["PRICE", "DESIGN"], step: undefined });
+    const t = (await openTask(id))!;
+
+    const noChoice = await send(rep, id, { contents: ["PRICE"], price: { amount: 1, note: null } });
+    const unrelated = await send(rep, id, { contents: ["ABOUT_US"] });
+    const keepOpen = await send(rep, id, { contents: ["PRICE"], price: { amount: 1, note: null }, overlap: "KEEP_OPEN" });
+    const afterKeep = await taskRow(t.id);
+    check(
+        "W4-9: sending a content whose part is still being made needs a choice; unrelated contents need none; KEEP_OPEN records the send and keeps every part",
+        codeOf(noChoice) === "ERR:TASK_OVERLAP" && codeOf(unrelated) === "OK" && codeOf(keepOpen) === "OK" && afterKeep.status === "OPEN" &&
+            Object.values(await partStatus(t.id)).every((s) => s === "REQUESTED"),
+        `${codeOf(noChoice)} ${codeOf(unrelated)} ${codeOf(keepOpen)} ${JSON.stringify(await partStatus(t.id))}`,
+    );
+
+    // „Už to netreba" pri prekryve stiahne LEN cenu – návrh sa robí ďalej a krok ostáva zamknutý.
+    const withdrawPrice = await send(rep, id, {
+        contents: ["PRICE"],
+        price: { amount: 2, note: null },
+        overlap: "WITHDRAW_PARTS",
+        withdrawParts: { taskId: t.id, kinds: ["PRICE"], reason: "cenu som zistil sám" },
+    });
+    const afterWithdraw = await taskRow(t.id);
+    const l = await lead(id);
+    check(
+        "W4-9: WITHDRAW_PARTS takes back exactly the overlapping part; the task stays OPEN for the rest and the step stays locked on 'Poslať návrh'",
+        codeOf(withdrawPrice) === "OK" && afterWithdraw.status === "OPEN" && (await partStatus(t.id)).PRICE === "WITHDRAWN" &&
+            l.nextActionKind === "SEND_DESIGN" && l.nextActionAt === null,
+        `${codeOf(withdrawPrice)} task=${afterWithdraw.status} ${JSON.stringify(await partStatus(t.id))} step=${l.nextActionKind}/${l.nextActionAt}`,
+    );
+
+    // Posledná robiaca sa časť stiahnutá odoslaním → úloha sa zavrie a krok sa odomkne.
+    const closing = await send(rep, id, {
+        contents: ["DESIGN"],
+        designIds: [d.id],
+        overlap: "WITHDRAW_PARTS",
+        withdrawParts: { taskId: t.id, kinds: ["DESIGN"], reason: "návrh netreba" },
+        followUp: true,
+    });
+    const closed = await taskRow(t.id);
+    const after = await lead(id);
+    check(
+        "W4-9: withdrawing the last part in a send closes the task and unlocks the step (the follow-up call is planned)",
+        codeOf(closing) === "OK" && closed.status === "CANCELLED" && after.nextActionKind === "CALL" && after.nextActionAt !== null,
+        `${codeOf(closing)} task=${closed.status} step=${after.nextActionKind}`,
+    );
+
+    // Počas otvorenej úlohy sa hovor „či prišlo" nikdy neplánuje (krok je zamknutý).
+    const id2 = await makeDeal(rep);
+    await ask(rep, id2, manager.id, { contents: ["PRICE", "OTHER"], step: undefined });
+    const t2 = (await openTask(id2))!;
+    await tasks.resolveTaskPartsAs(manager, { taskId: t2.id, expectedRevision: await leadRev(id2), idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 5, note: null } }] });
+    const sendWithCall = await send(rep, id2, { contents: ["PRICE"], fulfils: [{ taskId: t2.id, kind: "PRICE" }], followUp: true });
+    const l2 = await lead(id2);
+    check(
+        "W4-9: no follow-up call is planned while the task is open – the step stays locked (the neutral CALL fallback, never 'Zavolať, či cena prišla')",
+        codeOf(sendWithCall) === "OK" && l2.nextActionNote !== "Zavolať, či cena prišla" && l2.nextActionAt === null && (await taskRow(t2.id)).status === "OPEN",
+        `${codeOf(sendWithCall)} step=${l2.nextActionKind}/${l2.nextActionAt}`,
+    );
+};
+
+// W4-10 (R02-6 / §7 P1): „Zavolať, či prišlo" sa smie naplánovať LEN vtedy, keď klientovi po odoslaní už nič
+// nedlhujeme – nie vtedy, keď len nezostala žiadna položka úlohy.
+tests.w4FollowUpGate = async () => {
+    const { tasks, lead, ask, openTask, send, offers } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const { logCallAs } = await import("../../lib/commands/calls");
+
+    const withAsks = async () => {
+        const id = await makeAssignedLead(rep.id);
+        const r = await logCallAs(rep, {
+            leadId: id,
+            outcome: "INTERESTED",
+            asked: ["INFO", "PRICELIST", "PRICE"],
+            expectedRevision: await leadRev(id),
+            idempotencyKey: key(),
+        });
+        if ("error" in r) throw new Error(`call failed: ${r.error}`);
+        return id;
+    };
+
+    const id = await withAsks();
+    await ask(rep, id, manager.id, { contents: ["PRICE"], step: undefined });
+    const t = (await openTask(id))!;
+    const sentBySelf = await tasks.finishAndSendAs(manager, {
+        taskId: t.id,
+        expectedRevision: await leadRev(id),
+        idempotencyKey: key(),
+        parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 1285, note: null } }],
+        sentOn: (await w3()).today,
+    });
+    const afterOwed = await lead(id);
+    const calls = await prisma.activity.count({ where: { leadId: id, type: "NEXT_ACTION_CHANGED", note: { contains: "Zavolať" } } });
+    check(
+        "W4-10 (P1): 'Poslal som to sám' closes the task but plans NO 'Zavolať, či prišlo' while the client is still owed info + cenník – the step becomes the remaining send",
+        codeOf(sentBySelf) === "OK" && (await taskRow(t.id)).status === "DONE" && afterOwed.nextActionKind === "SEND_EMAIL" && calls === 0,
+        `${codeOf(sentBySelf)} step=${afterOwed.nextActionKind} callRows=${calls}`,
+    );
+
+    // To isté odoslanie vrátane info + cenníka hovor NAPLÁNUJE.
+    const id2 = await withAsks();
+    await ask(rep, id2, manager.id, { contents: ["PRICE"], step: undefined });
+    const t2 = (await openTask(id2))!;
+    const all = await tasks.finishAndSendAs(manager, {
+        taskId: t2.id,
+        expectedRevision: await leadRev(id2),
+        idempotencyKey: key(),
+        parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 1285, note: null } }],
+        extraContents: ["ABOUT_US", "PRICELIST"],
+        sentOn: (await w3()).today,
+    });
+    const afterAll = await lead(id2);
+
+    // Ručne poskladané followUp: true s nevybavenou prácou server odmietne (dialóg ho v takom stave neponúka).
+    const id3 = await withAsks();
+    const crafted = await send(rep, id3, { contents: ["PRICE"], price: { amount: 10, note: null }, followUp: true });
+    const l3 = await lead(id3);
+    check(
+        "W4-10 (P1): the same send including info + cenník DOES plan the call; a hand-crafted followUp with outstanding work is refused server-side and nothing is written",
+        codeOf(all) === "OK" && afterAll.nextActionKind === "CALL" && codeOf(crafted) === "ERR:FORBIDDEN" &&
+            (await prisma.activity.count({ where: { leadId: id3, type: "OFFER_SENT" } })) === 0 && l3.nextActionKind !== "CALL",
+        `${codeOf(all)} step=${afterAll.nextActionKind} | ${codeOf(crafted)} step3=${l3.nextActionKind}`,
+    );
+    void offers;
+};
+
+// W4-11: dodaná časť prežije každý osud obchodu – zamietnutie zvyšku, prevzatie, zmenu vlastníka, odobratie
+// vlastníka aj hromadný presun (§2.10).
+tests.w4Survives = async () => {
+    const { tasks, ask, openTask, pending, pipeline } = await w3();
+    const manager = await makeUser("MANAGER");
+    const manager2 = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const rep2 = await makeUser("SALES_REP");
+    const start = async () => {
+        const id = await makeDeal(rep);
+        await ask(rep, id, manager.id, { contents: ["PRICE", "OTHER"], step: undefined });
+        const t = (await openTask(id))!;
+        await tasks.resolveTaskPartsAs(manager, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 777, note: null } }] });
+        return { id, t };
+    };
+
+    const a = await start();
+    await tasks.resolveTaskPartsAs(manager, { taskId: a.t.id, expectedRevision: await leadRev(a.id), idempotencyKey: key(), parts: [{ kind: "OTHER", op: "DECLINE", reason: "netuším" }] });
+    const b = await start();
+    await tasks.takeoverAs(manager2, { leadId: b.id, expectedRevision: await leadRev(b.id), idempotencyKey: key(), step: { kind: "SEND_QUOTE", schedule: { kind: "daysFromToday", days: 1 } } });
+    const c = await start();
+    await pipeline.changeOwnerAs(manager, c.id, { ownerId: rep2.id, expectedRevision: await leadRev(c.id), idempotencyKey: key() });
+    const d = await start();
+    await pipeline.changeOwnerAs(manager, d.id, { ownerId: null, expectedRevision: await leadRev(d.id), idempotencyKey: key() });
+
+    const kept = await Promise.all([a, b, c, d].map(async (x) => (await pending(x.id)).filter((i) => i.kind === "PRICE").length));
+    const closed = await Promise.all([a, b, c, d].map(async (x) => (await taskRow(x.t.id)).status));
+    check(
+        "W4-11: a delivered price keeps waiting through a declined rest, a takeover, an owner change and a deal moved to nobody; every ending that does close the task is DONE, never CANCELLED",
+        // Nový vlastník obchodník úlohu NERUŠÍ (wave 3 §6.10) – tá beží ďalej u toho istého manažéra.
+        kept.every((n) => n === 1) && closed.join(",") === "DONE,DONE,OPEN,DONE",
+        `kept=${kept.join(",")} status=${closed.join(",")}`,
+    );
+};
+
+// W4A-R01 (review partA-R01 k wave 4 časti A, 2026-09-21): každý test tu musí PADNÚŤ na kóde pred opravou – preto sa vždy
+// vyberie prechod, pri ktorom sa DRUH kroku viditeľne zmení (nie ten istý pred aj po).
+tests.w4ReviewR01 = async () => {
+    const { tasks, lead, ask, openTask, send, follow, offers, pipeline, detail, work, bt, today } = await w3();
+    const w = await w5();
+    const manager = await makeUser("MANAGER");
+    const manager2 = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const st = (l: { nextActionKind: string | null; nextActionAt: Date | null; nextActionMode: string }) =>
+        `${l.nextActionKind}/${l.nextActionAt === null ? "null" : "date"}/${l.nextActionMode}`;
+    const callStep = { contact: "NONE" as const, nextKind: "CALL" as const, schedule: { kind: "daysFromToday" as const, days: 4 } };
+    const deliverPrice = async (taskId: string, leadId: string) =>
+        tasks.resolveTaskPartsAs(manager, { taskId, expectedRevision: await leadRev(leadId), idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 1285, note: null } }] });
+
+    // 1. Oprava odoslania pri otvorenej úlohe: PRICE + OTHER, záložný krok CALL → odoslaná cena vráti CALL → oprava SEND_QUOTE.
+    const id1 = await makeDeal(rep);
+    await follow(rep, id1, callStep);
+    await ask(rep, id1, manager.id, { contents: ["PRICE", "OTHER"], step: undefined });
+    const t1 = (await openTask(id1))!;
+    await deliverPrice(t1.id, id1);
+    const sent1 = await send(rep, id1, { contents: ["PRICE"], fulfils: [{ taskId: t1.id, kind: "PRICE" }] });
+    const afterSend1 = await lead(id1);
+    const offerId = (await prisma.activity.findFirstOrThrow({ where: { leadId: id1, type: "OFFER_SENT", revertedAt: null } })).id;
+    const rev1 = await leadRev(id1);
+    const planRowsBefore = await prisma.activity.count({ where: { leadId: id1, type: { in: ["NEXT_ACTION_CHANGED", "NEXT_ACTION_SET"] }, note: { contains: "čaká na úlohu" } } });
+    const corrected =await offers.correctRecordAs(rep, offerId, "zlá suma v maili");
+    const afterCorr1 = await lead(id1);
+    const planRows = (await prisma.activity.count({ where: { leadId: id1, type: { in: ["NEXT_ACTION_CHANGED", "NEXT_ACTION_SET"] }, note: { contains: "čaká na úlohu" } } })) - planRowsBefore;
+    // Rovnaká oprava na ODOMKNUTOM obchode krok používateľa nepreplánuje.
+    const id1b = await makeDeal(rep);
+    await follow(rep, id1b, callStep);
+    await send(rep, id1b, { contents: ["PRICE"], price: { amount: 500, note: null } });
+    const beforeFree = await lead(id1b);
+    const offerB = (await prisma.activity.findFirstOrThrow({ where: { leadId: id1b, type: "OFFER_SENT", revertedAt: null } })).id;
+    const correctedFree = await offers.correctRecordAs(rep, offerB, "zlá suma v maili");
+    const afterFree = await lead(id1b);
+    check(
+        "W4A-R01-1: crossing out a send while the task is open flips the locked step CALL → SEND_QUOTE (no date, SCHEDULED, one revision, one planning row); on an unlocked deal the same correction leaves the user's step alone",
+        codeOf(sent1) === "OK" && st(afterSend1) === "CALL/null/SCHEDULED" && codeOf(corrected) === "OK" && st(afterCorr1) === "SEND_QUOTE/null/SCHEDULED" &&
+            (await leadRev(id1)) === rev1 + 1 && planRows === 1 &&
+            codeOf(correctedFree) === "OK" && st(afterFree) === st(beforeFree) && afterFree.nextActionKind === beforeFree.nextActionKind,
+        `send=${st(afterSend1)} corr=${st(afterCorr1)} rows=${planRows} free=${st(beforeFree)}→${st(afterFree)}`,
+    );
+
+    // 2. Ceruzka „Chceli": OTHER-only úloha s krokom CALL → pridať PRICE → SEND_QUOTE → stiahnuť PRICE → späť CALL.
+    const id2 = await makeDeal(rep);
+    await follow(rep, id2, callStep);
+    await ask(rep, id2, manager.id, { contents: ["OTHER"], step: { kind: "CALL", note: null } });
+    const lockedCall = await lead(id2);
+    const rev2 = await leadRev(id2);
+    const addPrice = await w.asks(rep, id2, { add: ["PRICE"] });
+    const withPrice = await lead(id2);
+    const rev2b = await leadRev(id2);
+    const dropPrice = await w.asks(rep, id2, { withdraw: await w.openIdsOf(id2, "PRICE"), reason: "cenu už nechcú" });
+    const withoutPrice = await lead(id2);
+    check(
+        "W4A-R01-2: the 'Chceli' pencil on an open task uses the same P6 formula – CALL → add PRICE → SEND_QUOTE → withdraw PRICE → CALL, always without a date and SCHEDULED, one revision each, task stays open",
+        st(lockedCall) === "CALL/null/SCHEDULED" && codeOf(addPrice) === "OK" && st(withPrice) === "SEND_QUOTE/null/SCHEDULED" && rev2b === rev2 + 1 &&
+            codeOf(dropPrice) === "OK" && st(withoutPrice) === "CALL/null/SCHEDULED" && (await leadRev(id2)) === rev2b + 1 && (await openTask(id2)) !== null,
+        `${st(lockedCall)} → ${codeOf(addPrice)} ${st(withPrice)} → ${codeOf(dropPrice)} ${st(withoutPrice)}`,
+    );
+    // Stale karta: rovnaká revízia dvakrát = druhé uloženie sa nepovolí.
+    const staleRev = await leadRev(id2);
+    const [tabA, tabB] = await Promise.all([
+        w.asks(rep, id2, { add: ["INFO"], expectedRevision: staleRev }),
+        w.asks(rep, id2, { add: ["REVIEW"], expectedRevision: staleRev }),
+    ]);
+    check("W4A-R01-2: two tabs on the same revision – exactly one pencil save wins", tally([tabA, tabB]).OK === 1, `${codeOf(tabA)} ${codeOf(tabB)}`);
+
+    // 3. Telefón a SMS: „Už ju netreba – stiahnuť cenu" pri PRICE + DESIGN ostáva úloha otvorená a zamknutá na SEND_DESIGN.
+    const phoneCase = async (contact: "CALL" | "SMS") => {
+        const id = await makeDeal(rep);
+        await follow(rep, id, callStep);
+        await ask(rep, id, manager.id, { contents: ["PRICE", "DESIGN"], step: undefined });
+        const t = (await openTask(id))!;
+        const withdrawParts = { taskId: t.id, kinds: ["PRICE" as const], reason: "cenu som zistil sám" };
+        const noLock = await follow(rep, id, { contact, phonePrice: { amount: 500 }, overlap: "WITHDRAW_PARTS", withdrawParts });
+        const forgedAll = await follow(rep, id, { contact, phonePrice: { amount: 500 }, keepLockedStep: true, overlap: "WITHDRAW_PARTS", withdrawParts: { ...withdrawParts, kinds: ["PRICE", "DESIGN"] } });
+        const forgedOther = await follow(rep, id, { contact, phonePrice: { amount: 500 }, keepLockedStep: true, overlap: "WITHDRAW_PARTS", withdrawParts: { ...withdrawParts, kinds: ["DESIGN"] } });
+        const byManager = await follow(manager, id, { contact, phonePrice: { amount: 500 }, keepLockedStep: true, overlap: "WITHDRAW_PARTS", withdrawParts });
+        const untouched = JSON.stringify(await partStatus(t.id)) === JSON.stringify({ PRICE: "REQUESTED", DESIGN: "REQUESTED" });
+        const k = key();
+        const rev = await leadRev(id);
+        const input = { contact, phonePrice: { amount: 500 }, keepLockedStep: true, overlap: "WITHDRAW_PARTS" as const, withdrawParts, idempotencyKey: k, expectedRevision: rev };
+        const [a, b] = await Promise.all([follow(rep, id, input), follow(rep, id, input)]);
+        const again = await follow(rep, id, input);
+        const conflict = await follow(rep, id, { ...input, phonePrice: { amount: 501 } });
+        const l = await lead(id);
+        const parts = await partStatus(t.id);
+        const contacts = await prisma.activity.count({ where: { leadId: id, type: contact === "SMS" ? "SMS_SENT" : "CALL", idempotencyKey: k } });
+        return { noLock, forgedAll, forgedOther, byManager, untouched, a, b, again, conflict, l, parts, contacts, task: await taskRow(t.id) };
+    };
+    for (const contact of ["CALL", "SMS"] as const) {
+        const r = await phoneCase(contact);
+        check(
+            `W4A-R01-3 (${contact}): withdrawing PRICE on a PRICE + DESIGN task saves the contact + price, keeps the task OPEN and the step locked on SEND_DESIGN; without keepLockedStep it is STEP_LOCKED, forged / foreign kinds and a non-owner are refused with nothing written; replay is one save, a changed body is a conflict`,
+            codeOf(r.noLock) === "ERR:STEP_LOCKED" && codeOf(r.forgedAll) === "ERR:FORBIDDEN" && codeOf(r.forgedOther) === "ERR:FORBIDDEN" &&
+                codeOf(r.byManager) === "ERR:FORBIDDEN" && r.untouched &&
+                JSON.stringify(tally([r.a, r.b])) === '{"OK":2}' && codeOf(r.again) === "OK" && codeOf(r.conflict) === "ERR:IDEMPOTENCY_CONFLICT" &&
+                r.parts.PRICE === "WITHDRAWN" && r.parts.DESIGN === "REQUESTED" && r.task.status === "OPEN" && st(r.l) === "SEND_DESIGN/null/SCHEDULED" && r.contacts === 1,
+            `${codeOf(r.noLock)} ${codeOf(r.forgedAll)} ${codeOf(r.forgedOther)} ${codeOf(r.byManager)} untouched=${r.untouched} | ${codeOf(r.a)} ${codeOf(r.b)} ${codeOf(r.again)} ${codeOf(r.conflict)} | ${JSON.stringify(r.parts)} ${r.task.status} ${st(r.l)} contacts=${r.contacts}`,
+        );
+    }
+    // PRICE je jediná robiaca sa časť: hovor stiahne cenu a úloha sa zavrie – vlastníkov krok vyhráva; zastaraný klient
+    // (keepLockedStep na úlohe, ktorá sa medzitým zúžila) dostane odvodený krok odomknutý na dnes, nie zaseknutý bez dátumu.
+    const id3 = await makeDeal(rep);
+    await follow(rep, id3, callStep);
+    await ask(rep, id3, manager.id, { contents: ["PRICE"], step: undefined });
+    const t3 = (await openTask(id3))!;
+    const closeWithStep = await follow(rep, id3, {
+        contact: "CALL",
+        phonePrice: { amount: 500 },
+        overlap: "WITHDRAW_PARTS",
+        withdrawParts: { taskId: t3.id, kinds: ["PRICE"], reason: "cenu som zistil sám" },
+        nextKind: "CALL",
+        schedule: { kind: "daysFromToday", days: 3 },
+    });
+    const l3 = await lead(id3);
+    const id3b = await makeDeal(rep);
+    await follow(rep, id3b, callStep);
+    await ask(rep, id3b, manager.id, { contents: ["PRICE"], step: undefined });
+    const t3b = (await openTask(id3b))!;
+    const closeStale = await follow(rep, id3b, {
+        contact: "CALL",
+        phonePrice: { amount: 500 },
+        keepLockedStep: true,
+        overlap: "WITHDRAW_PARTS",
+        withdrawParts: { taskId: t3b.id, kinds: ["PRICE"], reason: "cenu som zistil sám" },
+    });
+    const l3b = await lead(id3b);
+    check(
+        "W4A-R01-3: withdrawing the LAST open part by phone closes the task – the chosen step wins; a stale keepLockedStep client still gets the task closed and the step unlocked (kind CALL from the fallback, due today), never a locked null date",
+        codeOf(closeWithStep) === "OK" && (await taskRow(t3.id)).status === "CANCELLED" && l3.nextActionKind === "CALL" && l3.nextActionAt !== null &&
+            codeOf(closeStale) === "OK" && (await taskRow(t3b.id)).status === "CANCELLED" && l3b.nextActionKind === "CALL" && l3b.nextActionAt !== null,
+        `${codeOf(closeWithStep)} ${st(l3)} | ${codeOf(closeStale)} ${st(l3b)}`,
+    );
+
+    // 4. E-mail: stiahnuť smie presne to, čo odoslanie prekrýva.
+    const id4 = await makeDeal(rep);
+    await ask(rep, id4, manager.id, { contents: ["PRICE", "DESIGN"], step: undefined });
+    const t4 = (await openTask(id4))!;
+    const extra = await send(rep, id4, { contents: ["PRICE"], price: { amount: 1, note: null }, overlap: "WITHDRAW_PARTS", withdrawParts: { taskId: t4.id, kinds: ["PRICE", "DESIGN"], reason: "x" } });
+    const unrelated = await send(rep, id4, { contents: ["ABOUT_US"], overlap: "WITHDRAW_PARTS", withdrawParts: { taskId: t4.id, kinds: ["PRICE"], reason: "x" } });
+    const wrongTask = await send(rep, id4, { contents: ["PRICE"], price: { amount: 1, note: null }, overlap: "WITHDRAW_PARTS", withdrawParts: { taskId: "nie-je-moja", kinds: ["PRICE"], reason: "x" } });
+    const wrongKind = await send(rep, id4, { contents: ["PRICE"], price: { amount: 1, note: null }, overlap: "WITHDRAW_PARTS", withdrawParts: { taskId: t4.id, kinds: ["DESIGN"], reason: "x" } });
+    const nothingWritten = (await prisma.activity.count({ where: { leadId: id4, type: "OFFER_SENT" } })) === 0 &&
+        JSON.stringify(await partStatus(t4.id)) === JSON.stringify({ PRICE: "REQUESTED", DESIGN: "REQUESTED" });
+    const valid = await send(rep, id4, { contents: ["PRICE"], price: { amount: 1, note: null }, overlap: "WITHDRAW_PARTS", withdrawParts: { taskId: t4.id, kinds: ["PRICE"], reason: "x" } });
+    check(
+        "W4A-R01-4: forged withdrawParts (extra kind, kind the send does not cover, wrong task, wrong kind) are refused before anything is written; the exact overlap still works",
+        codeOf(extra) === "ERR:FORBIDDEN" && codeOf(unrelated) === "ERR:FORBIDDEN" && codeOf(wrongTask) === "ERR:STALE" && codeOf(wrongKind) === "ERR:FORBIDDEN" &&
+            nothingWritten && codeOf(valid) === "OK" && (await partStatus(t4.id)).PRICE === "WITHDRAWN" && (await partStatus(t4.id)).DESIGN === "REQUESTED",
+        `${codeOf(extra)} ${codeOf(unrelated)} ${codeOf(wrongTask)} ${codeOf(wrongKind)} clean=${nothingWritten} valid=${codeOf(valid)}`,
+    );
+
+    // 5. Koniec úlohy zmenou vlastníka a uspaním: krok sa odvodí, nie odomkne staré uložené SEND_DESIGN.
+    const endTask = async () => {
+        const id = await makeDeal(rep);
+        await follow(rep, id, callStep);
+        await ask(rep, id, manager.id, { contents: ["PRICE", "DESIGN"], step: undefined });
+        const t = (await openTask(id))!;
+        await deliverPrice(t.id, id);
+        await send(rep, id, { contents: ["PRICE"], fulfils: [{ taskId: t.id, kind: "PRICE" }] });
+        return { id, t, before: await lead(id) };
+    };
+    const own = await endTask();
+    const toNobody = await pipeline.changeOwnerAs(manager, own.id, { ownerId: null, expectedRevision: await leadRev(own.id), idempotencyKey: key() });
+    const lNobody = await lead(own.id);
+    const own2 = await endTask();
+    const toManager = await pipeline.changeOwnerAs(manager, own2.id, { ownerId: manager2.id, expectedRevision: await leadRev(own2.id), idempotencyKey: key() });
+    const lManager = await lead(own2.id);
+    const snooze = await endTask();
+    const wake = bt.addBusinessCalendarDays(today, 5);
+    const noDate = await pipeline.changeStatusAs(manager, snooze.id, { status: "SNOOZED", cancelTask: { taskId: snooze.t.id, reason: "uspávam" }, expectedRevision: await leadRev(snooze.id), idempotencyKey: key() });
+    const stillOpen = (await openTask(snooze.id)) !== null;
+    const pastDate = await pipeline.changeStatusAs(manager, snooze.id, { status: "SNOOZED", snoozeUntil: today, cancelTask: { taskId: snooze.t.id, reason: "uspávam" }, expectedRevision: await leadRev(snooze.id), idempotencyKey: key() });
+    const snoozed = await pipeline.changeStatusAs(manager, snooze.id, { status: "SNOOZED", snoozeUntil: wake, cancelTask: { taskId: snooze.t.id, reason: "uspávam" }, expectedRevision: await leadRev(snooze.id), idempotencyKey: key() });
+    const lSnooze = await lead(snooze.id);
+    check(
+        "W4A-R01-5: an owner change (to nobody, to a manager) and a snooze that end the task derive the final step – the deal that was locked on SEND_DESIGN comes out on the CALL fallback, due today (a snooze: on the chosen wake date, and refused without one), not on the design that was just withdrawn",
+        st(own.before) === "SEND_DESIGN/null/SCHEDULED" &&
+            codeOf(toNobody) === "OK" && lNobody.nextActionKind === "CALL" && lNobody.nextActionAt !== null &&
+            codeOf(toManager) === "OK" && lManager.nextActionKind === "CALL" && lManager.nextActionAt !== null &&
+            codeOf(noDate) === "ERR:FORBIDDEN" && stillOpen && codeOf(pastDate) !== "OK" &&
+            codeOf(snoozed) === "OK" && lSnooze.status === "SNOOZED" && lSnooze.nextActionKind === "CALL" && lSnooze.nextActionAt !== null &&
+            bt.businessDate(lSnooze.nextActionAt) === wake,
+        `before=${st(own.before)} nobody=${codeOf(toNobody)} ${st(lNobody)} manager=${codeOf(toManager)} ${st(lManager)} snooze=${codeOf(noDate)}/${codeOf(pastDate)}/${codeOf(snoozed)} ${lSnooze.status}/${st(lSnooze)}`,
+    );
+
+    // 6. Vedome neposlaná vrátená časť má vlastnú značku – nie „pripravené".
+    const id6 = await makeDeal(rep);
+    await ask(rep, id6, manager.id, { contents: ["PRICE", "OTHER"], step: undefined });
+    const t6 = (await openTask(id6))!;
+    await deliverPrice(t6.id, id6);
+    const dropped = await tasks.dismissResultsAs(rep, { leadId: id6, expectedRevision: await leadRev(id6), idempotencyKey: key(), taskId: t6.id, items: [{ kind: "PRICE" }], reason: "klient už cenu vie" });
+    const priceView = (await detail(id6, rep))!.tasks[0].parts.find((p) => p.kind === "PRICE")!;
+    check(
+        "W4A-R01-6: a delivered part whose every item was deliberately not sent is marked DISMISSED (⊘ 'neposiela sa'), not PREPARED",
+        codeOf(dropped) === "OK" && priceView.mark === "DISMISSED" && priceView.waitingCount === 0 && priceView.dismissedCount === 1,
+        `${codeOf(dropped)} mark=${priceView.mark} waiting=${priceView.waitingCount} dismissed=${priceView.dismissedCount}`,
+    );
+    void work;
+};
+
+// W4A-R02 (review partA-R02, 2026-09-21): začína vždy od SKUTOČNÉHO kroku wave 5 (klient pýta → appka nastaví
+// „Poslať …"), nie od ručne zvoleného CALL – práve tam sa stará záloha vracala ako už hotová práca.
+tests.w4ReviewR02 = async () => {
+    const { tasks, lead, ask, openTask, send, follow, detail, design, bt, today } = await w3();
+    const w = await w5();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const st = (l: { nextActionKind: string | null; nextActionAt: Date | null; nextActionMode: string }) =>
+        `${l.nextActionKind}/${l.nextActionAt === null ? "null" : "date"}/${l.nextActionMode}`;
+    const NOTE = "Pokračovať s klientom po odpovedi manažéra";
+    const resolve = async (taskId: string, leadId: string, parts: Parameters<typeof tasks.resolveTaskPartsAs>[1]["parts"]) =>
+        tasks.resolveTaskPartsAs(manager, { taskId, expectedRevision: await leadRev(leadId), idempotencyKey: key(), parts });
+    const headlineOf = async (id: string) => (await detail(id, rep))!.stepHeadline;
+
+    // 1a. SEND_QUOTE → PRICE + OTHER → cena odíde → zamknuté „čaká na manažéra", nikdy SEND_QUOTE → OTHER → CALL dnes.
+    const id1 = await w.interested(rep, ["PRICE"]);
+    const start1 = await lead(id1);
+    await ask(rep, id1, manager.id, { contents: ["PRICE", "OTHER"], step: undefined });
+    const t1 = (await openTask(id1))!;
+    await resolve(t1.id, id1, [{ kind: "PRICE", op: "DELIVER", price: { amount: 900, note: null } }]);
+    const sent1 = await send(rep, id1, { contents: ["PRICE"], fulfils: [{ taskId: t1.id, kind: "PRICE" }] });
+    const locked1 = await lead(id1);
+    const head1 = await headlineOf(id1);
+    await resolve(t1.id, id1, [{ kind: "OTHER", op: "DELIVER", answer: "hosting je v cene" }]);
+    const done1 = await lead(id1);
+    check(
+        "W4A-R02-1 (PRICE): from a real Wave 5 SEND_QUOTE, after the price is sent only OTHER is left – the locked step is never SEND_QUOTE and reads 'Čaká na … – otázka / konzultácia'; closing OTHER unlocks CALL due today with the neutral note",
+        start1.nextActionKind === "SEND_QUOTE" && codeOf(sent1) === "OK" && st(locked1) === "CALL/null/SCHEDULED" &&
+            head1 === `Čaká na ${manager.firstName} – otázka / konzultácia` &&
+            (await taskRow(t1.id)).status === "DONE" && done1.nextActionKind === "CALL" && done1.nextActionAt !== null &&
+            bt.businessDate(done1.nextActionAt) === today && done1.nextActionNote === NOTE,
+        `start=${start1.nextActionKind} locked=${st(locked1)} headline="${head1}" done=${st(done1)} note="${done1.nextActionNote}"`,
+    );
+
+    // 1b. To isté s návrhom.
+    const id2 = await w.interested(rep, ["DESIGN"]);
+    const start2 = await lead(id2);
+    const d = await design(manager, id2, "variantA");
+    await ask(rep, id2, manager.id, { contents: ["DESIGN", "OTHER"], step: undefined });
+    const t2 = (await openTask(id2))!;
+    await resolve(t2.id, id2, [{ kind: "DESIGN", op: "DELIVER", designs: [{ id: d.id, version: d.currentVersion }] }]);
+    const sent2 = await send(rep, id2, { contents: ["DESIGN"], designIds: [d.id], fulfils: [{ taskId: t2.id, kind: "DESIGN", designId: d.id }] });
+    const locked2 = await lead(id2);
+    const head2 = await headlineOf(id2);
+    await resolve(t2.id, id2, [{ kind: "OTHER", op: "DELIVER", answer: "doména je voľná" }]);
+    const done2 = await lead(id2);
+    check(
+        "W4A-R02-1 (DESIGN): the same from SEND_DESIGN – locked 'čaká na manažéra', never SEND_DESIGN, then CALL today",
+        start2.nextActionKind === "SEND_DESIGN" && codeOf(sent2) === "OK" && st(locked2) === "CALL/null/SCHEDULED" &&
+            head2 === `Čaká na ${manager.firstName} – otázka / konzultácia` &&
+            done2.nextActionKind === "CALL" && done2.nextActionAt !== null && done2.nextActionNote === NOTE,
+        `start=${start2.nextActionKind} locked=${st(locked2)} headline="${head2}" done=${st(done2)}`,
+    );
+
+    // 1c. Klient chce aj info – to ostáva na odoslanie, takže sa nič „nečaká na otázku".
+    const id3 = await w.interested(rep, ["PRICE", "INFO"]);
+    await ask(rep, id3, manager.id, { contents: ["PRICE", "OTHER"], step: undefined });
+    const t3 = (await openTask(id3))!;
+    await resolve(t3.id, id3, [{ kind: "PRICE", op: "DELIVER", price: { amount: 700, note: null } }]);
+    await send(rep, id3, { contents: ["PRICE"], fulfils: [{ taskId: t3.id, kind: "PRICE" }] });
+    const locked3 = await lead(id3);
+    const head3 = await headlineOf(id3);
+    check(
+        "W4A-R02-1 (INFO): a still-outstanding INFO keeps the locked step on the send ('Poslať …'), not on 'čaká na manažéra'",
+        locked3.nextActionKind === "SEND_EMAIL" && locked3.nextActionAt === null && !String(head3).startsWith("Čaká na"),
+        `${st(locked3)} headline="${head3}"`,
+    );
+
+    // 1d. Ručne zvolený krok sa vracia nezmenený (podrobnejšie: W4A-R01-1 a w4Fallback).
+    const id4 = await makeDeal(rep);
+    await follow(rep, id4, { contact: "NONE", nextKind: "WAITING_FOR_CLIENT", schedule: { kind: "daysFromToday", days: 3 } });
+    await ask(rep, id4, manager.id, { contents: ["OTHER"], step: { kind: "WAITING_FOR_CLIENT", note: null } });
+    const t4 = (await openTask(id4))!;
+    await resolve(t4.id, id4, [{ kind: "OTHER", op: "DELIVER", answer: "ok" }]);
+    const back4 = await lead(id4);
+    check(
+        "W4A-R02-1 (manual): a deliberately chosen step (Čakáme na klienta) still comes back after the task",
+        back4.nextActionKind === "WAITING_FOR_CLIENT" && back4.nextActionAt !== null,
+        st(back4),
+    );
+
+    // 2. E-mail: stiahnutie POSLEDNEJ časti + odoslanie – krok sa odvodí po odoslaní, nie „Poslať cenu" po odoslaní ceny.
+    const closeByEmail = async (opts: { followUp: boolean; manual: boolean }) => {
+        const id = opts.manual ? await makeDeal(rep) : await w.interested(rep, ["PRICE"]);
+        if (opts.manual) await follow(rep, id, { contact: "NONE", nextKind: "CALL", schedule: { kind: "daysFromToday", days: 4 } });
+        await ask(rep, id, manager.id, { contents: ["PRICE"], step: undefined });
+        const t = (await openTask(id))!;
+        const rev = await leadRev(id);
+        const k = key();
+        const input = {
+            contents: ["PRICE" as const],
+            price: { amount: 1100, note: null },
+            overlap: "WITHDRAW_PARTS" as const,
+            withdrawParts: { taskId: t.id, kinds: ["PRICE" as const], reason: "cenu mám sám" },
+            followUp: opts.followUp,
+            idempotencyKey: k,
+            expectedRevision: rev,
+        };
+        const [a, b] = await Promise.all([send(rep, id, input), send(rep, id, input)]);
+        const again = await send(rep, id, input);
+        const conflict = await send(rep, id, { ...input, price: { amount: 1101, note: null } });
+        const l = await lead(id);
+        const priceRows = (await w.rows(id)).filter((r) => r.content === "PRICE");
+        const keyed = await prisma.activity.count({ where: { leadId: id, idempotencyKey: k } });
+        return { a, b, again, conflict, l, task: await taskRow(t.id), priceRows, revAfter: await leadRev(id), rev, keyed };
+    };
+    for (const [label, opts] of [
+        ["system fallback, no follow-up", { followUp: false, manual: false }],
+        ["manual CALL fallback, no follow-up", { followUp: false, manual: true }],
+        ["system fallback, with follow-up", { followUp: true, manual: false }],
+    ] as const) {
+        const r = await closeByEmail(opts);
+        const stepOk = opts.followUp
+            ? r.l.nextActionKind === "CALL" && r.l.nextActionAt !== null && bt.businessDate(r.l.nextActionAt) > today
+            : r.l.nextActionKind === "CALL" && r.l.nextActionAt !== null && bt.businessDate(r.l.nextActionAt) === today;
+        check(
+            `W4A-R02-2 (${label}): withdrawing the last part in an e-mail closes the task, records the receipt and leaves NO stale 'Poslať cenu'; one keyed event, one revision, replay = one save, changed body = conflict`,
+            r.task.status === "CANCELLED" && r.priceRows.every((row) => row.state === "SENT") && stepOk &&
+                r.l.nextActionKind !== "SEND_QUOTE" && r.revAfter === r.rev + 1 && r.keyed === 1 &&
+                JSON.stringify(tally([r.a, r.b])) === '{"OK":2}' && codeOf(r.again) === "OK" && codeOf(r.conflict) === "ERR:IDEMPOTENCY_CONFLICT",
+            `task=${r.task.status} step=${st(r.l)} due=${r.l.nextActionAt ? bt.businessDate(r.l.nextActionAt) : null} rows=${r.priceRows.map((x) => x.state).join(",")} rev=${r.rev}→${r.revAfter} keyed=${r.keyed} | ${codeOf(r.a)} ${codeOf(r.b)} ${codeOf(r.again)} ${codeOf(r.conflict)}`,
+        );
+    }
+    void today;
+};
+
+// W4-12: súbeh. Stiahnutie vs dodanie tej istej časti, dve časti naraz, replay a konflikt každého nového príkazu.
+tests.w4Race = async () => {
+    const { tasks, ask, openTask } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+
+    const id = await makeDeal(rep);
+    await ask(rep, id, manager.id, { contents: ["PRICE", "OTHER"], step: undefined });
+    const t = (await openTask(id))!;
+    const rev = await leadRev(id);
+    const [deliver, withdraw] = await Promise.all([
+        tasks.resolveTaskPartsAs(manager, { taskId: t.id, expectedRevision: rev, idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 1, note: null } }] }),
+        tasks.withdrawTaskPartsAs(rep, { taskId: t.id, expectedRevision: rev, idempotencyKey: key(), kinds: ["PRICE"], reason: "netreba" }),
+    ]);
+    const price = (await partStatus(t.id)).PRICE;
+    check(
+        "W4-12: deliver vs withdraw of the SAME part on the same revision → exactly one wins and the part has exactly one outcome",
+        [deliver, withdraw].filter((r) => codeOf(r) === "OK").length === 1 && (price === "DELIVERED" || price === "WITHDRAWN"),
+        `${codeOf(deliver)} ${codeOf(withdraw)} price=${price}`,
+    );
+
+    // Replay a konflikt: ten istý kľúč + ten istý obsah = jeden zápis; iný obsah = konflikt. runKeyed hľadá OBA typy.
+    const id2 = await makeDeal(rep);
+    await ask(rep, id2, manager.id, { contents: ["PRICE", "OTHER"], step: undefined });
+    const t2 = (await openTask(id2))!;
+    const k = key();
+    const input = { taskId: t2.id, expectedRevision: await leadRev(id2), idempotencyKey: k, parts: [{ kind: "PRICE" as const, op: "DECLINE" as const, reason: "nemám podklady" }] };
+    const first = await tasks.resolveTaskPartsAs(manager, input);
+    const replay = await tasks.resolveTaskPartsAs(manager, input);
+    const conflict = await tasks.resolveTaskPartsAs(manager, { ...input, parts: [{ kind: "PRICE", op: "DECLINE", reason: "iný dôvod" }] });
+    const declinedRows = await prisma.activity.count({ where: { leadId: id2, type: "TASK_PART_DECLINED" } });
+    // Peniaze v odtlačku ako reťazec (B7): 1285 a 1285.00 musia dať ten istý odtlačok.
+    const id3 = await makeDeal(rep);
+    await ask(rep, id3, manager.id, { contents: ["PRICE"], step: undefined });
+    const t3 = (await openTask(id3))!;
+    const k3 = key();
+    const rev3 = await leadRev(id3);
+    const m1 = await tasks.resolveTaskPartsAs(manager, { taskId: t3.id, expectedRevision: rev3, idempotencyKey: k3, parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 1285, note: null } }] });
+    const m2 = await tasks.resolveTaskPartsAs(manager, { taskId: t3.id, expectedRevision: rev3, idempotencyKey: k3, parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 1285.0, note: null } }] });
+    check(
+        "W4-12: the same key replays once (both row types are looked up), a changed payload conflicts, and 1285 vs 1285.00 is the same fingerprint (B7)",
+        codeOf(first) === "OK" && codeOf(replay) === "OK" && codeOf(conflict) === "ERR:IDEMPOTENCY_CONFLICT" && declinedRows === 1 &&
+            codeOf(m1) === "OK" && codeOf(m2) === "OK",
+        `${codeOf(first)} ${codeOf(replay)} ${codeOf(conflict)} rows=${declinedRows} money=${codeOf(m1)}/${codeOf(m2)}`,
+    );
+};
+
+// W4-13 (D5, §5.1): zmenu ceny vidí aj obchodník – vrátane zmeny samotného rozpisu; nie je to kontakt s klientom
+// a nedá sa prečiarknuť.
+tests.w4PriceHistory = async () => {
+    const { tasks, ask, openTask, offers, detail, pipeline } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    const priceRows = () =>
+        prisma.activity.findMany({ where: { leadId: id, type: "PRICE_CHANGED" }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, meta: true, category: true, note: true } });
+    const viaOf = (rows: Awaited<ReturnType<typeof priceRows>>) => rows.map((r) => (r.meta as { via?: string } | null)?.via ?? "?").join(",");
+
+    await pipeline.saveQuoteAs(manager, id, { price: 1000, priceNote: null });
+    await pipeline.saveQuoteAs(manager, id, { price: 1000, priceNote: null }); // nič sa nezmenilo
+    await pipeline.saveQuoteAs(manager, id, { price: 1000, priceNote: "Web 700 · admin 300" }); // len rozpis
+    await ask(rep, id, manager.id, { contents: ["PRICE"], step: undefined });
+    const t = (await openTask(id))!;
+    await tasks.resolveTaskPartsAs(manager, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 1285, note: null } }] });
+    const rows = await priceRows();
+    const asRep = await detail(id, rep);
+    const correction = await offers.correctRecordAs(manager, rows[0].id, "omyl v cene");
+    check(
+        "W4-13 (D5): every price change is one BUSINESS row the rep can see – including a breakdown-only edit; an unchanged save writes none; via names what caused it; the row is not correctable",
+        rows.length === 3 && viaOf(rows) === "EDIT,EDIT,TASK" && rows.every((r) => r.category === "BUSINESS") &&
+            Boolean(rows[1].note?.includes("rozpis")) && Boolean(asRep?.activities.some((a) => a.type === "PRICE_CHANGED")) &&
+            codeOf(correction) === "ERR:FORBIDDEN",
+        `rows=${rows.length} via=${viaOf(rows)} repSees=${asRep?.activities.some((a) => a.type === "PRICE_CHANGED")} correct=${codeOf(correction)}`,
+    );
+
+    // „Naposledy" sa cenou nehýbe – nie je to kontakt s klientom.
+    const { LAST_TOUCH_TYPES } = await import("../../lib/domain/offers");
+    const { CORRECTABLE_TYPES } = await import("../../lib/domain/offerMutations");
+    check(
+        "W4-13 (D5): PRICE_CHANGED is in neither whitelist – it never moves 'Naposledy' and cannot be crossed out",
+        !(LAST_TOUCH_TYPES as readonly string[]).includes("PRICE_CHANGED") && !(CORRECTABLE_TYPES as readonly string[]).includes("PRICE_CHANGED") &&
+            asRep?.lastTouch?.type !== "PRICE_CHANGED",
+        `lastTouch=${asRep?.lastTouch?.type}`,
+    );
+};
+
+// W4-14 (§6.3): po prepnutí kódu sú ČASTI zdrojom pravdy. Dotaz, ktorý to dokazuje, musí čiastočne vybavenú
+// otvorenú úlohu naozaj nájsť – inak by sa dal prevod spustiť znova a zmazal by skutočnú prácu.
+tests.w4Conversion = async () => {
+    const { tasks, ask, openTask } = await w3();
+    const manager = await makeUser("MANAGER");
+    const rep = await makeUser("SALES_REP");
+    const id = await makeDeal(rep);
+    await ask(rep, id, manager.id, { contents: ["PRICE", "OTHER"], step: undefined });
+    const t = (await openTask(id))!;
+    const beforeDelivery = await prisma.$queryRawUnsafe<{ id: string }[]>(`SELECT q.id FROM (${(await import("./wave4-parts-sql")).POST_CUTOVER_SQL}) q WHERE q.id = $1`, t.id);
+    await tasks.resolveTaskPartsAs(manager, { taskId: t.id, expectedRevision: await leadRev(id), idempotencyKey: key(), parts: [{ kind: "PRICE", op: "DELIVER", price: { amount: 42, note: null } }] });
+    const { POST_CUTOVER_SQL } = await import("./wave4-parts-sql");
+    const afterDelivery = await prisma.$queryRawUnsafe<{ id: string }[]>(`SELECT q.id FROM (${POST_CUTOVER_SQL}) q WHERE q.id = $1`, t.id);
+    check(
+        "W4-14 (§6.3): a partially delivered OPEN task is real part state a pure re-derivation could not produce – the conversion refuses to run again and cannot destroy it",
+        beforeDelivery.length === 0 && afterDelivery.length === 1,
+        `beforeDelivery=${beforeDelivery.length} afterDelivery=${afterDelivery.length}`,
     );
 };
 

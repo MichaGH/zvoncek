@@ -52,7 +52,11 @@ function fail(message: string): never {
     process.exit(1);
 }
 
-const POSITIVE = `('WANTS_QUOTE','WANTS_DESIGN','WANTS_EMAIL','POSITIVE')`;
+// Pozitívny prvý hovor = ten, ktorý odovzdá obchod do pipeline. Musí sedieť s HANDOFF_OUTCOMES
+// (lib/domain/leadFlow.ts) vrátane wave-5 hodnoty INTERESTED – bez nej by tento jednorazový prevod označil
+// KAŽDÝ obchod vzniknutý po wave 5 za CONFLICT a celý beh by sa prerušil. 'POSITIVE' je starý follow-up
+// výsledok, ktorý sa v starých dátach vyskytuje ako prvý hovor.
+const POSITIVE = `('INTERESTED','WANTS_QUOTE','WANTS_DESIGN','WANTS_EMAIL','POSITIVE')`;
 const OK_CLASSES = ["DEAL_OK", "CALLWORK_OK", "POOL", "TERMINAL_OK"];
 const CLASSES = [
     "DEAL_TO_MIGRATE",

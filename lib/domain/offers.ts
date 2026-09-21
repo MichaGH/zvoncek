@@ -33,6 +33,10 @@ const offerMetaSchema = z.object({
     sentOn: z.string(),
     historical: z.boolean(),
     callActivityId: z.string().optional(),
+    via: z.literal("SMS").optional(), // channel PHONE + via SMS = cena uvedená v našej SMS (nie email, nie hovor)
+    // Návrh bol poslaný, ale v systéme preň neexistuje Design riadok (PDF, obyčajný odkaz, starý obchod) – R01-5.
+    // Nikdy spolu s `designs`; nemení žiadny Design.sentAt.
+    untrackedDesign: z.boolean().optional(),
     migrated: z.boolean().optional(), // prevedené zo starého systému skriptom 2026-09-offer-migrate.ts (ak sa použije)
     // Wave 3: ktoré vrátené výsledky úloh toto odoslanie použilo (lib/domain/tasks.ts) + odtlačok odoslania.
     fulfils: z
@@ -60,23 +64,28 @@ export function formatMoney(amount: string | number): string {
 }
 
 // Krátky obsah odoslania: „návrh smrek1 + cena 1 100 €" / „cena 900 € (telefonicky)".
-export function offerSummary(meta: Pick<OfferMeta, "channel" | "contents" | "price" | "designs">): string {
-    if (meta.channel === "PHONE") return meta.price ? `cena ${formatMoney(meta.price.amount)} (telefonicky)` : "cena (telefonicky)";
+export function offerSummary(meta: Pick<OfferMeta, "channel" | "contents" | "price" | "designs" | "untrackedDesign"> & { via?: "SMS" }): string {
+    if (meta.channel === "PHONE") {
+        const how = meta.via === "SMS" ? "SMS" : "telefonicky";
+        return meta.price ? `cena ${formatMoney(meta.price.amount)} (${how})` : `cena (${how})`;
+    }
     return meta.contents
         .map((c) => {
             if (c === "PRICE" && meta.price) return `cena ${formatMoney(meta.price.amount)}`;
             if (c === "DESIGN" && meta.designs?.length) {
                 return `návrh ${meta.designs.map((d) => d.label ?? d.url ?? "").filter(Boolean).join(", ")}`.trim();
             }
+            if (c === "DESIGN" && meta.untrackedDesign) return "návrh (mimo systému)";
             return OFFER_CONTENT_LABEL[c];
         })
         .join(" + ");
 }
 
 // Čitateľný text do Activity.note, aby história nepotrebovala lúštiť meta.
-export function offerNote(meta: Pick<OfferMeta, "channel" | "contents" | "price" | "designs">): string {
+export function offerNote(meta: Pick<OfferMeta, "channel" | "contents" | "price" | "designs" | "untrackedDesign"> & { via?: "SMS" }): string {
     if (meta.channel === "PHONE") {
-        return meta.price ? `Cena telefonicky: ${formatMoney(meta.price.amount)}` : "Cena telefonicky";
+        const how = meta.via === "SMS" ? "v SMS" : "telefonicky";
+        return meta.price ? `Cena ${how}: ${formatMoney(meta.price.amount)}` : `Cena ${how}`;
     }
     const priceNote = meta.contents.includes("PRICE") && meta.price?.note ? `\n${meta.price.note}` : "";
     return `Poslali sme: ${offerSummary(meta)}${priceNote}`;
@@ -111,8 +120,12 @@ export type OfferSummary = {
     pricelistAt: Date | null;
     priceAt: Date | null;
     reviewAt: Date | null;
-    lastPrice: { amount: string; note: string | null; channel: OfferChannel; sentOn: string } | null;
+    lastPrice: { amount: string; note: string | null; channel: OfferChannel; via?: "SMS"; sentOn: string } | null;
     designFirstSent: Map<string, Date>;
+    // Najnovšie platné odoslanie návrhu bez Design riadku (R01-5); null = žiadne platné, a `hadUntrackedDesign`
+    // hovorí, či takéto odoslanie vôbec kedy bolo (aj prečiarknuté) – potom stĺpec Lead.designSentAt patrí prepočtu.
+    untrackedDesignAt: Date | null;
+    hadUntrackedDesign: boolean;
 };
 
 // Súhrn z PLATNÝCH záznamov (neprečiarknutých). Nezávisí od poradia opráv – vždy sa počíta nanovo.
@@ -131,13 +144,18 @@ export function summarizeOffers(rows: OfferRow[]): OfferSummary {
             if (!designFirstSent.has(d.id)) designFirstSent.set(d.id, offerInstant(r.meta, r.createdAt));
         }
     }
+    const isUntracked = (r: OfferRow) => r.meta.contents.includes("DESIGN") && r.meta.untrackedDesign === true;
+    const untrackedValid = valid.filter(isUntracked);
+    const lastUntracked = untrackedValid[untrackedValid.length - 1];
     return {
+        untrackedDesignAt: lastUntracked ? offerInstant(lastUntracked.meta, lastUntracked.createdAt) : null,
+        hadUntrackedDesign: rows.some(isUntracked),
         aboutUsAt: first("ABOUT_US"),
         pricelistAt: first("PRICELIST"),
         reviewAt: first("REVIEW"),
         priceAt: last ? offerInstant(last.meta, last.createdAt) : null,
         lastPrice: last?.meta.price
-            ? { amount: last.meta.price.amount, note: last.meta.price.note, channel: last.meta.channel, sentOn: last.meta.sentOn }
+            ? { amount: last.meta.price.amount, note: last.meta.price.note, channel: last.meta.channel, ...(last.meta.via ? { via: last.meta.via } : {}), sentOn: last.meta.sentOn }
             : null,
         designFirstSent,
     };
@@ -184,16 +202,17 @@ export function offerFingerprint(x: {
     sentOn: string;
     historical: boolean;
     designIds?: readonly string[];
+    untrackedDesign?: boolean;
     price?: { amount: number; note?: string | null } | null;
     followUp?: boolean;
     followUpOn?: string | null;
     overlap?: string | null;
-    cancelTask?: { taskId: string; reason?: string | null } | null;
+    withdrawParts?: { taskId: string; kinds: readonly string[]; reason?: string | null } | null;
     fulfils?: readonly { taskId: string; kind: string; designId?: string }[];
-    dismiss?: { items: readonly { taskId: string; kind: string; designId?: string }[]; reason?: string | null } | null;
+    dismiss?: { items: readonly { taskId: string; kind: string; designId?: string; part?: string }[]; reason?: string | null } | null;
 }): string {
-    const items = (list: readonly { taskId: string; kind: string; designId?: string }[] | undefined) =>
-        [...(list ?? [])].map((i) => `${i.taskId}:${i.kind}:${i.designId ?? ""}`).sort();
+    const items = (list: readonly { taskId: string; kind: string; designId?: string; part?: string }[] | undefined) =>
+        [...(list ?? [])].map((i) => `${i.taskId}:${i.kind}:${i.designId ?? i.part ?? ""}`).sort();
     return JSON.stringify([
         x.channel,
         [...x.contents].sort(),
@@ -204,9 +223,11 @@ export function offerFingerprint(x: {
         x.followUp ?? false,
         x.followUpOn ?? null,
         x.overlap ?? null,
-        x.cancelTask ? [x.cancelTask.taskId, x.cancelTask.reason?.trim() ?? ""] : null,
+        x.withdrawParts ? [x.withdrawParts.taskId, [...x.withdrawParts.kinds].sort().join("+"), x.withdrawParts.reason?.trim() ?? ""] : null,
         items(x.fulfils),
         x.dismiss ? [items(x.dismiss.items), x.dismiss.reason?.trim() ?? ""] : null,
+        // Pripojené len keď platí, aby sa odtlačky už uložených odoslaní nezmenili.
+        ...(x.untrackedDesign ? ["untrackedDesign"] : []),
     ]);
 }
 
@@ -231,7 +252,7 @@ export type OfferDialogDeal = {
     nextActionKind: NextActionKind | null;
     nextActionAt: string | null;
     // Wave 3: otvorená úloha (zámok → odoslanie je len fakt; prekryv sa pýta) a vrátené položky na „použitie".
-    openTask: { id: string; type: DealTaskType; contents: DealTaskContent[]; assignee: string } | null;
+    openTask: { id: string; type: DealTaskType; contents: DealTaskContent[]; openKinds: DealTaskContent[]; assignee: string; fallbackKind: NextActionKind } | null;
     pending: PendingItem[];
     // Wave 5: čo klient pýta a ešte nedostal (predvyplní sa) a celá nevybavená práca (predvolí ďalší krok, §6.9).
     asked: RequestContent[];

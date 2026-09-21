@@ -64,6 +64,7 @@ export default function CenovaPonukaCard({
     revision,
     price,
     priceNote,
+    priceHistory = [],
     offers,
     askHistory,
     outstandingRows,
@@ -78,6 +79,8 @@ export default function CenovaPonukaCard({
     revision: number;
     price: number | null;
     priceNote: string | null;
+    // D5: posledné zmeny ceny – obchodník ich vidí, takže si pamätá, že cena rástla a prečo.
+    priceHistory?: DealDetailData["priceHistory"];
     offers: DealDetailData["offers"];
     askHistory: HistoryRow[];
     outstandingRows: OutstandingRow[];
@@ -127,6 +130,17 @@ export default function CenovaPonukaCard({
                         {price != null ? formatMoney(price) : "— €"}
                     </p>
                     {priceNote && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{priceNote}</p>}
+                    {priceHistory.length > 0 && (
+                        <ul className="space-y-0.5 pt-1 text-xs text-muted-foreground">
+                            {priceHistory.map((h) => (
+                                <li key={h.id}>
+                                    {h.from?.amount != null ? formatMoney(h.from.amount) : "—"} → {h.to?.amount != null ? formatMoney(h.to.amount) : "—"}
+                                    {h.from?.amount === h.to?.amount ? " (upravený rozpis)" : ""} · {businessDayMonth(new Date(h.at))} · {h.by}
+                                    {h.reason ? ` – ${h.reason}` : ""}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                 </div>
 
                 {/* Wave 5 (§3.2): čo klient pýtal – udalosti, nie trvalá nálepka. Druhá žiadosť o to isté je nový riadok. */}
@@ -175,7 +189,7 @@ export default function CenovaPonukaCard({
                                 key={c}
                                 label={OFFER_CONTENT_LABEL[c]}
                                 state={knows[c]}
-                                extra={c === "PRICE" && last ? `${formatMoney(last.amount)}${last.channel === "PHONE" ? " (telefonicky)" : ""}` : undefined}
+                                extra={c === "PRICE" && last ? `${formatMoney(last.amount)}${last.channel === "PHONE" ? (last.via === "SMS" ? " (SMS)" : " (telefonicky)") : ""}` : undefined}
                             />
                         ))}
                     </p>
@@ -278,10 +292,11 @@ function PriceEditSheet({
     price: number | null;
     priceNote: string | null;
     onClose: () => void;
-    onSave: (input: { price: number | null; priceNote: string | null }) => Promise<void>;
+    onSave: (input: { price: number | null; priceNote: string | null; reason?: string | null }) => Promise<void>;
 }) {
     const [priceInput, setPriceInput] = useState(price != null ? String(price) : "");
     const [noteInput, setNoteInput] = useState(priceNote ?? "");
+    const [reasonInput, setReasonInput] = useState("");
     const [saving, setSaving] = useState(false);
     const trimmed = priceInput.trim();
     const parsed = trimmed === "" ? null : Number(trimmed.replace(",", "."));
@@ -311,12 +326,24 @@ function PriceEditSheet({
                         className="min-h-[88px] text-[16px]"
                     />
                 </div>
+                {/* D5: krátky dôvod, aby história ceny bola príbeh, nie zoznam rozdielov. Nepovinný – preklep formulár nepotrebuje. */}
+                <div className="grid gap-1.5">
+                    <Label className="text-xs text-muted-foreground">Prečo sa mení (nepovinné)</Label>
+                    <Input
+                        data-vaul-no-drag
+                        value={reasonInput}
+                        maxLength={500}
+                        onChange={(e) => setReasonInput(e.target.value)}
+                        placeholder="napr. pridali sme EN jazyk"
+                        className="text-[16px]"
+                    />
+                </div>
                 <Button
                     className="h-12 w-full"
                     disabled={saving || invalid}
                     onClick={async () => {
                         setSaving(true);
-                        await onSave({ price: parsed, priceNote: noteInput });
+                        await onSave({ price: parsed, priceNote: noteInput, reason: reasonInput.trim() || null });
                         setSaving(false);
                     }}
                 >

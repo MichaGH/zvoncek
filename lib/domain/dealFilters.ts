@@ -17,18 +17,21 @@ export const DEFAULT_VIEW = "today"; // „Na dnes" je to, s čím sa ráno zač
 export const DEFAULT_OWNER = "me"; // vždy najprv moja práca; prepnutie na iných rieši filter (v rámci rozsahu)
 export const NO_VIEW = "all";
 
-// Pilulky pohľadov. „today", „waiting_manager", „inbox" a „unverified" platia naprieč stavmi (stavová záložka sa pri
+// Pilulky pohľadov. „work", „today", „waiting_manager", „inbox" a „unverified" platia naprieč stavmi (stavová záložka sa pri
 // nich ignoruje). Každá pilulka má počet, ktorý počíta ten istý predikát ako jej zoznam (lib/queries/pipeline – wave 3 §7).
 // Žije tu (nie v queries), aby to mohli importovať klientske komponenty bez ťahania Prisma klienta.
 export const DEAL_VIEWS = [
     // Úlohy pre manažéra (wave 3): „Pre mňa" = moja schránka (len manažér), „Čakám na manažéra" = moje obchody so zámkom.
     { key: "inbox", label: "Pre mňa", group: "tasks" },
     { key: "waiting_manager", label: "Čakám na manažéra", group: "tasks" },
+    // Otvorené sľuby klientovi, ktoré vlastník vie riešiť teraz. Po otvorení manažérskej úlohy sa obchod
+    // presunie do „Čakám na manažéra"; po vrátení ceny / návrhu sa sem vráti, kým ich klient nedostane.
+    { key: "work", label: "Na spracovanie", group: "focus" },
     { key: "today", label: "Na dnes", group: "focus" },
     { key: "call", label: "Volať", group: "todo" },
     { key: "quote", label: "Poslať cenu", group: "todo" },
     { key: "email", label: "Poslať email", group: "todo" },
-    { key: "design", label: "Návrh v procese", group: "todo" },
+    { key: "design", label: "Rozpracované návrhy", group: "todo" },
     { key: "waiting", label: "Čaká na klienta", group: "running" },
     // Čo klient už má (round 2 §2c) – podľa nových záznamov OFFER_SENT, nie podľa starých polí.
     { key: "got_pricelist", label: "Dostali cenník", group: "running" },
@@ -41,7 +44,7 @@ export const DEAL_VIEWS = [
 export type DealViewKey = (typeof DEAL_VIEWS)[number]["key"];
 
 const VIEW_KEYS = new Set<string>(DEAL_VIEWS.map((v) => v.key));
-const CROSS_STATUS_VIEWS = new Set<string>(["today", "unverified", "waiting_manager", "inbox"]);
+const CROSS_STATUS_VIEWS = new Set<string>(["work", "today", "unverified", "waiting_manager", "inbox"]);
 // Pilulky podľa druhu kroku – zamknutý obchod v nich nie je (je v „Čakám na manažéra", §5.3).
 export const STEP_KIND_VIEWS = new Set<string>(["call", "quote", "email", "design", "waiting"]);
 

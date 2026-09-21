@@ -18,13 +18,14 @@ import { runKeyed } from "@/lib/domain/idempotency";
 import { addRequests, outstandingOf, reconcileRequests, withdrawRequests } from "@/lib/domain/requestMutations";
 import { canonical } from "@/lib/domain/tasks";
 import { openTaskOf } from "@/lib/domain/taskMutations";
+import { refreshLockedStep } from "@/lib/domain/lockedStep";
 import { createPlanningActivity, describeNextAction } from "@/lib/activityLog";
 import { hadNextAction } from "@/lib/domain/leadWrites";
 import { can } from "@/lib/permissions";
 
 // Ceruzka pri „Chceli" (wave 5 §6.4): pridať, čo klient chce, alebo stiahnuť, čo už nechce – nikdy potichu prepísať.
 // Guard: requireDealWork → vlastník obchodu alebo manažér s deals.manage (obchod bez vlastníka je manažérsky);
-// mimo rozsahu NOT_FOUND. Otvorenej úlohy sa to nedotkne – tú ruší „Zrušiť úlohu".
+// mimo rozsahu NOT_FOUND. Otvorenú úlohu ceruzka nezruší, ale zamknutý krok prepočíta (P6) – tú ruší „Zrušiť úlohu".
 
 type Result = { success: true } | ActionError;
 
@@ -98,11 +99,14 @@ export async function setClientAsksAs(user: AccessUser, raw: SetClientAsksInput)
                     },
                 });
 
-                // §6.4: predvoľbu kroku dáva projekcia; ručne zvolený krok (hovor, čakanie, vlastný) sa neprepisuje.
-                // Zamknutý krok ostáva bez dátumu (I8) – úlohy sa ceruzka nedotýka.
-                if (isSystemStep(lead.nextActionKind)) {
-                    const locked = Boolean(await openTaskOf(tx, lead.id));
-                    const next = defaultStep(await outstandingOf(tx, lead.id), lead, { locked, now });
+                // Kým je úloha otvorená, krok je čistá funkcia nevybaveného + záložného kroku (P6, wave 4) – rovnako ako
+                // pri každej inej udalosti, ktorá ho mení; zámok ho pred voľným preplánovaním chráni sám, takže sa tu
+                // `isSystemStep` nepýta. Bez úlohy platí §6.4: predvoľbu kroku dáva projekcia, ručne zvolený krok
+                // (hovor, čakanie, vlastný) sa neprepisuje.
+                if (await openTaskOf(tx, lead.id)) {
+                    await refreshLockedStep(tx, actor, lead, source);
+                } else if (isSystemStep(lead.nextActionKind)) {
+                    const next = defaultStep(await outstandingOf(tx, lead.id), lead, { now });
                     if (next && next.nextActionKind !== lead.nextActionKind) {
                         await updateLead(tx, lead.id, next);
                         await tx.activity.create({
@@ -111,7 +115,7 @@ export async function setClientAsksAs(user: AccessUser, raw: SetClientAsksInput)
                                 userId: actor.id,
                                 type: hadNextAction(lead) ? "NEXT_ACTION_CHANGED" : "NEXT_ACTION_SET",
                                 source,
-                                note: `${describeNextAction(next)}${locked ? " · 🔒 čaká na úlohu" : ""}`,
+                                note: describeNextAction(next),
                             }),
                         });
                     }

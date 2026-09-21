@@ -1,10 +1,12 @@
-import type { ActivityType, RequestContent, RequestOrigin } from "@/app/generated/prisma/enums";
+import type { ActivitySource, ActivityType, RequestContent, RequestOrigin } from "@/app/generated/prisma/enums";
 import type { PrismaClient } from "@/app/generated/prisma/client";
 import { AccessError } from "@/lib/access/errors";
 import type { Tx } from "@/lib/access/locks";
 import {
     clientRequestState,
     outstandingContents,
+    REQUEST_CONTENT_LABEL,
+    type WithdrawInput,
     resolutionChanged,
     resolveRequests,
     type ClientRequestState,
@@ -15,14 +17,15 @@ import {
 } from "@/lib/domain/clientRequests";
 import { offerInstant, parseOfferMeta } from "@/lib/domain/offers";
 import { bumpLeadOnce } from "@/lib/domain/revision";
-import { loadPending, openTaskOf } from "@/lib/domain/taskMutations";
+import { sortTaskContents } from "@/lib/domain/tasks";
+import { loadPending, openTaskWithParts } from "@/lib/domain/taskMutations";
 
 // Zápisy „čo klient pýtal" (wave 5 §6.2, §6.7). Volajú ich príkazy pod zámkom Lead riadku; revízia sa zvýši raz.
 // Pravidlo: stav riadku sa NIKDY neprepína lokálne – každá operácia, ktorá sa dotkne požiadaviek alebo odoslaní,
 // skončí prepočtom reconcileRequests(). Prečiarknuté odoslanie tak riadok znova otvorí len vtedy, keď ho nespĺňa
 // žiadne iné platné odoslanie.
 
-type Db = Pick<PrismaClient, "leadRequest" | "activity" | "dealTask"> | Tx;
+type Db = Pick<PrismaClient, "leadRequest" | "activity" | "dealTask" | "dealTaskPart"> | Tx;
 
 const REQUEST_SELECT = {
     id: true,
@@ -74,11 +77,13 @@ export async function loadReceipts(db: Db, leadId: string): Promise<ReceiptRow[]
     return out;
 }
 
-// Čo práve robí / už vrátil manažér (§6.9). Wave 4 sem dodá tie isté dva zoznamy z taskPartState.
+// Čo práve robí / už vrátil manažér (§6.9). Wave 4: „robí sa" sú ČASTI otvorenej úlohy, ktoré sú ešte REQUESTED –
+// dodaná časť sa presunie z „robí sa" do „pripravené" bez toho, aby sa úloha zavrela. „Pripravené" je aj naďalej
+// celý obchod, nie jedna úloha: položka staršej úlohy neprestala čakať tým, že vznikla novšia.
 export async function managerWorkOf(db: Db, leadId: string): Promise<ManagerWork> {
-    const [open, prepared] = await Promise.all([openTaskOf(db, leadId), loadPending(db, leadId)]);
+    const [open, prepared] = await Promise.all([openTaskWithParts(db, leadId), loadPending(db, leadId)]);
     return {
-        making: open && open.type === "HELP" ? open.contents : [],
+        making: open && open.type === "HELP" ? sortTaskContents(open.parts.filter((p) => p.status === "REQUESTED").map((p) => p.kind)) : [],
         prepared: prepared.filter((i) => i.kind === "PRICE" || i.kind === "DESIGN"),
     };
 }
@@ -182,6 +187,37 @@ export async function withdrawRequests(
         data: { state: "WITHDRAWN", resolvedAt: now, resolvedById: input.actorId, resolvedActivityId: null, reason: input.reason },
     });
     return rows;
+}
+
+// Odloženie / uzavretie obchodu s nevybavenými požiadavkami (R01-3, Q2): otvorené riadky sa stiahnu, id-čka musia
+// sedieť PRESNE s tým, čo je otvorené teraz (inak STALE), dôvod je povinný. Nič otvorené = nič sa nerobí.
+// Volá sa pod zámkom Lead riadku, revíziu zvyšuje volajúci príkaz.
+export async function withdrawOpenOnLeave(
+    tx: Tx,
+    input: { leadId: string; actorId: string; source: ActivitySource; via: string; withdraw: WithdrawInput | null | undefined },
+): Promise<void> {
+    const open = (await tx.leadRequest.findMany({ where: { leadId: input.leadId, state: "OPEN" }, select: { id: true } }))
+        .map((r) => r.id)
+        .sort();
+    const ids = input.withdraw ? [...new Set(input.withdraw.ids)].sort() : [];
+    if (open.length === 0 && ids.length === 0) return;
+    const reason = input.withdraw?.reason.trim();
+    if (!reason) throw new AccessError("FORBIDDEN", "Napíš, prečo sa to neposiela.");
+    if (open.join() !== ids.join()) throw new AccessError("STALE", "Požiadavky sa medzitým zmenili – obnovujem.");
+    const withdrawn = await withdrawRequests(tx, { leadId: input.leadId, ids, actorId: input.actorId, reason });
+    await tx.activity.create({
+        data: {
+            leadId: input.leadId,
+            userId: input.actorId,
+            type: "CLIENT_ASK_CHANGED",
+            category: "BUSINESS",
+            source: input.source,
+            note: `Nepošle sa (${input.via === "SNOOZE" ? "obchod odložený" : "obchod uzavretý"}): ${withdrawn
+                .map((r) => REQUEST_CONTENT_LABEL[r.content])
+                .join(", ")} (${reason})`,
+            meta: { added: [], withdrawn: withdrawn.map((r) => ({ id: r.id, content: r.content })), reason, via: input.via },
+        },
+    });
 }
 
 // Vrátenie výsledku prvého hovoru zmaže riadky, ktoré ten hovor vytvoril; splnenú požiadavku už vrátiť nemožno

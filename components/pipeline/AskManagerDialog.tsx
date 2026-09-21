@@ -16,9 +16,9 @@ import { choosableStepKinds, requiredStepKinds, stepAfterTask, TASK_TEXT_MAX, ty
 import type { FollowUpNextKind } from "@/lib/domain/leadFlow";
 import { cn } from "@/lib/utils";
 
-// „Požiadať manažéra" (HELP) a „Odovzdať manažérovi" (HANDOVER) – wave 3 §6.1, §6.8.
-// - Obsah je jedna voľba (cena / návrh / iné). [WAVE 4] cena + návrh naraz → krok „Poslať návrh + cenu"
-//   (výber obsahu tu, krok v stepAfterTask v lib/domain/tasks.ts).
+// „Požiadať manažéra" (HELP) a „Odovzdať manažérovi" (HANDOVER) – wave 3 §6.1, §6.8; wave 4 §2.9.
+// - Obsah je viacnásobná voľba (cena · návrh · iné, ľubovoľná kombinácia): jedna úloha, jedna ČASŤ na druh.
+//   Manažér ich dodáva po jednej – naraz sa to ani nedá (§2.1 bod 6).
 // - Krok po vybavení sa nevyberá: cena → „Poslať cenu", návrh → „Poslať návrh", iné → ostáva aktuálny (dá sa zmeniť).
 //   Kým úloha beží, krok je zamknutý; keď manažér dodá, krok sa odomkne na dnes.
 // - Správa je len pre manažéra k tejto úlohe – nemení poznámku klienta ani poznámku ku kroku.
@@ -41,7 +41,7 @@ type Person = { id: string; firstName: string; lastName: string; mine?: boolean 
 const REFRESH_CODES = new Set(["NOT_FOUND", "STALE", "DEAL_CLOSED", "IDEMPOTENCY_CONFLICT", "UNAUTHENTICATED", "STEP_LOCKED"]);
 const HANDOVER_CHIPS = ["stránka", "eshop", "katalóg", "admin systém", "EN jazyk", "technické detaily"];
 
-// [WAVE 4] cena aj návrh naraz (bez poradia), „Iné" – otvorená otázka (wave-4-proposal.md §2.3).
+// Cena aj návrh naraz (bez poradia), „Iné" – otvorená otázka (wave-4-proposal.md §2.3).
 // Rovnaký farebný jazyk ako v akčnom okne (components/pipeline/InteractionSheet.tsx): zelená = peniaze,
 // fialová = návrh, sivá = neutrálne. Farbu nesie len ikona, nie celá karta.
 const CONTENT_TONE: Record<DealTaskContent, string> = {
@@ -91,17 +91,16 @@ export default function AskManagerDialog({
     const preferred = resolvers.find((r) => r.mine) ?? (resolvers.length === 1 ? resolvers[0] : null);
 
     // Predvolí sa to, čo klient pýta a ešte nedostal; inak (rep si to pýta sám) sa berie aktuálny krok.
-    const [content, setContent] = useState<DealTaskContent | null>(
-        target.outstanding.includes("DESIGN")
-            ? "DESIGN"
-            : target.outstanding.includes("PRICE")
-              ? "PRICE"
-              : target.nextActionKind === "SEND_DESIGN"
-                ? "DESIGN"
-                : target.nextActionKind === "SEND_QUOTE"
-                  ? "PRICE"
-                  : null,
-    );
+    const [contents, setContents] = useState<DealTaskContent[]>(() => {
+        const asked: DealTaskContent[] = [
+            ...(target.outstanding.includes("DESIGN") ? (["DESIGN"] as const) : []),
+            ...(target.outstanding.includes("PRICE") ? (["PRICE"] as const) : []),
+        ];
+        if (asked.length) return asked;
+        if (target.nextActionKind === "SEND_DESIGN") return ["DESIGN"];
+        if (target.nextActionKind === "SEND_QUOTE") return ["PRICE"];
+        return [];
+    });
     const [text, setText] = useState("");
     const [assigneeId, setAssigneeId] = useState(preferred?.id ?? "");
     const [pickAssignee, setPickAssignee] = useState(!preferred);
@@ -112,16 +111,16 @@ export default function AskManagerDialog({
     const [idempotencyKey, setIdempotencyKey] = useState(newKey);
 
     const current = { kind: target.nextActionKind, note: target.nextActionNote };
-    const auto = content ? stepAfterTask([content], current, target.pending, defaultStepNote, target.outstanding) : null;
+    const auto = contents.length ? stepAfterTask(contents, current, target.pending, defaultStepNote, target.outstanding) : null;
     const choosable = choosableStepKinds(target.pending);
     const customStep = Boolean(auto && !auto.fixed && changeStep && kind);
     const stepKind = customStep ? kind! : (auto?.kind ?? null);
     const stepNoteValue = customStep ? (stepNote ?? (kind === current.kind ? current.note : defaultStepNote(kind)) ?? "") : (auto?.note ?? "");
     const narrowed = requiredStepKinds(target.pending) !== null;
     const assignee = resolvers.find((r) => r.id === assigneeId) ?? null;
-    const option = CONTENT_OPTIONS.find((o) => o.value === content);
+    const option = CONTENT_OPTIONS.find((o) => contents.includes(o.value));
 
-    const missing = help && !content
+    const missing = help && contents.length === 0
         ? "Vyber, čo potrebuješ"
         : !text.trim()
           ? help
@@ -139,7 +138,7 @@ export default function AskManagerDialog({
                 expectedRevision: target.revision,
                 idempotencyKey,
                 type,
-                contents: help && content ? [content] : [],
+                contents: help ? contents : [],
                 text: text.trim(),
                 assigneeId: assignee.id,
                 // Krok posiela len zmena pri „Iné"; inak ho server odvodí rovnakým pravidlom.
@@ -172,19 +171,19 @@ export default function AskManagerDialog({
                 {help && (
                     <div className="space-y-2">
                         <SectionLabel>Čo potrebuješ</SectionLabel>
-                        <div role="radiogroup" aria-label="Čo potrebuješ" className="grid grid-cols-3 gap-2">
+                        <div role="group" aria-label="Čo potrebuješ" className="grid grid-cols-3 gap-2">
                             {CONTENT_OPTIONS.map((o) => {
-                                const on = content === o.value;
+                                const on = contents.includes(o.value);
                                 const Icon = o.icon;
                                 return (
                                     <button
                                         key={o.value}
                                         type="button"
-                                        role="radio"
+                                        role="checkbox"
                                         aria-checked={on}
                                         data-vaul-no-drag
                                         onClick={() => {
-                                            setContent(o.value);
+                                            setContents((v) => (on ? v.filter((c) => c !== o.value) : [...v, o.value]));
                                             setChangeStep(false);
                                             setKind(null);
                                             setStepNote(null);
@@ -204,6 +203,11 @@ export default function AskManagerDialog({
                                 );
                             })}
                         </div>
+                        {contents.length > 1 && (
+                            <p className="text-xs text-muted-foreground">
+                                Jedna úloha, {contents.length} časti – {assignee?.firstName ?? "manažér"} ich môže odovzdať po jednej.
+                            </p>
+                        )}
                     </div>
                 )}
 
