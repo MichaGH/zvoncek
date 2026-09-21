@@ -1361,11 +1361,11 @@ tests.w3aCorrectionOrder = async () => {
         const mid = await lead(id);
         await offers.correctRecordAs(manager, rows[order[1]].id, "omyl v teste");
         const end = await lead(id);
-        finals.push(`${codeOf(afterFirst)}|mid=${mid.offerPriceAt ? "set" : "null"}|end=${end.offerPriceAt ? "set" : "null"}|disclosed=${end.priceDisclosed}`);
+        finals.push(`${codeOf(afterFirst)}|mid=${mid.offerPriceAt ? "set" : "null"}|end=${end.offerPriceAt ? "set" : "null"}`);
     }
     check(
-        "W3a-C: correcting two price sends in either order ends with no price known (legacy priceDisclosed untouched)",
-        finals.every((f) => f === "OK|mid=set|end=null|disclosed=false"),
+        "W3a-C: correcting two price sends in either order ends with no price known",
+        finals.every((f) => f === "OK|mid=set|end=null"),
         finals.join(" ; "),
     );
 
@@ -1418,8 +1418,8 @@ tests.w3aHistorical = async () => {
     );
 };
 
-// V1 → V2 prevod: prevedené odoslanie skryje v histórii svoje staré zdrojové riadky, je „Odoslané" a „Klient dostal";
-// staré riadky ostávajú skutočným kontaktom pre „Naposledy". Oprava prevedeného záznamu zachová jeho provenienciu.
+// V1 → V2 prevod: prevedené odoslanie (pôvodný čas, historical: false) sa správa ako každé iné – je „Klient dostal",
+// „Odoslané" aj „Naposledy"; oprava zachová jeho neviditeľnú provenienciu.
 tests.w3aMigratedSend = async () => {
     const offers = await import("../../lib/commands/offers");
     const { recomputeOffers } = await import("../../lib/domain/offerMutations");
@@ -1432,28 +1432,25 @@ tests.w3aMigratedSend = async () => {
     const rep = await makeUser("SALES_REP");
     const id = await makeDeal(rep);
     const at = new Date(Date.now() - 20 * 86_400_000);
-    const oldEmail = await prisma.activity.create({ data: { leadId: id, userId: manager.id, type: "EMAIL_SENT", category: "BUSINESS", source: "PIPELINE", createdAt: at } });
-    const oldQuote = await prisma.activity.create({ data: { leadId: id, userId: manager.id, type: "QUOTE_SENT", category: "BUSINESS", source: "PIPELINE", note: "Cenová ponuka odoslaná: 499 €", createdAt: new Date(at.getTime() + 60_000) } });
     const meta = {
         channel: "EMAIL" as const,
         contents: ["ABOUT_US" as const, "PRICE" as const],
         price: { amount: "499", note: null },
         sentOn: bt.businessDate(at),
-        historical: true,
+        historical: false,
         migrated: true,
-        migration: { key: `v2mig:offer:${id}:${bt.businessDate(at)}`, rule: "D-003r2", sources: [oldEmail.id, oldQuote.id], originalAt: at.toISOString(), amountSource: "QUOTE_NOTE" as const, migratedAt: new Date().toISOString() },
+        migration: { key: `v2mig:offer:${id}:${bt.businessDate(at)}`, rule: "D-003r2", sources: ["gone1", "gone2"], originalAt: at.toISOString(), amountSource: "QUOTE_NOTE" as const, migratedAt: new Date().toISOString() },
     };
     const migrated = await prisma.activity.create({ data: { leadId: id, userId: manager.id, type: "OFFER_SENT", category: "BUSINESS", source: "PIPELINE", note: offerNote(meta), meta, createdAt: at } });
     await prisma.$transaction((tx) => recomputeOffers(tx, id));
     const detail = await getDealDetail(id, dealScope(manager), dealCapabilities(manager));
     const row = (await getDealList({ scope: dealScope(manager), owner: { userId: rep.id }, view: "all", take: 500 })).rows.find((r) => r.id === id);
-    const ids = new Set(detail!.activities.map((a) => a.id));
     const shown = detail!.activities.find((a) => a.id === migrated.id);
     check(
-        "MIG-1: a migrated send hides its V1 source rows in the history, is labelled migrated, and counts as received / last sent",
-        !ids.has(oldEmail.id) && !ids.has(oldQuote.id) && shown?.offer?.migrated === true && detail!.offers.lastPrice?.amount === "499" &&
-            detail!.lastOffer !== null && row?.lastOffer !== null && row?.gotPrice === true,
-        `hidden=${!ids.has(oldEmail.id)}/${!ids.has(oldQuote.id)} migrated=${shown?.offer?.migrated} price=${detail!.offers.lastPrice?.amount} lastOffer=${detail!.lastOffer?.text}/${row?.lastOffer?.text}`,
+        "MIG-1: a migrated send behaves like any other send – received, 'Odoslané', no 'doplnené spätne' badge",
+        shown?.offer?.historical === false && detail!.offers.lastPrice?.amount === "499" && detail!.lastOffer !== null &&
+            row?.lastOffer !== null && row?.gotPrice === true,
+        `historical=${shown?.offer?.historical} price=${detail!.offers.lastPrice?.amount} lastOffer=${detail!.lastOffer?.text}/${row?.lastOffer?.text}`,
     );
     const fix = await offers.correctRecordAs(manager, migrated.id, "test opravy prevodu");
     const after = parseOfferMeta((await prisma.activity.findUniqueOrThrow({ where: { id: migrated.id } })).meta);

@@ -41,7 +41,7 @@ import { requestsByLead } from "@/lib/domain/requestMutations";
 import { ROLE_PERMISSIONS } from "@/lib/permissions";
 import { summarizeEvents, type Confidence } from "@/lib/tracking/confidence";
 import { trackedUrl } from "@/lib/domain/designLinks";
-import { LAST_TOUCH_TYPES, lastOfferOf, migratedSourceIds, parseOfferMeta, summarizeOffers, type OfferDialogDeal, type OfferRow } from "@/lib/domain/offers";
+import { LAST_TOUCH_TYPES, lastOfferOf, parseOfferMeta, summarizeOffers, type OfferDialogDeal, type OfferRow } from "@/lib/domain/offers";
 import type {
     ActivityType,
     CallOutcome,
@@ -790,7 +790,6 @@ export async function getDealDetail(
         if (meta) offerRows.push({ id: a.id, createdAt: a.createdAt, revertedAt: a.revertedAt, meta });
     }
     const offers = summarizeOffers(offerRows);
-    const replacedBySend = migratedSourceIds(lead.activities);
     // Rovnaké pravidlo ako LAST_TOUCH_WHERE v zozname.
     const lastTouch = lead.activities.find((a) => {
         if (!(LAST_TOUCH_TYPES as readonly string[]).includes(a.type) || a.revertedAt) return false;
@@ -900,7 +899,7 @@ export async function getDealDetail(
         lastTouch: lastTouch
             ? { type: lastTouch.type, outcome: lastTouch.outcome, note: lastTouch.note, at: lastTouch.createdAt.toISOString() }
             : null,
-        activities: lead.activities.filter((a) => !replacedBySend.has(a.id)).map((a) => {
+        activities: lead.activities.map((a) => {
             const offer = a.type === "OFFER_SENT" ? parseOfferMeta(a.meta) : null;
             const correction = correctionOf(a.meta);
             return {
@@ -916,9 +915,7 @@ export async function getDealDetail(
                 taskId: a.taskId,
                 revertedAt: a.revertedAt?.toISOString() ?? null,
                 correctionReason: correction,
-                offer: offer
-                    ? { sentOn: offer.sentOn, historical: offer.historical, migrated: offer.migrated === true, channel: offer.channel, via: offer.via ?? null }
-                    : null,
+                offer: offer ? { sentOn: offer.sentOn, historical: offer.historical, channel: offer.channel, via: offer.via ?? null } : null,
             };
         }),
         // Súhrn sledovania návrhu – bez tokenov, URL a IP (spravovanie návrhov má manažér vo vlastnej karte).

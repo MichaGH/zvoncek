@@ -72,7 +72,7 @@ function TaskLine({ row, dense, inbox }: { row: DealRow; dense?: boolean; inbox?
     );
 }
 
-// Čo klient už dostal (round 2 §2c) – z OFFER_SENT záznamov (aj prevedených zo starého systému).
+// Čo klient už dostal (round 2 §2c) – z OFFER_SENT záznamov.
 function SentIcons({ row }: { row: DealRow }) {
     if (!row.hasDesignSent && !row.gotPrice && !row.gotPricelist) return null;
     return (

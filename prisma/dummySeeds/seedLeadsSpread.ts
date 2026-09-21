@@ -141,7 +141,6 @@ async function main() {
             nextActionKind: "WAITING_FOR_CLIENT",
             nextActionAt: future(7),
             nextActionNote: "Čakáme na výber fotografií od klientky.",
-            quoteSentAt: ago(5),
             price: "890.00",
         },
         {
@@ -169,7 +168,6 @@ async function main() {
             createdById: scout.id,
             nextActionKind: "CALL",
             nextActionAt: future(3),
-            quoteSentAt: ago(10),
             price: "1600.00",
             priceNote: "900 € eshop + 700 € napojenie na sklad",
         },
@@ -222,7 +220,6 @@ async function main() {
             ownerId: manager.id,
             createdById: scout.id,
             price: "890.00",
-            quoteSentAt: ago(30),
             designSentAt: ago(15),
         },
         {
@@ -236,8 +233,6 @@ async function main() {
             ownerId: manager.id,
             createdById: scout.id,
             price: "690.00",
-            quoteSentAt: ago(45),
-            aboutUsSentAt: ago(40),
         },
 
         // ── LOST ─────────────────────────────────────────────────────────────

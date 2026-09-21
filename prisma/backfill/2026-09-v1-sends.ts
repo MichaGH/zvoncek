@@ -11,8 +11,8 @@
 // návrh, odoslanie mimo obchodu / na zmazanom leade, cena bez CP na inom obchode, iná suma CP než cena…) je BLOKER a
 // beh skončí pred akýmkoľvek zápisom. Takéto prípady rozhoduje Michal, nie skript.
 //
-// Záznam: createdAt = pôvodný čas V1 (sedí na svojom mieste v histórii), meta.historical + meta.migrated, provenancia v
-// meta.migration (zdrojové aktivity sa v histórii skryjú – migratedSourceIds). Aktér = autor najstaršej zdrojovej
+// Záznam: createdAt = pôvodný čas V1, historical: false (správa sa ako bežné odoslanie), meta.migrated + provenancia v
+// meta.migration (kľúč, zdroje). Staré zdrojové riadky zmaže až 2026-09-v2-normalize.ts. Aktér = autor najstaršej zdrojovej
 // aktivity. Lead.price / priceNote / krok / stav sa nemenia; súhrny prepočíta recomputeOffers (revízia +1 raz).
 // Opakovateľný: kľúč v2mig:offer:<leadId>:<sentOn>; existujúci zhodný záznam sa preskočí, odlišný = bloker.
 //
@@ -75,7 +75,7 @@ async function plan(migratedAt: string): Promise<{ events: Planned[]; blockers: 
     const leads = await prisma.lead.findMany({
         select: {
             id: true, number: true, deletedAt: true, pipelineEnteredAt: true, price: true, priceNote: true,
-            quoteSentAt: true, aboutUsSentAt: true, designSentAt: true, priceDisclosed: true,
+            designSentAt: true,
             activities: {
                 where: { type: { in: ["EMAIL_SENT", "QUOTE_SENT", "DESIGN_SENT", "CONTACT_UPDATED", "TRACKER_UPDATED"] } },
                 select: { id: true, type: true, note: true, userId: true, createdAt: true },
@@ -85,6 +85,11 @@ async function plan(migratedAt: string): Promise<{ events: Planned[]; blockers: 
         },
         orderBy: { number: "asc" },
     });
+    // Staré stĺpce V1 (quoteSentAt / aboutUsSentAt) nie sú v Prisma schéme V2 (zmažú sa na konci okna) – číta ich surové SQL.
+    const v1 = new Map(
+        (await prisma.$queryRaw<{ id: string; quoteSentAt: Date | null; aboutUsSentAt: Date | null }[]>`
+            SELECT id, "quoteSentAt", "aboutUsSentAt" FROM "Lead"`).map((r) => [r.id, r]),
+    );
     // Po prevode prepočet nastaví Design.sentAt na čas spoločného emailu, takže druhý návrh toho istého emailu sa môže
     // posunúť o pár sekúnd. Pár (návrh ↔ DESIGN_SENT) z už zapísaného prevodu preto platí aj mimo 2 s okna.
     const pairedByMigration = new Set<string>();
@@ -96,7 +101,8 @@ async function plan(migratedAt: string): Promise<{ events: Planned[]; blockers: 
     const blockers: string[] = [];
     const notes: string[] = [];
 
-    for (const l of leads) {
+    for (const lead of leads) {
+        const l = { ...lead, quoteSentAt: v1.get(lead.id)?.quoteSentAt ?? null, aboutUsSentAt: v1.get(lead.id)?.aboutUsSentAt ?? null };
         const email = l.activities.filter((a) => a.type === "EMAIL_SENT");
         const quote = l.activities.filter((a) => a.type === "QUOTE_SENT");
         const dsent = l.activities.filter((a) => a.type === "DESIGN_SENT");
@@ -180,7 +186,9 @@ async function plan(migratedAt: string): Promise<{ events: Planned[]; blockers: 
                 ...(amount ? { price: { amount, note: price != null && Number(amount) === price ? (l.priceNote ?? null) : null } } : {}),
                 ...(designs.length ? { designs } : {}),
                 sentOn,
-                historical: true,
+                // Odoslanie so skutočným časom – v2 ho berie ako každé iné (Naposledy, Odoslané, štatistiky). Rozlíšenie
+                // „zo starého systému" Michal nechce; meta.migration ostáva len ako neviditeľná proveniencia a kľúč.
+                historical: false,
                 migrated: true,
                 migration: {
                     key,

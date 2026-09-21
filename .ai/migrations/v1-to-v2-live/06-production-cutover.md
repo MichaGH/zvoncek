@@ -37,27 +37,30 @@ Operator: Claude (commands). Decision owner: Michal (freeze, GO/NO-GO, rollback)
 
 ## D. Migration (same artifacts as the rehearsal)
 
-| # | Command (`$W` prefix) | Clone 1 result | Stop if |
+Rehearsal 2 numbers are filled in after it runs on a fresh copy (see `PROGRESS.md`). Rehearsal 1 numbers in brackets.
+
+| # | Command (`$W` prefix) | Expected | Stop if |
 |---|---|---|---|
 | 5 | `npx prisma db execute --file .ai/migrations/v1-to-v2-live/sql/01-schema-v1-to-v2.sql` | "Script executed successfully" | any error |
-| 6 | `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` | "empty migration" | any statement |
+| 6 | `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` | exactly the 6 `DROP COLUMN` + 1 `DROP CONSTRAINT` of `sql/03` (they run last) | anything else |
 | 7 | `npx prisma db execute --file .ai/migrations/v1-to-v2-live/sql/02-obchod-team.sql` | success | error (a user missing) |
-| 8 | `npx tsx prisma/backfill/2026-09-assignments.ts --expect-endpoint <ep> --expect-db neondb --owner-username michal` | DEAL_TO_MIGRATE 116, CALLWORK_TO_MIGRATE 1282, POOL 334, TERMINAL_OK 1888, CONFLICT 0 | CONFLICT > 0, NEW_WITH_HISTORY > 0, OUTCOME_CORRECTED abort |
-| 9 | same + `--apply --confirm <ep>`, then same + `--verify` | COMMITTED; "RESULT: clean" | not clean |
-| 10 | `npx tsx prisma/backfill/2026-09-v1-sends.ts --expect-endpoint <ep>` | 88 sends / 86 leads, 0 blockers | any BLOCKER (Michal decides) |
-| 11 | same + `--apply --confirm <ep>`, then same + `--verify` | APPLIED 88; "RESULT: clean" | not clean |
-| 12 | `npx tsx prisma/backfill/2026-09-wave5-requests.ts --expect-endpoint <ep> --expect-db neondb` | receipts INFO 86 / PRICE 19 / DESIGN 12, openSteps DESIGN 11 / EMAIL 1, blocker 0 | blocker > 0 |
-| 13 | same + `--apply --confirm <ep>`, then same + `--verify` | created 129; "VERIFY OK" | not OK |
-| 14 | `npx tsx .ai/migrations/v1-to-v2-live/tools/post-check.ts` | "all post-migration invariants hold" | any FAIL |
+| 8 | `npx tsx prisma/backfill/2026-09-assignments.ts --expect-endpoint <ep> --expect-db neondb --owner-username michal` | [116 deals, 1 282 call work, 334 pool, 1 888 terminal, 0 conflict] | CONFLICT / NEW_WITH_HISTORY / OUTCOME_CORRECTED |
+| 9 | same + `--apply --confirm <ep>`, then same + `--verify` | "RESULT: clean" | not clean |
+| 10 | `npx tsx prisma/backfill/2026-09-v1-sends.ts --expect-endpoint <ep>` | [88 sends / 86 leads, 0 blockers] | any BLOCKER |
+| 11 | same + `--apply --confirm <ep>`, then same + `--verify` | "RESULT: clean" | not clean |
+| 12 | `npx tsx prisma/backfill/2026-09-v2-normalize.ts --expect-endpoint <ep>` | 116 first calls, 116 asks, 116 ownership rows, 44 closed steps, 75 call-stage steps, 22 price notes, 7 audits, 97 old sends; 0 blockers | any BLOCKER |
+| 13 | same + `--apply --confirm <ep>`, then same + `--verify` | "RESULT: clean" (every line 0) | any FAIL |
+| 14 | `npx prisma db execute --file .ai/migrations/v1-to-v2-live/sql/03-drop-v1-columns.sql` then `migrate diff` (step 6 command) | success; diff **empty** | error / any statement |
+| 15 | `npx tsx .ai/migrations/v1-to-v2-live/tools/post-check.ts` | "all post-migration invariants hold" | any FAIL |
 
-Numbers grow only by the expected drift (new deals from telesales add DEAL_TO_MIGRATE and OPEN "Chceli" rows).
-Duration on clone 1: well under 5 minutes of script time.
+`2026-09-wave5-requests.ts` is **no longer part of the route** (D-009: "Chceli" comes from the first call, not from
+receipts). Numbers grow only by the expected drift.
 
 ## E. Deploy and reopen
 
-15. Merge the approved PR into `main` → Vercel builds V2 (≈2–3 min). Wait for "Ready".
-16. Smoke test on the live URL (Michal, logged in as himself): Pipeline opens on "Na spracovanie" (12 deals waiting
-    for návrh/email), #628 / #404 / #2365 detail, a call-queue page as timea is not possible → check
+15b. Merge the approved PR (`feature/sales-rep` → `main`) → Vercel builds V2 (≈2–3 min). Wait for "Ready".
+16. Smoke test on the live URL (Michal, logged in as himself): Pipeline opens on "Na spracovanie" (open deals whose
+    client still waits for návrh/info), #628 / #404 / #2365 detail, a call-queue page as timea is not possible → check
     `/dashboard/calls/assignments` shows timea's 1 280 contacts; one harmless write (e.g. change a note) succeeds.
 17. **GO:** tell the team they can work. **NO-GO:** rollback below.
 18. After GO: `.env.migration` back to a non-production value (or delete it); keep `pre-v2-restore-2026-09-21` for at
@@ -66,10 +69,10 @@ Duration on clone 1: well under 5 minutes of script time.
 ## F. Rollback (only before writes reopen, or with Michal's explicit decision after)
 
 - **Before step 5:** nothing changed. Unfreeze, V1 keeps running.
-- **After step 5, before step 15 (V1 still deployed):** Neon → Production → **Restore** to the timestamp of
+- **After step 5, before the deploy (V1 still deployed):** Neon → Production → **Restore** to the timestamp of
   `pre-v2-restore-2026-09-21` (or restore from that branch). V1 code is unchanged, so V1 works again. Unfreeze.
-- **After step 15:** Vercel → previous (V1) deployment → **Instant Rollback**, then the Neon restore as above.
+- **After the deploy:** Vercel → previous (V1) deployment → **Instant Rollback**, then the Neon restore as above.
   Any work done in V2 after reopening would be lost by the restore, so decide before reopening writes.
 
-The obsolete columns `quoteSentAt`, `aboutUsSentAt`, `priceDisclosed` stay tonight (dead, unread). Dropping them is a
-separate later step (P-01..P-03).
+The dead V1 columns are dropped in step 14 (D-009: nothing V1-shaped stays). V1 cannot run on the database after
+that step; rollback is the Neon restore point, as for every other step.

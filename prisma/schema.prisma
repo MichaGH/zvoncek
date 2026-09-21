@@ -28,7 +28,6 @@ model User {
   createdAt   DateTime  @default(now())
 
   ownedLeads   Lead[]     @relation("OwnedLeads")
-  lockedLeads  Lead[]     @relation("LockedLeads")
   createdLeads Lead[]     @relation("CreatedLeads")
   activities   Activity[]
 
@@ -106,18 +105,11 @@ model Lead {
   callbackHasTime Boolean       @default(false) // true = klient dal presný čas; false = len deň
   callbackNote    String? // "vraj sa ozvať o hodinu, bola na porade"
 
-  // KEDY SME ČO POSLALI – presne to, čo si chcel vidieť na prvý pohľad
-  quoteSentAt   DateTime? // cenová ponuka
-  designSentAt  DateTime? // dizajnový návrh
-  designUrl     String?
-  aboutUsSentAt DateTime? // info o nás / odpoveď na ich mail
-
-  price          Decimal? @db.Decimal(10, 2) // celková nastrelená cena – tá sa zobrazuje
-  priceNote      String? // rozpis/poznámka: "499 stránka + 299 admin systém" – na hover
-  priceDisclosed Boolean  @default(false) // klient cenu pozná (ústne aj mailom)
+  price     Decimal? @db.Decimal(10, 2) // aktuálna cena obchodu – čo klient dostal, je snímka v OFFER_SENT
+  priceNote String? // rozpis/poznámka: "499 stránka + 299 admin systém" – na hover
 
   // ČO KLIENT DOSTAL (round 2, wave 3a) – súhrn platných OFFER_SENT aktivít, vždy prepočítaný (lib/domain/offers.ts).
-  // quoteSentAt / aboutUsSentAt / priceDisclosed vyššie sú staré údaje V1 – prevod ich zmenil na OFFER_SENT, kód ich nečíta ani nezapisuje.
+  designSentAt     DateTime? // najnovší poslaný návrh (sledovaný aj bez Design riadku)
   offerAboutUsAt   DateTime? // prvýkrát „o nás"
   offerPricelistAt DateTime? // prvýkrát cenník
   offerPriceAt     DateTime? // naposledy konkrétna cena (email aj telefón)
@@ -131,11 +123,6 @@ model Lead {
 
   // soft delete
   deletedAt DateTime?
-
-  // claim (future-proof, zatiaľ nevyužité)
-  lockedBy   User?     @relation("LockedLeads", fields: [lockedById], references: [id])
-  lockedById String?
-  lockedAt   DateTime?
 
   // Zodpovednosť za volanie (len fáza volania). null = v spoločnej fronte / mimo fázy volania.
   assignedCaller   User?     @relation("AssignedCaller", fields: [assignedCallerId], references: [id])

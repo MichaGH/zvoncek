@@ -177,3 +177,23 @@ inventory must report 0 for each.
 If the final clone shows a non-zero gate, stop, show Michal the lead numbers and decide. Do not add a generic rule
 in advance. The existing Round 1 and Wave 5 scripts need **no change** for this data: no deleted-lead handling, no
 reset handling, no D-007 dating. §6 and §7 above stay as the reasoning record only.
+
+## 10. V2 normalization (D-009, Michal 2026-09-22) — replaces §6 and the wave-5 receipts backfill
+
+Script `prisma/backfill/2026-09-v2-normalize.ts`, run after §3–§5 conversion and before `sql/03-drop-v1-columns.sql`:
+
+| Source (after conversion) | Result |
+|---|---|
+| first call `WANTS_QUOTE` / `WANTS_DESIGN` / `WANTS_EMAIL` (its time = `pipelineEnteredAt`) | outcome `INTERESTED`, `meta.asked` = [`PRICE` / `DESIGN` / `INFO`]; `LeadRequest` (that content, caller, call time, `sourceActivityId` = call, `origin LIVE`, key `v2norm:ask:<callId>`); then `reconcileRequests` |
+| deal without `DealOwnership` | one `HANDOFF` row (from NULL → `ownerId`, by `handedOffById`, at `pipelineEnteredAt`) |
+| WON / LOST / UNREACHABLE with a step | step cleared (`NO_NEXT_ACTION`) |
+| LOST / UNREACHABLE with `OPEN` asks | `WITHDRAWN`, reason "obchod uzavretý", `resolvedAt = closedAt`, by the last status changer |
+| call-stage lead with a step | step cleared |
+| `CONTACT_UPDATED` "Cena: X → Y" | same row becomes `PRICE_CHANGED` (`BUSINESS`, meta from/to/`EDIT`) |
+| `CONTACT_UPDATED` "Klient oboznámený s cenou" / "Oboznámenie … zrušené" / "Odoslanie cenovej ponuky zrušené" | deleted |
+| `EMAIL_SENT` / `QUOTE_SENT` / `DESIGN_SENT` | deleted — gate: each is a source of a migrated send or an undone CP |
+| migrated `OFFER_SENT` with `historical: true` (older rehearsal output) | `historical: false` |
+
+Blockers: a deal whose positive first call is not exactly one row at `pipelineEnteredAt`, a closed deal without
+`closedAt`, an unparsable price note, an old send row not covered. `--verify` asserts every item above is 0.
+

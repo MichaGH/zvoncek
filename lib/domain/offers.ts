@@ -38,14 +38,14 @@ const offerMetaSchema = z.object({
     // Návrh bol poslaný, ale v systéme preň neexistuje Design riadok (PDF, obyčajný odkaz, starý obchod) – R01-5.
     // Nikdy spolu s `designs`; nemení žiadny Design.sentAt.
     untrackedDesign: z.boolean().optional(),
-    migrated: z.boolean().optional(), // prevedené zo starého systému jednorazovým prevodom (V1 → V2)
-    // Prevod: ktoré staré QUOTE_SENT / EMAIL_SENT / DESIGN_SENT riadky tento záznam nahrádza – história ich už neukazuje.
+    // Neviditeľná proveniencia jednorazového prevodu V1 → V2 (kľúč pre opakovateľnosť skriptu). Aplikácia ju nečíta.
+    migrated: z.boolean().optional(),
     // Celý tvar je vymenovaný (nie passthrough): oprava záznamu prepisuje meta z tohto parsovania a nič nesmie stratiť.
     migration: z
         .object({
             key: z.string(), // deterministický kľúč prevodu (v2mig:offer:<leadId>:<sentOn>)
             rule: z.string(), // schválené pravidlo (D-003r2) alebo rozhodnutie pre konkrétny obchod
-            sources: z.array(z.string()), // id starých aktivít
+            sources: z.array(z.string()), // id starých aktivít (po prevode zmazaných)
             designIds: z.array(z.string()).optional(),
             originalAt: z.string(), // ISO čas najstaršieho zdroja
             amountSource: z.enum(["QUOTE_NOTE", "CURRENT_PRICE", "DECISION"]).optional(),
@@ -108,9 +108,8 @@ export function offerNote(meta: Pick<OfferMeta, "channel" | "contents" | "price"
 // Posledné, čo klient od nás dostal (platné záznamy, v poradí compareOffers). Zobrazuje sa pri „Naposledy",
 // aby po ďalšom hovore nezmizlo, že čakáme, kým si pozrú návrh / cenu (round 2 §2d).
 export function lastOfferOf(rows: OfferRow[]): { text: string; at: string } | null {
-    // Ručne spätne doplnené odoslania sa tu nezobrazujú – „Naposledy" je o nedávnom kontakte (§2c 5.3). Prevedené
-    // odoslania zo starého systému (migrated) áno: nesú presný pôvodný čas a boli to skutočné emaily.
-    const valid = rows.filter((r) => r.revertedAt === null && (!r.meta.historical || r.meta.migrated)).sort(compareOffers);
+    // Spätne doplnené staré odoslania sa tu nezobrazujú – „Naposledy" je o nedávnom kontakte (§2c 5.3).
+    const valid = rows.filter((r) => r.revertedAt === null && !r.meta.historical).sort(compareOffers);
     const last = valid[valid.length - 1];
     return last ? { text: offerSummary(last.meta), at: offerInstant(last.meta, last.createdAt).toISOString() } : null;
 }
@@ -244,19 +243,6 @@ export function offerFingerprintOfMeta(meta: unknown): string {
 
 export function isValidSentOn(value: string, today: string): boolean {
     return isValidBusinessDate(value) && value <= today;
-}
-
-// Staré riadky odoslaní, ktoré už nahradil prevedený OFFER_SENT (meta.migration.sources). V histórii sa ukazuje len
-// prevedený záznam, aby každé staré odoslanie bolo vidieť raz. „Naposledy" ich naďalej číta – boli to skutočné kontakty.
-export function migratedSourceIds(rows: readonly { type: string; meta: unknown }[]): Set<string> {
-    const ids = new Set<string>();
-    for (const r of rows) {
-        if (r.type !== "OFFER_SENT") continue;
-        const meta = parseOfferMeta(r.meta);
-        if (!meta?.migrated) continue;
-        for (const id of meta.migration?.sources ?? []) ids.add(id);
-    }
-    return ids;
 }
 
 // „Naposledy" = posledný SKUTOČNÝ kontakt s klientom. Úpravy (cena, krok), požiadavky ani audit sem nepatria.

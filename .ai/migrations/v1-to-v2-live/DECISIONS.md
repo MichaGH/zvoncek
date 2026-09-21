@@ -35,7 +35,7 @@ Statuses: `PROPOSED`, `APPROVED`, `SUPERSEDED`, `REJECTED`.
   - **`PRICE` only when a price was explicitly sent** and an amount exists. A filled `Lead.price` alone, or the
     "klient pozná cenu" tick alone, is **not** a receipt (Q2).
   - No `PRICELIST`, no `REVIEW`.
-  - All converted sends: channel `EMAIL`, `historical: true`, `migrated: true`, dated with the old click's business day,
+  - All converted sends: channel `EMAIL`, `historical: false` (D-009), `migrated: true`, dated with the old click's business day,
     provenance per `02-data-mapping.md` §5.
 - Answers (Michal 2026-09-21):
   - **Q2 — APPROVED:** a price counts as known only if it was explicitly sent. No receipt from a filled price or the
@@ -70,14 +70,14 @@ Statuses: `PROPOSED`, `APPROVED`, `SUPERSEDED`, `REJECTED`.
 
 ## D-005 — preserve old evidence
 
-- Status: **APPROVED**
+- Status: **SUPERSEDED by D-009** (old send rows and audits are removed after conversion; the restore point keeps V1)
 - Decision: conversion adds canonical events; it does not delete `QUOTE_SENT`, `EMAIL_SENT`, `DESIGN_SENT` or audit
   rows. The UI must avoid displaying source and canonical event as two client sends. Every canonical migrated event
   records source identity and rule/confidence in provenance.
 
 ## D-006 — contraction timing
 
-- Status: **PROPOSED**
+- Status: **SUPERSEDED by D-009** (columns dropped in the window)
 - Recommendation: deploy V2 after canonical conversion while P-01..P-03 remain read-only, observe the stabilized
   production system, then drop them in a separate window. This maximizes repairability. Before approval, confirm the
   final V2 commit does not read those columns and define what application rollback means after V2 starts accepting
@@ -85,7 +85,7 @@ Statuses: `PROPOSED`, `APPROVED`, `SUPERSEDED`, `REJECTED`.
 
 ## D-007 — "Chceli" open-step rows are dated by the step, not by the first receipt
 
-- Status: **NOT NEEDED (2026-09-21, inventory 1)** — 0 open SEND_* deals with an earlier receipt; the current script
+- Status: **SUPERSEDED by D-009** (asks come from the first call); earlier: NOT NEEDED (2026-09-21, inventory 1) — 0 open SEND_* deals with an earlier receipt; the current script
   is correct for the data. Kept as a gate (`02-data-mapping.md` §9).
 - Problem: `2026-09-wave5-requests.ts` creates an `OPEN` row for an open `SEND_*` step only if the lead never received
   that content. An old deal that received návrh v1 and now waits for návrh v2 would lose the open návrh in "Chceli".
@@ -99,3 +99,24 @@ Statuses: `PROPOSED`, `APPROVED`, `SUPERSEDED`, `REJECTED`.
 - Problem: V1 `resetLeadToCalls` and `correctOutcome` produce data the Round 1 backfill aborts on (CONFLICT / global
   `OUTCOME_CORRECTED` check). Spec of the recommended handling: `02-data-mapping.md` §7.
 
+## D-009 — the migrated data must look as if it was always V2 (supersedes D-002 timing, D-006, D-007, part of D-005)
+
+- Status: **APPROVED by Michal 2026-09-22** (after the ChatGPT review found 13 closed deals with an unsent "Poslať…").
+- Decision (all in tonight's window, script `prisma/backfill/2026-09-v2-normalize.ts` + `sql/03-drop-v1-columns.sql`):
+  1. **Closed deals as V2 closes them:** no step on WON / LOST / UNREACHABLE; on LOST / UNREACHABLE whatever the client
+     asked for and never got is `WITHDRAWN` "obchod uzavretý" at the closing date.
+  2. **First calls in V2 shape:** `WANTS_QUOTE` / `WANTS_DESIGN` / `WANTS_EMAIL` → `INTERESTED` + `meta.asked`
+     [`PRICE` / `DESIGN` / `INFO`]; the "Chceli" row is created **from that call** (its time, its caller, `origin LIVE`)
+     and reconciled against the sends. This **replaces** the "received implies asked" backfill (`2026-09-wave5-requests.ts`
+     is not run).
+  3. **Ownership history** as V2 writes it: one `DealOwnership HANDOFF` per deal (from nobody → owner, by the caller).
+  4. **Call-stage leads carry no step** (V2 uses only the callback there).
+  5. **Old records removed:** the 97 old `EMAIL_SENT` / `QUOTE_SENT` / `DESIGN_SENT` rows (replaced by the converted
+     sends), the 7 old send audits; the 22 "Cena: X → Y" notes become V2 `PRICE_CHANGED` rows.
+  6. **Converted sends are ordinary sends** (`historical: false`, original time; no label). `meta.migrated` /
+     `meta.migration` stay only as invisible provenance.
+  7. **Dead columns dropped tonight:** `Lead.quoteSentAt`, `aboutUsSentAt`, `priceDisclosed`, `designUrl`,
+     `lockedById`, `lockedAt`. Rollback = Neon restore point.
+  8. **Statistics:** no old/new distinction; all "Chceli" rows are `LIVE`.
+- Kept on purpose: enum values of old activity types / outcomes (no rows use them after the window; removing a
+  Postgres enum value means recreating the type — not worth it).

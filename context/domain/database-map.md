@@ -36,11 +36,8 @@ One row per contact, and the same row later as a deal. **Never renamed.** Soft-d
 | `callbackKind?`, `callbackAt?`, `callbackHasTime`, `callbackNote?` | **call phase only** — why this is in a caller's queue |
 | `offerAboutUsAt?`, `offerPricelistAt?`, `offerPriceAt?`, `offerReviewAt?` | **what the client received**: first "about us", first cenník, **last** calculated price (email or phone), first rozbor webu. A summary of the valid `OFFER_SENT` activities, always recomputed by `recomputeOffers` — never written directly |
 | `designSentAt?` | latest sent date among the lead's designs; recomputed with the above, also when a design is deleted. A lead without any `Design` row keeps its old value, and the screens show that value as "návrh sent" — until a send with `untrackedDesign` is recorded for it; from then on the column is the **latest valid date across the non-deleted tracked designs and the untracked sends** (a deleted or later-created `Design` never suppresses a valid untracked send; crossing out the last one clears it). The "Dostali návrh" filter reads the same column |
-| `quoteSentAt?`, `aboutUsSentAt?`, `priceDisclosed` | **dead V1 columns**: "CP marked sent", "email o nás marked sent", "client knows a price". No code reads or writes them; the one-time V1 → V2 conversion (`prisma/backfill/2026-09-v1-sends.ts`) turned the old sends into `OFFER_SENT` rows with `meta.migrated`. They are dropped in a separate later step (`db-changes.md` §3.3, P-01..P-03) |
-| `designUrl?` | legacy column; the current app does not read or write it. Keep it until a separately reviewed migration |
 | `price?` (`Decimal(10,2)`), `priceNote?` | the **current** quoted total and its hand-written breakdown; what the client actually received is the snapshot in `OFFER_SENT` |
 | `lostReason?` | why it ended |
-| `lockedById?`, `lockedAt?` | **dead columns.** A leftover from a pre-claim design; written and read nowhere. Kept on purpose — dropping them is a destructive migration for no gain |
 | `createdAt`, `updatedAt` | |
 
 Indexes: `status` · `(status, callbackKind)` · `deletedAt` · `(createdById, createdAt)` ·

@@ -23,7 +23,11 @@ wave notes: `npx prisma migrate diff --from-schema <7beb689:prisma/schema.prisma
 --script` (offline, no database). The script has **no `DROP` and no retype** — every statement is `CREATE TYPE`,
 `ALTER TYPE … ADD VALUE`, `ADD COLUMN`, `CREATE TABLE`, `CREATE [UNIQUE] INDEX` or `ADD CONSTRAINT … FOREIGN KEY`.
 
-**Non-additive changes owed to production: none.** Keep this line true: any non-additive entry must be listed here by
+**Non-additive changes owed to production (D-009, Michal 2026-09-22):** drop `Lead.quoteSentAt`, `aboutUsSentAt`,
+`priceDisclosed`, `designUrl`, `lockedById` (+ FK), `lockedAt` — `.ai/migrations/v1-to-v2-live/sql/03-drop-v1-columns.sql`,
+the last data step of the window, after the send conversion and normalization verify clean. **Test:** the schema
+file no longer has them; the test database still has the columns until the showcase deployment runs the new code
+(the new code works with the extra columns). Previously: none. Keep this line true: any non-additive entry must be listed here by
 id, with its data plan, before it is applied on test. (The planned old-send contraction in §3.3 is not applied on test
 and therefore not listed here.)
 
@@ -215,7 +219,7 @@ never had them, so their removal is **not** a production change. Do not add them
 | Routing team | team "Obchod", leader `michal`, member `timea` (live has no team for telesales) — `.ai/migrations/v1-to-v2-live/sql/02-obchod-team.sql` | seeded | **OWED** |
 | V1 send conversion | `prisma/backfill/2026-09-v1-sends.ts` (§3) | rehearsed on clone 1 2026-09-21: 88 `OFFER_SENT`, verify clean | **OWED** |
 | Wave 3 | none. `DealTask` / `DealOwnership` start empty; no existing row is rewritten | — | nothing to backfill. Consequence: História and ownership history show only moves **after** the rollout; older owner changes remain readable only as `OWNER_CHANGED` activities |
-| Wave 5 | `prisma/backfill/2026-09-wave5-requests.ts` — "what the client asked for" for old deals (§5 below) | rehearsed on clone 1 2026-09-21: 129 rows, verify OK | **OWED**, and only **after** the §3 send conversion |
+| Wave 5 | `prisma/backfill/2026-09-wave5-requests.ts` — "what the client asked for" for old deals (§5 below) | rehearsed on clone 1 2026-09-21 | **NOT USED** — replaced by the D-009 normalization ("Chceli" from the first call) |
 
 ## 3. Old send data — conversion (implemented, rehearsed, owed to production)
 
@@ -234,9 +238,10 @@ The wave 3a "?" legacy layer is removed from code and test schema (2026-09-21). 
 No `PRICELIST`, no `REVIEW`. Any pattern outside this table stops the run before writing. `Lead.price` / `priceNote`,
 steps and statuses are never touched. Raw V1 rows stay; the history hides those listed in `meta.migration.sources`.
 
-**Planned contraction (separate, later, not applied anywhere):** P-01 `Lead.quoteSentAt`, P-02 `Lead.aboutUsSentAt`,
-P-03 `Lead.priceDisclosed` — dead after the conversion; drop after V2 has been stable in production. Keep
-`Lead.designUrl`, `lockedById/At`, `Design.sentAt`, `Lead.designSentAt` and all raw activity rows.
+**Normalization (D-009):** after the conversion, `prisma/backfill/2026-09-v2-normalize.ts` makes the data V2-shaped
+(first calls → `INTERESTED` + "Chceli" from the call, ownership `HANDOFF`, closed deals / call stage without a step,
+closed asks withdrawn, old send rows and audits removed, price notes → `PRICE_CHANGED`). Then the six dead V1 columns
+are dropped (see the non-additive line at the top). The wave-5 receipts backfill is no longer used.
 
 ## 4. Production rollout order and verification
 
