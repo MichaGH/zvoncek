@@ -36,6 +36,11 @@ async function main() {
         if (l.pipelineEnteredAt && ["ACTIVE", "SNOOZED"].includes(l.status) && !l.ownerId) flag(`#${l.number} open deal without owner`);
     }
     const q = async (sql: string) => (await prisma.$queryRawUnsafe<Record<string, unknown>[]>(sql));
+    // Značky prevodu musia byť po kroku 10b preč (D-009: dáta nesmú prezrádzať, že boli migrované).
+    const markers = (await q(`select (select count(*) from "Activity" where type = 'OFFER_SENT' and (meta ? 'migrated' or meta ? 'migration'))::int offers,
+                                     (select count(*) from "LeadRequest" where "migrationKey" is not null or provenance is not null)::int requests`))[0];
+    if (Number(markers.offers) || Number(markers.requests)) flag(`migration markers left: ${JSON.stringify(markers)}`);
+    console.log("migration markers left:", markers);
     console.log("status x stage:", await q(`select status::text, ("pipelineEnteredAt" is not null) deal, count(*)::int n from "Lead" where "deletedAt" is null group by 1,2 order by 1,2`));
     console.log("open-deal steps:", await q(`select "nextActionKind"::text k, "nextActionMode"::text m, count(*)::int n from "Lead" where "deletedAt" is null and "pipelineEnteredAt" is not null and status in ('ACTIVE','SNOOZED') group by 1,2 order by 1,2`));
     console.log("price total:", await q(`select count(price)::int n, sum(price)::text total from "Lead"`));
