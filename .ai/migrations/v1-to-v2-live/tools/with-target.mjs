@@ -19,8 +19,11 @@ const productionWindow = opts.includes("--production-window");
 if (!opts.includes("--expect") || !expect || expect.startsWith("--")) fail("--expect <endpoint> is required");
 
 const raw = readFileSync(new URL("../../../../.env.migration", import.meta.url), "utf8");
-const m = raw.match(/^MIGRATION_REHEARSAL_DATABASE_URL\s*=\s*"?([^"\r\n]+)"?/m);
-if (!m) fail("MIGRATION_REHEARSAL_DATABASE_URL missing in .env.migration");
+// --var NAME: another variable from .env.migration (e.g. MIGRATION_REHEARSAL_DATABASE_STD_URL for a second clone).
+const varName = opts.includes("--var") ? opts[opts.indexOf("--var") + 1] : "MIGRATION_REHEARSAL_DATABASE_URL";
+if (!/^[A-Z_]+$/.test(varName)) fail("--var needs a variable name");
+const m = raw.match(new RegExp(`^${varName}\\s*=\\s*"?([^"\\r\\n]+)"?`, "m"));
+if (!m) fail(`${varName} missing in .env.migration`);
 const url = new URL(m[1]);
 const label = url.hostname.split(".")[0];
 if (label.endsWith("-pooler")) fail("use the DIRECT connection string (host must not contain -pooler)");

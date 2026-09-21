@@ -211,7 +211,8 @@ async function plan(migratedAt: string): Promise<{ events: Planned[]; blockers: 
 function sameEvent(meta: OfferMeta | null, p: Planned): boolean {
     if (!meta?.migration) return false;
     const norm = (m: OfferMeta) =>
-        JSON.stringify([m.channel, m.contents, m.price ?? null, (m.designs ?? []).map((d) => d.id), m.sentOn, m.migration?.key, m.migration?.sources, m.migration?.amountSource ?? null]);
+        // Poradie návrhov / zdrojov v jednom emaili nie je významné (po prepočte majú návrhy rovnaký čas) – porovnáva sa množina.
+        JSON.stringify([m.channel, m.contents, m.price ?? null, (m.designs ?? []).map((d) => d.id).sort(), m.sentOn, m.migration?.key, [...(m.migration?.sources ?? [])].sort(), m.migration?.amountSource ?? null]);
     return norm(meta) === norm(p.meta);
 }
 
