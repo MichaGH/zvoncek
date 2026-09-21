@@ -93,7 +93,7 @@ these leads get no PRICE.
 `meta.migration = { key, rule, sources: [<old Activity ids>], designIds?: [<Design ids>], originalAt: ISO, amountSource?: "QUOTE_NOTE" | "CURRENT_PRICE" | "DECISION", migratedAt: ISO }`
 — exactly the typed shape in `lib/domain/offers.ts` `offerMetaSchema.migration` (no extra keys: a correction rewrites meta
 from the parsed shape). The V2 history hides every Activity id listed in `sources` of a migrated send
-(`migratedSourceIds`, implemented 2026-09-21), so each old send shows once, labelled "zo starého systému".
+(`migratedSourceIds`, implemented 2026-09-21), so each old send shows once, with no label (Michal 2026-09-21: no visible old/new distinction).
 
 - Deterministic key: `v2mig:offer:<leadId>:<sentOn>` (one send per lead-day after grouping). Uniqueness enforced by
   the writer under the Lead lock (a partial unique index on `meta->'migration'->>'key'` is optional and would be a new

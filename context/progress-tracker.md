@@ -476,8 +476,8 @@ Plan: `.ai/migrations/v1-to-v2-live/02-data-mapping.md` §2/§5 (D-003 r2, answe
   passthrough, so a correction that rewrites meta keeps it) and `migratedSourceIds()`.
 - `lib/queries/pipeline/index.ts` (`getDealDetail`): the history list drops old rows listed in a migrated send's
   `migration.sources`; `offer.migrated` is passed to the view. "Naposledy" still reads the old rows (real contacts).
-- `components/pipeline/DealDetail.tsx`: a migrated historical send is labelled "zo starého systému" instead of
-  "doplnené spätne".
+- `components/pipeline/DealDetail.tsx`: a migrated send shows **no label** (Michal 2026-09-21: first "zo starého
+  systému", then removed — no visible old/new distinction); a manual historical send keeps "doplnené spätne".
 - Decision recorded in the migration spec: a converted send's `createdAt` = the original V1 time (sits in its real
   place in the history); the migration time is `meta.migration.migratedAt`.
 

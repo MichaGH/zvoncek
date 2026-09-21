@@ -9,7 +9,7 @@ Operator: Claude (commands). Decision owner: Michal (freeze, GO/NO-GO, rollback)
 ## A. Before the window (can be done now)
 
 - [ ] Michal clicked through V2 on the migrated clone (`http://localhost:3200`, preview "zvoncek-migrated-clone").
-      Check the deals he knows: steps, "Klient dostal", "Chceli", history ("zo starého systému"), #628, #98, #404,
+      Check the deals he knows: steps, "Klient dostal", "Chceli", history (each old send once, no label), #628, #98, #404,
       one návrh deal (#2365), the call queue for timea.
 - [ ] Code reviewed and committed on the branch. Michal approves commit + push + the PR into `main`. **Do not merge yet.**
       Vercel production builds from `main`. Merging is the deploy.

@@ -147,7 +147,7 @@ fp?, correction?, migrated?, migration?: { key, rule, sources: [old Activity ids
 migratedAt } }`. `createdAt` = when it was recorded, `sentOn` = when the client got it. `migrated: true` = converted from
 the old system by the one-time V1 → V2 migration (none exist on test yet); the deal history hides the old
 `QUOTE_SENT` / `EMAIL_SENT` / `DESIGN_SENT` rows listed in its `migration.sources` (`migratedSourceIds`) and labels the
-row "zo starého systému". `historical: true` = a
+row like any other send (no label; decision 2026-09-21). `historical: true` = a
 legacy send entered later by the manager (no next step, never fulfils a task item). `fulfils` = the returned task
 items this send used (wave 3): at most one price, each návrh at most once, only items still pending. Order of sends: `sentOn`, then a historical entry before a normal one on the same day, then `createdAt`; the
 latest price is what the client knows (`lib/domain/offers.ts`).

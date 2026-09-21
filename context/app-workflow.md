@@ -228,7 +228,7 @@ ponuku" — in place, from the list or the detail), from the detail's **Cena & p
   revision); crossing out only the price leaves the SMS text in the history. On an **unlocked** deal the next step is not touched — the user fixes it by hand if needed. While a manager task is **open** the step is locked and derived, so a correction re-derives it (P6) — the user could not fix it by hand.
 - **Old deals** (sends from V1): the one-time conversion turned them into ordinary sends at their original time
   (Info / Info + Cena / Info + Návrh, `.ai/migrations/v1-to-v2-live/02-data-mapping.md`). The history shows each one
-  once, labelled "zo starého systému" (the raw V1 row is hidden). **[ROLLOUT]** on production.
+  once, like any other send, with no label (the raw V1 row is hidden via the send's `meta.migrated` / `meta.migration.sources`; statistics treat it as any other send). **[ROLLOUT]** on production.
 - **"Doplniť starý záznam"** (manager, in Cena & ponuky): records a send that happened outside the app with its
   original date — no next step, no task change, not "Naposledy".
 

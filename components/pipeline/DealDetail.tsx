@@ -726,9 +726,9 @@ export default function DealDetail({
                                                         <span className={`font-medium${activity.revertedAt ? " line-through" : ""}`}>
                                                             {activity.offer?.channel === "PHONE" ? (activity.offer.via === "SMS" ? "↳ Cena uvedená v SMS" : "↳ Cena povedaná v hovore") : ACTIVITY_LABEL[activity.type]}
                                                         </span>
-                                                        {activity.offer?.historical && (
+                                                        {activity.offer?.historical && !activity.offer.migrated && (
                                                             <Badge variant="outline" className="font-normal">
-                                                                {activity.offer.migrated ? "zo starého systému" : "doplnené spätne"}
+                                                                doplnené spätne
                                                             </Badge>
                                                         )}
                                                         {caps.manage && (

@@ -129,8 +129,8 @@ design sent is part of "Čo sme poslali" (`recordOfferSentAs`), open to the deal
 product truth. For a redesign: first calls = `Activity.source CALL_QUEUE`; deal follow-ups = `CLIENTS` (owner without
 `deals.manage`) or `PIPELINE` (manager) — the source follows the actor, not the screen; exclude reverted / crossed-out
 activities (`revertedAt`). Calls are `CALL` only — written replies (`CLIENT_REPLIED`), SMS and "bez kontaktu" are not
-calls. The cenník-vs-price experiment groups each deal by its **first verified offer email** and excludes deals with
-converted V1 sends (`OFFER_SENT.meta.migrated`) and historical entries.
+calls. The cenník-vs-price experiment groups each deal by its **first offer email**. Converted V1 sends count like any
+other send (Michal 2026-09-21: no old/new distinction in statistics).
 
 ## 8. Environments
 
