@@ -137,10 +137,21 @@ export async function normalizeDeal(tx: Tx, p: DealPlan) {
                 touched = true;
             }
         }
-        if (hasStep(lead)) {
-            await tx.activity.create({
-                data: { ...createPlanningActivity({ leadId: p.id, userId: closer, type: "NEXT_ACTION_CLEARED", source: "PIPELINE", note: `Ďalší krok zmazaný (${STATUS_LABEL[lead.status].toLowerCase()})` }), createdAt: lead.closedAt! },
-            });
+        // V1 dovoľoval nastaviť krok aj PO uzavretí – zmazanie musí byť až za posledným riadkom kroku, inak by história
+        // hovorila „zmazané → nastavené" pri obchode bez kroku.
+        const note = `Ďalší krok zmazaný (${STATUS_LABEL[lead.status].toLowerCase()})`;
+        const lastPlan = await tx.activity.findFirst({
+            where: { leadId: p.id, type: { in: ["NEXT_ACTION_SET", "NEXT_ACTION_CHANGED", "NEXT_ACTION_CLEARED"] } },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            select: { type: true, createdAt: true },
+        });
+        const stale = lastPlan && lastPlan.type !== "NEXT_ACTION_CLEARED";
+        if (hasStep(lead) || stale) {
+            const at = stale && lastPlan.createdAt >= lead.closedAt! ? new Date(lastPlan.createdAt.getTime() + 1) : lead.closedAt!;
+            // Skorší beh mohol zapísať zmazanie na čas uzavretia – presunie sa, namiesto druhého riadku.
+            const mine = await tx.activity.findFirst({ where: { leadId: p.id, type: "NEXT_ACTION_CLEARED", note, createdAt: lead.closedAt! }, select: { id: true } });
+            if (mine) await tx.activity.update({ where: { id: mine.id }, data: { createdAt: at } });
+            else await tx.activity.create({ data: { ...createPlanningActivity({ leadId: p.id, userId: closer, type: "NEXT_ACTION_CLEARED", source: "PIPELINE", note }), createdAt: at } });
             await updateLead(tx, p.id, NO_STEP);
             return;
         }

@@ -27,10 +27,10 @@ diff_is() {
   local title="$1" expected="$2"
   [ "$(num "$title")" -lt "$FROM" ] && return 0
   echo; echo "=== $title"
-  local got
-  got=$("${W[@]}" npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script 2>/dev/null | grep -Ev '^--|^\s*$|^\[with-target\]|Loaded Prisma' | tr -s ' ')
-  local rc=${PIPESTATUS[0]}
+  local raw got rc
+  raw=$("${W[@]}" npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script 2>/dev/null); rc=$?
   [ "$rc" -eq 0 ] || stop "'$title' diff command failed ($rc)"
+  got=$(printf '%s\n' "$raw" | grep -Ev '^--|^\s*$|^\[with-target\]|Loaded Prisma' | tr -s ' ' || true)
   echo "${got:-<empty>}"
   [ "$got" == "$expected" ] || stop "'$title' schema diff differs from the expected SQL"
   echo "OK: diff matches the expectation"
