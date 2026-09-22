@@ -8,13 +8,13 @@ datasource db {
 }
 
 model User {
-  id              String    @id @default(cuid())
-  email           String?   @unique
-  username        String    @unique
-  firstName       String
-  lastName        String
-  password        String
-  role            Role      @default(SCOUT)
+  id        String  @id @default(cuid())
+  email     String? @unique
+  username  String  @unique
+  firstName String
+  lastName  String
+  password  String
+  role      Role    @default(SCOUT)
 
   // Kontaktné + verifikácia (verifikačný flow sa pridá neskôr)
   phone           String?
@@ -22,15 +22,28 @@ model User {
   phoneVerifiedAt DateTime?
 
   // Životný cyklus účtu
-  deletedAt       DateTime? // soft delete — deaktivovaný účet
-  lastLoginAt     DateTime? // nastavuje sa pri každom prihlásení
-  note            String?   // interná poznámka admina o userovi
-  createdAt       DateTime  @default(now())
+  deletedAt   DateTime? // soft delete — deaktivovaný účet
+  lastLoginAt DateTime? // nastavuje sa pri každom prihlásení
+  note        String? // interná poznámka admina o userovi
+  createdAt   DateTime  @default(now())
 
   ownedLeads   Lead[]     @relation("OwnedLeads")
-  lockedLeads  Lead[]     @relation("LockedLeads")
   createdLeads Lead[]     @relation("CreatedLeads")
   activities   Activity[]
+
+  assignedCallLeads  Lead[]          @relation("AssignedCaller")
+  handedOffLeads     Lead[]          @relation("HandedOffBy")
+  revertedActivities Activity[]      @relation("ActivityRevertedBy")
+  tasksRequested     DealTask[]      @relation("DealTaskRequestedBy")
+  tasksAssigned      DealTask[]      @relation("DealTaskAssignee")
+  tasksClosed        DealTask[]      @relation("DealTaskClosedBy")
+  taskPartsAdded     DealTaskPart[]  @relation("DealTaskPartAddedBy")
+  taskPartsResolved  DealTaskPart[]  @relation("DealTaskPartResolvedBy")
+  ownershipFrom      DealOwnership[] @relation("DealOwnershipFrom")
+  ownershipTo        DealOwnership[] @relation("DealOwnershipTo")
+  ownershipBy        DealOwnership[] @relation("DealOwnershipBy")
+  requestsRecorded   LeadRequest[]   @relation("LeadRequestRequestedBy")
+  requestsResolved   LeadRequest[]   @relation("LeadRequestResolvedBy")
 
   // Tímy: user je členom max. jedného tímu (teamId) a zároveň môže viesť max. jeden tím (leadsTeam).
   team      Team?   @relation("TeamMembers", fields: [teamId], references: [id])
@@ -60,8 +73,8 @@ model Invite {
   token       String    @unique
   usedAt      DateTime?
   expiresAt   DateTime
-  createdById String?   // kto pozývací link vygeneroval
-  forEmail    String?   // pre koho je určený
+  createdById String? // kto pozývací link vygeneroval
+  forEmail    String? // pre koho je určený
   forRole     Role      @default(SCOUT) // aká rola sa priradí po registrácii
 }
 
@@ -74,11 +87,11 @@ model Lead {
   email       String?
   note        String?
 
-  status      LeadStatus  @default(NEW)
-  origin      LeadOrigin  @default(MARKETING_CALL) // ako sa lead dostal do systému (marketing hovor / priamo / odporúčanie)
+  status      LeadStatus   @default(NEW)
+  origin      LeadOrigin   @default(MARKETING_CALL) // ako sa lead dostal do systému (marketing hovor / priamo / odporúčanie)
   projectType ProjectType? // aký typ projektu klient chce (stránka/eshop/katalóg/webapp…)
-  owner   User?      @relation("OwnedLeads", fields: [ownerId], references: [id])
-  ownerId String? // kto to má aktuálne na starosti (N → M)
+  owner       User?        @relation("OwnedLeads", fields: [ownerId], references: [id])
+  ownerId     String? // kto to má aktuálne na starosti (N → M)
 
   // KEDY ĎALEJ – srdce appky
   nextActionKind    NextActionKind?
@@ -92,15 +105,15 @@ model Lead {
   callbackHasTime Boolean       @default(false) // true = klient dal presný čas; false = len deň
   callbackNote    String? // "vraj sa ozvať o hodinu, bola na porade"
 
-  // KEDY SME ČO POSLALI – presne to, čo si chcel vidieť na prvý pohľad
-  quoteSentAt   DateTime? // cenová ponuka
-  designSentAt  DateTime? // dizajnový návrh
-  designUrl     String?
-  aboutUsSentAt DateTime? // info o nás / odpoveď na ich mail
+  price     Decimal? @db.Decimal(10, 2) // aktuálna cena obchodu – čo klient dostal, je snímka v OFFER_SENT
+  priceNote String? // rozpis/poznámka: "499 stránka + 299 admin systém" – na hover
 
-  price          Decimal? @db.Decimal(10, 2) // celková nastrelená cena – tá sa zobrazuje
-  priceNote      String? // rozpis/poznámka: "499 stránka + 299 admin systém" – na hover
-  priceDisclosed Boolean  @default(false) // klient cenu pozná (ústne aj mailom)
+  // ČO KLIENT DOSTAL (round 2, wave 3a) – súhrn platných OFFER_SENT aktivít, vždy prepočítaný (lib/domain/offers.ts).
+  designSentAt     DateTime? // najnovší poslaný návrh (sledovaný aj bez Design riadku)
+  offerAboutUsAt   DateTime? // prvýkrát „o nás"
+  offerPricelistAt DateTime? // prvýkrát cenník
+  offerPriceAt     DateTime? // naposledy konkrétna cena (email aj telefón)
+  offerReviewAt    DateTime? // prvýkrát rozbor webu (wave 5, S-17)
 
   lostReason String? // "nemajú záujem", "zlé číslo"
 
@@ -111,20 +124,35 @@ model Lead {
   // soft delete
   deletedAt DateTime?
 
-  // claim (future-proof, zatiaľ nevyužité)
-  lockedBy   User?     @relation("LockedLeads", fields: [lockedById], references: [id])
-  lockedById String?
-  lockedAt   DateTime?
+  // Zodpovednosť za volanie (len fáza volania). null = v spoločnej fronte / mimo fázy volania.
+  assignedCaller   User?     @relation("AssignedCaller", fields: [assignedCallerId], references: [id])
+  assignedCallerId String?
+  assignedCallerAt DateTime? // kedy priradené (audit/poradie, nikdy expirácia)
 
-  activities   Activity[]
-  designs      Design[]
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  // Značka obchodu: createdAt pozitívneho prvého hovoru; maže ju len vrátenie výsledku hovoru.
+  pipelineEnteredAt DateTime?
+  handedOffBy       User?     @relation("HandedOffBy", fields: [handedOffById], references: [id])
+  handedOffById     String? // kto urobil pozitívny hovor
+  closedAt          DateTime? // len obchody: WON/LOST/UNREACHABLE; null pri ACTIVE/SNOOZED a mimo obchodov
+
+  revision Int @default(0) // optimistická verzia; +1 presne raz za biznis transakciu
+
+  activities Activity[]
+  designs    Design[]
+  tasks      DealTask[]
+  ownerships DealOwnership[]
+  requests   LeadRequest[] // čo klient pýtal (wave 5)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
 
   @@index([status])
   @@index([status, callbackKind])
   @@index([deletedAt])
   @@index([createdById, createdAt])
+  @@index([status, assignedCallerId, createdAt])
+  @@index([assignedCallerId, status, callbackKind])
+  @@index([ownerId, status])
+  @@index([pipelineEnteredAt, status])
 }
 
 enum LeadStatus {
@@ -151,7 +179,20 @@ model Activity {
   meta      Json? // štruktúrované detaily: napr. diff zmien { changes: [{ field, from, to }] } alebo verzia trackeru
   createdAt DateTime         @default(now())
 
+  idempotencyKey String?   @unique // klientom generovaný kľúč jedného pokusu o uloženie výsledku
+  leadRevision   Int? // len CALL z fronty volaní: Lead.revision po tomto hovore (podmienka vrátenia)
+  revertedAt     DateTime? // výsledok tohto hovoru bol vrátený
+  revertedBy     User?     @relation("ActivityRevertedBy", fields: [revertedById], references: [id])
+  revertedById   String?
+  task           DealTask? @relation(fields: [taskId], references: [id]) // udalosť úlohy pre manažéra (wave 3)
+  taskId         String?
+
+  // Wave 5: hovor, z ktorého požiadavka vznikla / odoslanie, ktoré ju splnilo (lib/domain/clientRequests.ts).
+  requestsSourced  LeadRequest[] @relation("LeadRequestSource")
+  requestsResolved LeadRequest[] @relation("LeadRequestResolution")
+
   @@index([leadId])
+  @@index([taskId])
   @@index([userId, createdAt])
   @@index([category, createdAt])
   @@index([source, type, createdAt])
@@ -174,6 +215,25 @@ enum ActivityType {
   TRACKER_ATTACHED // pripojený tracked link (dizajn/CP)
   TRACKER_UPDATED // nová verzia – „dizajn aktualizovaný"
   TRACKER_OPENED // klient otvoril (míľnik, hlavne po update)
+  CALLER_ASSIGNED // audit: manuálny presun práce volajúceho (vlastné nárokovanie sa neloguje)
+  CALLER_RELEASED // audit: nárok vrátený do fronty (manažér/deaktivácia)
+  CALL_REVERTED // audit: výsledok hovoru vrátený (meta.revertedActivityId)
+  DEAL_REOPENED // audit: manažér znovu otvoril uzavretý obchod
+  OFFER_SENT // čo klient dostal (o nás / cenník / cena / návrh) – obsah v meta; nahrádza QUOTE_SENT/EMAIL_SENT/DESIGN_SENT
+  CLIENT_REPLIED // klient odpísal (email) – kontakt, nie hovor
+  TASK_CREATED // úloha pre manažéra (wave 3) – obchodník požiadal
+  TASK_MESSAGE // interná správa k otvorenej úlohe (nikdy kontakt s klientom)
+  TASK_DONE // manažér úlohu vybavil – výsledok v meta
+  TASK_DECLINED // manažér úlohu zamietol s dôvodom
+  TASK_CANCELLED // úloha zrušená (vlastník, uzavretie, zmena vlastníka)
+  TASK_REASSIGNED // úloha presunutá inému manažérovi
+  TASK_RESULT_DISMISSED // vrátený výsledok sa neposiela / berie na vedomie (meta.items + dôvod)
+  CLIENT_ASK_CHANGED // wave 5: ručná oprava toho, čo klient pýtal (meta.added / withdrawn / reason)
+  TASK_PART_ADDED // wave 4: k otvorenej úlohe pribudla časť (meta.parts)
+  TASK_PART_DONE // wave 4: manažér odovzdal časť / časti úlohy (meta.parts)
+  TASK_PART_DECLINED // wave 4: manažér časť nerobí, s dôvodom (meta.parts)
+  TASK_PART_WITHDRAWN // wave 4: vlastník časť stiahol, alebo skončila s obchodom / vlastníkom (meta.parts)
+  PRICE_CHANGED // wave 4 D5: zmena ceny obchodu, ktorú vidí aj obchodník (meta.from / to / reason / via)
 }
 
 enum CallOutcome {
@@ -186,12 +246,15 @@ enum CallOutcome {
   WANTS_EMAIL // 2g máme napísať
   SNOOZE // 2h "o X mesiacov"
   POSITIVE // videli, páči sa, posúva sa to
+  WANTS_TO_ORDER // len follow-up: klient chce ísť do toho – obyčajná odpoveď, ďalší krok vyberá obchodník
+  INTERESTED // wave 5: dovolali sme sa, majú záujem – ČO chceli, je v LeadRequest riadkoch
 }
 
 enum Role {
   SCOUT // pridáva kontakty (vidí len svoje, kým nie sú obvolané)
   SCOUT_LEADER // vedie tím scoutov – vidí ich pridané kontakty, históriu a štatistiky
   TELESALES // prvotné volanie / marketing – rieši calls
+  SALES_REP // obchodník: prvé hovory + follow-upy na vlastných obchodoch
   MANAGER // vidí a rieši všetko
   ADMIN // všetko + používatelia, admin stránky
 }
@@ -212,6 +275,7 @@ enum ActivitySource {
   PIPELINE
   CONTACTS
   ADMIN
+  CLIENTS // práca vlastníka obchodu bez deals.manage (názov z čias /dashboard/clients); manažér zapisuje PIPELINE
 }
 
 enum NextActionKind {
@@ -268,7 +332,7 @@ model Design {
   repoUrl        String? // GitHub repo – nech po vypnutí hostingu vieme, ktorý projekt to bol
   isLive         Boolean   @default(true) // ručný príznak: beží stránka? (pri vytvorení predpokladáme áno)
   currentVersion Int       @default(1)
-  sentAt         DateTime? // kedy bol návrh označený ako poslaný klientovi (revertovateľné)
+  sentAt         DateTime? // kedy bol návrh prvýkrát poslaný: prepočítané z platných OFFER_SENT
   createdById    String?
   deletedAt      DateTime? // soft delete
 
@@ -325,4 +389,173 @@ model TrackerEvent {
 
   @@index([trackerId, occurredAt])
   @@index([type, occurredAt])
+}
+
+// ── ÚLOHY PRE MANAŽÉRA (wave 3) ──────────────────────────────────────────────
+// Obchodník žiada manažéra o cenu / návrh / iné (HELP) alebo o prevzatie klienta (HANDOVER).
+// Max. jedna OPEN úloha na obchod – vynútené v príkaze pod zámkom Lead riadku (nie indexom).
+// Kým je úloha OPEN, ďalší krok obchodu je zamknutý (odvodené, nič sa neukladá navyše).
+
+enum DealTaskType {
+  HELP // cena / návrh / iné
+  HANDOVER // obchodník žiada, aby klienta prevzal manažér
+}
+
+enum DealTaskContent {
+  PRICE
+  DESIGN
+  OTHER
+}
+
+enum DealTaskStatus {
+  OPEN
+  DONE // vybavené / odovzdanie prijaté
+  DECLINED // manažér zamietol s dôvodom
+  CANCELLED // vlastník zrušil, alebo skončila s obchodom / zmenou vlastníka
+}
+
+model DealTask {
+  id            String         @id @default(cuid())
+  lead          Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId        String
+  type          DealTaskType
+  status        DealTaskStatus @default(OPEN)
+  text          String // čo sa žiada
+  requestedBy   User           @relation("DealTaskRequestedBy", fields: [requestedById], references: [id])
+  requestedById String
+  assignee      User           @relation("DealTaskAssignee", fields: [assigneeId], references: [id])
+  assigneeId    String // manažér, ktorý má konať (dá sa presunúť)
+  createdAt     DateTime       @default(now())
+  closedAt      DateTime?
+  closedBy      User?          @relation("DealTaskClosedBy", fields: [closedById], references: [id])
+  closedById    String? // kto ju reálne uzavrel (môže sa líšiť od assignee)
+  closeReason   String? // povinné pri DECLINED / CANCELLED; pri zmiešanom konci NULL – dôvody sú na častiach
+
+  // Wave 4 (§2.6, P6): krok, ktorý mal obchod PRED zamknutím – kam sa vráti, keď nie je čo poslať („Iné"-only úloha).
+  // Zapisuje sa RAZ pri vzniku úlohy a už sa neprepisuje; dátum ani režim sa neukladajú (zamknutý krok je vždy
+  // SCHEDULED bez dátumu, I8).
+  fallbackKind NextActionKind?
+  fallbackNote String?
+
+  parts      DealTaskPart[]
+  activities Activity[]
+
+  @@index([assigneeId, status, createdAt])
+  @@index([leadId, status])
+}
+
+// Wave 4: jedna časť úlohy = jeden druh manažérskej práce (cena / návrh / iné) vo vnútri jednej úlohy.
+// Stav ÚLOHY sa z častí odvodzuje (lib/domain/tasks.ts taskPartState) – nikdy sa nenastavuje ručne.
+// @@unique([taskId, kind]) je nosné: adresa vrátenej položky (taskId, kind, designId) sa tým nemení.
+model DealTaskPart {
+  id           String             @id @default(cuid())
+  task         DealTask           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId       String
+  kind         DealTaskContent
+  status       DealTaskPartStatus @default(REQUESTED)
+  result       Json? // zapíše sa RAZ pri DELIVERED: { price } | { designs } | { answer }
+  addedBy      User               @relation("DealTaskPartAddedBy", fields: [addedById], references: [id])
+  addedById    String // kto si túto časť vyžiadal (s úlohou, alebo neskôr cez „+ Pridať")
+  addedAt      DateTime           @default(now())
+  resolvedBy   User?              @relation("DealTaskPartResolvedBy", fields: [resolvedById], references: [id])
+  resolvedById String? // kto ju dodal / nerobí / stiahol – prázdne len kým je REQUESTED
+  resolvedAt   DateTime?
+  reason       String? // povinný pri DECLINED a WITHDRAWN
+
+  @@unique([taskId, kind])
+  @@index([taskId, status])
+}
+
+enum DealTaskPartStatus {
+  REQUESTED // manažér to má na stole – „robí sa"
+  DELIVERED // manažér to dodal; vrátené položky čakajú na odoslanie
+  DECLINED // manažér túto časť neurobí, s dôvodom
+  WITHDRAWN // vlastník ju stiahol, alebo skončila s obchodom / zmenou vlastníka
+}
+
+// História vlastníctva obchodu (wave 3): každá skutočná zmena vlastníka = jeden riadok v tej istej transakcii.
+enum DealOwnershipReason {
+  HANDOFF // pozitívny prvý hovor
+  CHANGE // manažér zmenil vlastníka
+  BULK // hromadný presun
+  TAKEOVER // manažér prevzal klienta sám
+  HANDOVER // manažér prijal odovzdanie
+  REVERT // vrátenie výsledku prvého hovoru
+}
+
+// ── ČO KLIENT PÝTAL (wave 5) ─────────────────────────────────────────────────
+// Požiadavka je UDALOSŤ s časom, nie trvalá nálepka: klient môže to isté pýtať znova aj po tom, čo to dostal.
+// Stav riadku je vždy VÝSLEDOK prepočtu (reconcileRequests, lib/domain/requestMutations.ts) nad požiadavkami
+// a platnými OFFER_SENT záznamami – nikdy lokálne prepnutý. Pravidlá: lib/domain/clientRequests.ts.
+
+enum RequestContent {
+  INFO // info / ukážky (pošle sa ako ABOUT_US)
+  PRICELIST // cenník
+  PRICE // konkrétna cena pre tohto klienta
+  DESIGN // dizajnový návrh
+  REVIEW // rozbor webu
+}
+
+enum RequestState {
+  OPEN // ešte nedostali
+  SENT // splnené platným OFFER_SENT
+  WITHDRAWN // už to nechcú (ručne, s dôvodom)
+}
+
+enum RequestOrigin {
+  LIVE // zaznamenané v aplikácii
+  MIGRATED_RECEIPT // odvodené z prevedeného odoslania (§11)
+  MIGRATED_OPEN_STEP // odvodené z otvoreného kroku bez odoslania (§11)
+}
+
+model LeadRequest {
+  id      String         @id @default(cuid())
+  lead    Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId  String
+  content RequestContent
+  state   RequestState   @default(OPEN)
+  origin  RequestOrigin  @default(LIVE)
+
+  // Kedy a od koho: „instant" = čas zdrojovej aktivity, nie zaokrúhlený deň.
+  requestedAt      DateTime
+  requestedBy      User?     @relation("LeadRequestRequestedBy", fields: [requestedById], references: [id])
+  requestedById    String? // NULL pri migrovanom riadku bez známeho aktéra – nikdy dnešný vlastník
+  source           Activity? @relation("LeadRequestSource", fields: [sourceActivityId], references: [id], onDelete: SetNull)
+  sourceActivityId String? // hovor, z ktorého vznikla; vrátenie prvého hovoru riadky zmaže
+
+  // Vyriešenie – prepočítané, nie prepínané
+  resolvedAt         DateTime?
+  resolvedBy         User?     @relation("LeadRequestResolvedBy", fields: [resolvedById], references: [id])
+  resolvedById       String?
+  resolution         Activity? @relation("LeadRequestResolution", fields: [resolvedActivityId], references: [id], onDelete: SetNull)
+  resolvedActivityId String? // OFFER_SENT, ktoré ju splnilo
+  reason             String? // povinný pri ručnom stiahnutí
+
+  // Migrácia (§11)
+  migrationKey String? @unique // deterministický kľúč zdroja – opakovaný beh nevytvorí duplikát
+  provenance   Json? // zdrojové stĺpce / aktivity, istota, schválená výnimka
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId, state])
+  @@index([leadId, content, state])
+}
+
+model DealOwnership {
+  id         String              @id @default(cuid())
+  lead       Lead                @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId     String
+  fromUser   User?               @relation("DealOwnershipFrom", fields: [fromUserId], references: [id])
+  fromUserId String?
+  toUser     User?               @relation("DealOwnershipTo", fields: [toUserId], references: [id])
+  toUserId   String?
+  byUser     User                @relation("DealOwnershipBy", fields: [byUserId], references: [id])
+  byUserId   String
+  reason     DealOwnershipReason
+  note       String?
+  createdAt  DateTime            @default(now())
+
+  @@index([leadId, createdAt])
+  @@index([fromUserId, createdAt])
 }

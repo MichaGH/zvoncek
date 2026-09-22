@@ -1,6 +1,9 @@
 // Zdieľaná logika "ako urgentný je naplánovaný termín".
-// Používa to /dashboard/calls (callbackAt + callbackHasTime) aj pipeline
+// Používa to /dashboard/calls (callbackAt + callbackHasTime) aj /dashboard/pipeline
 // (nextActionAt + nextActionHasTime) – cez komponent <UrgencyLabel/>.
+// Dni sa porovnávajú v obchodnom kalendári Europe/Bratislava (server aj prehliadač vypíšu to isté).
+
+import { businessDate, businessDayMonth, businessDaysBetween, businessHm, addBusinessCalendarDays } from "@/lib/domain/businessTime";
 
 export type Urgency = "future" | "soon" | "due" | "late";
 
@@ -8,16 +11,6 @@ export type Urgency = "future" | "soon" | "due" | "late";
 const SOON_WINDOW_MIN = 30;
 // Koľko hodín po presnom čase ostáva "due", než prejde do "late".
 const LATE_AFTER_HOURS = 1;
-
-function startOfDay(d: Date): Date {
-    const x = new Date(d);
-    x.setHours(0, 0, 0, 0);
-    return x;
-}
-
-function sameDay(a: Date, b: Date): boolean {
-    return startOfDay(a).getTime() === startOfDay(b).getTime();
-}
 
 export function urgencyOf(
     at: Date | string | null,
@@ -35,11 +28,11 @@ export function urgencyOf(
         return lateHours > LATE_AFTER_HOURS ? "late" : "due";
     }
 
-    // Len deň – čas termínu sa ignoruje, porovnávajú sa kalendárne dni.
-    const today = startOfDay(now);
-    const day = startOfDay(target);
+    // Len deň – čas termínu sa ignoruje, porovnávajú sa obchodné kalendárne dni.
+    const today = businessDate(now);
+    const day = businessDate(target);
     if (today < day) return "future";
-    if (today.getTime() === day.getTime()) return "due"; // celý dnešný deň
+    if (today === day) return "due"; // celý dnešný deň
     return "late"; // deň po termíne a viac
 }
 
@@ -60,13 +53,10 @@ function dayWord(n: number): string {
     return "dní";
 }
 
-// „trvá X dní" – počet dní odkedy sa akcia začala (nextActionAt = dátum začatia).
+// „trvá X dní" – počet obchodných dní odkedy sa akcia začala (nextActionAt = dátum začatia).
 export function fmtProgress(iso: string | null, now: Date = new Date()): string | null {
     if (!iso) return "rozpracované";
-    const start = new Date(iso);
-    const days = Math.round(
-        (startOfDay(now).getTime() - startOfDay(start).getTime()) / 86_400_000,
-    );
+    const days = businessDaysBetween(new Date(iso), now);
     if (days <= 0) return "dnes";
     return `trvá ${days} ${dayWord(days)}`;
 }
@@ -75,17 +65,20 @@ export function fmtProgress(iso: string | null, now: Date = new Date()): string 
 //   0 = urgentné (termín meškáš/dnes/blíži sa)
 //   1 = rozpracované (IN_PROGRESS – návrhy)
 //   2 = budúce naplánované (termín v budúcnosti)
-//   3 = čaká sa / bez termínu (krok bez dátumu)
+//   3 = čaká sa / bez termínu (krok bez dátumu; aj krok zamknutý úlohou pre manažéra – wave 3 §5.3)
 //   4 = žiadny ďalší krok
 // Druhotne (tie-break) vraciame čas v ms: pri urgentných/budúcich najskôr najbližší
 // termín, pri rozpracovaných najskôr najstaršie (najdlhšie trvá).
+// SQL dvojča je DEAL_RANK_SQL v lib/queries/pipeline/index.ts (test r02PipelineOrder).
 export function nextActionSort(
     mode: "SCHEDULED" | "IN_PROGRESS",
     kind: string | null,
     at: string | null,
     hasTime: boolean,
     now: Date = new Date(),
+    locked = false,
 ): { rank: number; tie: number } {
+    if (locked) return { rank: 3, tie: 0 };
     if (!kind) return { rank: 4, tie: 0 };
     if (mode === "IN_PROGRESS") {
         // najstaršie začaté = najvyššie v rámci skupiny
@@ -111,24 +104,22 @@ export function fmtCallback(
 ): string | null {
     if (!iso) return null;
     const d = new Date(iso);
-    const time = `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
-    const dateShort = `${d.getDate()}.${d.getMonth() + 1}.`;
+    const time = businessHm(d);
+    const dateShort = businessDayMonth(d);
     const detail = hasTime ? `${dateShort} ${time}` : dateShort;
 
     const dayLabel = () => {
-        if (sameDay(d, now)) return "dnes";
-        const tmr = new Date(now);
-        tmr.setDate(tmr.getDate() + 1);
-        if (sameDay(d, tmr)) return "zajtra";
+        const day = businessDate(d);
+        const today = businessDate(now);
+        if (day === today) return "dnes";
+        if (day === addBusinessCalendarDays(today, 1)) return "zajtra";
         return dateShort;
     };
 
     if (urgency === "due") return hasTime ? `teraz (${time})` : "dnes";
 
     if (urgency === "late") {
-        const dayDiff = Math.round(
-            (startOfDay(now).getTime() - startOfDay(d).getTime()) / 86_400_000,
-        );
+        const dayDiff = businessDaysBetween(d, now);
         if (dayDiff <= 0) {
             // presný čas, ešte v rámci dňa termínu
             const h = Math.floor((now.getTime() - d.getTime()) / 3_600_000);

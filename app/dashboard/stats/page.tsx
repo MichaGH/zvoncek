@@ -1,4 +1,3 @@
-import { auth } from "@/auth";
 import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import StatsPeriodPicker from "@/components/stats/StatsPeriodPicker";
 import { StatBar, StatCard } from "@/components/stats/StatCard";
@@ -16,6 +15,7 @@ import {
     getCallStats,
     getCallStatsByUser,
     getCallsDaily,
+    getDemandStats,
     getContactPoolStats,
     getContactsAddedStats,
     getContactsAddedDaily,
@@ -26,17 +26,22 @@ import {
 import { getTeamOptions, getTeamPeople, getTeamScopeForLeader } from "@/lib/queries/teams";
 import ActivityHeatmap from "@/components/stats/ActivityHeatmap";
 import { OUTCOME_LABEL, STATUS_LABEL } from "@/lib/dictionaries";
+import { REQUEST_CONTENT_LABEL, REQUEST_CONTENTS } from "@/lib/domain/clientRequests";
 import { resolveRange, toDateInput } from "@/lib/stats/range";
 import { can } from "@/lib/permissions";
+import { requireUser } from "@/lib/access/user";
+import { redirect } from "next/navigation";
 import type { CallOutcome, LeadStatus } from "@/app/generated/prisma/enums";
 import Link from "next/link";
 
 // Order outcomes as a rough funnel for the breakdown.
 const OUTCOME_ORDER: CallOutcome[] = [
+    "INTERESTED",
     "WANTS_QUOTE",
     "WANTS_DESIGN",
     "WANTS_EMAIL",
     "POSITIVE",
+    "WANTS_TO_ORDER",
     "CALL_AGAIN",
     "SNOOZE",
     "NOT_INTERESTED",
@@ -44,7 +49,7 @@ const OUTCOME_ORDER: CallOutcome[] = [
     "BAD_NUMBER",
 ];
 
-const GOOD: CallOutcome[] = ["WANTS_QUOTE", "WANTS_DESIGN", "WANTS_EMAIL", "POSITIVE"];
+const GOOD: CallOutcome[] = ["INTERESTED", "WANTS_QUOTE", "WANTS_DESIGN", "WANTS_EMAIL", "POSITIVE", "WANTS_TO_ORDER"];
 const BAD: CallOutcome[] = ["NOT_INTERESTED", "BAD_NUMBER"];
 
 const STATUS_ORDER: LeadStatus[] = [
@@ -68,12 +73,13 @@ export default async function StatsPage({
         team?: string;
     }>;
 }) {
-    const session = await auth();
-    if (!session?.user?.id) return null;
+    const viewer = await requireUser();
+    if (!viewer) redirect("/login?deactivated=1");
+    if (!can(viewer, "stats.view")) redirect("/dashboard");
 
     const { period, from, to, userId, team } = await searchParams;
-    const canViewAll = can(session.user, "stats.viewAll"); // manager/admin – všetko
-    const canViewTeam = can(session.user, "stats.viewTeam"); // vedúci – len jeho tím
+    const canViewAll = can(viewer, "stats.viewAll"); // manager/admin – všetko
+    const canViewTeam = can(viewer, "stats.viewTeam"); // vedúci – len jeho tím
     const isLeaderView = canViewTeam && !canViewAll;
     const range = resolveRange({ period, from, to });
 
@@ -97,8 +103,8 @@ export default async function StatsPage({
             teamName = tp?.name;
         }
     } else if (canViewTeam) {
-        const scope = await getTeamScopeForLeader(session.user.id);
-        const ids = scope?.ids ?? [session.user.id];
+        const scope = await getTeamScopeForLeader(viewer.id);
+        const ids = scope?.ids ?? [viewer.id];
         leaderPeople = scope?.people ?? [];
         teamName = scope?.name;
         if (userId && ids.includes(userId)) {
@@ -108,7 +114,7 @@ export default async function StatsPage({
         }
     } else {
         // Fallback: len vlastné čísla.
-        scopeUserId = session.user.id;
+        scopeUserId = viewer.id;
     }
 
     const showCallSections = canViewAll;
@@ -130,10 +136,13 @@ export default async function StatsPage({
     }
     const heatmapLabel = range.key === "all" ? "posledných 26 týždňov" : range.label;
 
-    const [callStats, perUser, pool, contactsAdded, addingLog, addsDaily, callsDaily] =
+    const [callStats, demand, perUser, pool, contactsAdded, addingLog, addsDaily, callsDaily] =
         await Promise.all([
             showCallSections
                 ? getCallStats({ range, userId: scopeUserId, userIds: scopeUserIds })
+                : Promise.resolve(null),
+            showCallSections
+                ? getDemandStats({ range, userId: scopeUserId, userIds: scopeUserIds })
                 : Promise.resolve(null),
             canViewAll && !scopeUserId && !scopeUserIds
                 ? getCallStatsByUser({ range })
@@ -282,14 +291,16 @@ export default async function StatsPage({
                                 </CardContent>
                             </Card>
 
+                            {/* Počíta sa z toho, čo klienti naozaj pýtali (LeadRequest), nie z výsledku hovoru –
+                                jeden hovor môže počítať vo viacerých obsahoch (wave 5 §6.5, R01-11). */}
                             <Card>
                                 <CardHeader className="pb-3">
                                     <CardTitle className="text-base">Čo chceli</CardTitle>
                                 </CardHeader>
                                 <CardContent className="grid grid-cols-3 gap-4">
-                                    <Mini label="Cenová ponuka" value={callStats.byOutcome.WANTS_QUOTE} />
-                                    <Mini label="Návrh" value={callStats.byOutcome.WANTS_DESIGN} />
-                                    <Mini label="Email" value={callStats.byOutcome.WANTS_EMAIL} />
+                                    {REQUEST_CONTENTS.map((c) => (
+                                        <Mini key={c} label={REQUEST_CONTENT_LABEL[c]} value={demand?.byContent[c] ?? 0} />
+                                    ))}
                                 </CardContent>
                             </Card>
                         </div>

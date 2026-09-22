@@ -38,8 +38,11 @@ export const { auth, signIn, signOut } = NextAuth({
                     const passwordsMatch = await bcrypt.compare(password, user.password);
 
                     if (passwordsMatch) {
-                        // Zaznamenáme posledné prihlásenie (fire-and-forget)
-                        void prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+                        // Zaznamenáme posledné prihlásenie (fire-and-forget). Prisma dotaz beží až po .then/await –
+                        // samotné `void prisma.user.update(...)` by sa nikdy nevykonalo.
+                        prisma.user
+                            .update({ where: { id: user.id }, data: { lastLoginAt: new Date() } })
+                            .catch(() => {});
                         const { password: _pw, deletedAt: _del, ...safeUser } = user;
                         void _pw; void _del;
                         return safeUser;

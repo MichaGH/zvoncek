@@ -1,15 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription } from "@/components/ui/drawer";
+import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { QueueLead } from "@/lib/queries/calls";
 import { Phone, Globe, StickyNote, History, Pencil, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { updateLeadContact } from "@/lib/actions/calls";
 import { toast } from "sonner";
+import { useRouter } from "next/navigation";
 
 export default function InfoDrawer({ lead, onClose }: { lead: QueueLead | null; onClose: () => void }) {
+    const router = useRouter();
     const [editing, setEditing] = useState(false);
     const [saving, setSaving] = useState(false);
 
@@ -42,12 +44,13 @@ export default function InfoDrawer({ lead, onClose }: { lead: QueueLead | null; 
             email: email.trim() || null,
         });
         setSaving(false);
-        if (r?.error) {
+        if ("error" in r) {
             toast.error(r.error);
         } else {
             toast.success("Kontakt uložený");
             setEditing(false);
         }
+        router.refresh();
     }
 
     // Keď sa drawer zatvára, resetujeme edit stav
@@ -58,21 +61,20 @@ export default function InfoDrawer({ lead, onClose }: { lead: QueueLead | null; 
         }
     }
 
-    if (!lead) return <Drawer open={false} repositionInputs={false} />;
+    if (!lead) return null;
     const L = lead;
     const name = L.companyName ?? L.website ?? "—";
 
     return (
-        // repositionInputs={false}: vaul defaultne presúva drawer hore keď sa focusne
-        // input → na mobile drawer vyletí mimo obrazovky. Vypneme to (rovnako ako CallDrawer).
-        <Drawer open={!!lead} onOpenChange={handleOpenChange} repositionInputs={false}>
-            <DrawerContent className="data-[vaul-drawer-direction=bottom]:max-h-[90dvh]">
-                <DrawerHeader className="flex-none pb-2">
-                    <div className="mx-auto flex w-full max-w-md items-center justify-between">
-                        <DrawerTitle className="flex min-w-0 items-center gap-2">
+        <ResponsiveSheet
+            open={!!lead}
+            onOpenChange={handleOpenChange}
+            title={
+                    <div className="mx-auto flex w-full max-w-md items-center justify-between md:max-w-none">
+                        <span className="flex min-w-0 items-center gap-2">
                             <span className="shrink-0 text-muted-foreground tabular-nums">#{L.number}</span>
                             {!editing && <span className="truncate">{name}</span>}
-                        </DrawerTitle>
+                        </span>
                         {!editing ? (
                             <Button variant="ghost" size="sm" onClick={startEdit} className="h-8 shrink-0 gap-1.5 text-muted-foreground">
                                 <Pencil className="h-3.5 w-3.5" />
@@ -89,12 +91,9 @@ export default function InfoDrawer({ lead, onClose }: { lead: QueueLead | null; 
                             </div>
                         )}
                     </div>
-                    <DrawerDescription className="sr-only">Detaily firmy</DrawerDescription>
-                </DrawerHeader>
-
-                {/* flex-1 + overflow-y-auto: drawer má pevnú výšku, obsah scrolluje interne */}
-                <div className="flex-1 overflow-y-auto overscroll-contain">
-                    <div className="mx-auto w-full max-w-md space-y-3 px-4 pb-6">
+            }
+        >
+                    <div className="mx-auto w-full max-w-md space-y-3 px-4 pb-6 md:max-w-none md:px-0 md:pb-0">
                         {editing ? (
                             /* ── EDIT MODE ── */
                             <div className="space-y-2">
@@ -154,9 +153,7 @@ export default function InfoDrawer({ lead, onClose }: { lead: QueueLead | null; 
                             </>
                         )}
                     </div>
-                </div>
-            </DrawerContent>
-        </Drawer>
+        </ResponsiveSheet>
     );
 }
 

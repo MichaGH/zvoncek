@@ -1,5 +1,6 @@
 import Script from "next/script";
 import { notFound } from "next/navigation";
+import InteractionPreview from "./InteractionPreview";
 
 // Dev-only stand-in for a real proposal page, so you can test the snippet in a browser.
 // Open: /dev/proposal?p=YOUR_TOKEN  (get a token from `npm run seed:tracking`).
@@ -8,10 +9,12 @@ export const dynamic = "force-dynamic";
 export default async function DevProposalPage({
     searchParams,
 }: {
-    searchParams: Promise<{ p?: string }>;
+    searchParams: Promise<{ p?: string; preview?: string }>;
 }) {
     if (process.env.NODE_ENV === "production") notFound();
-    const { p } = await searchParams;
+    const { p, preview } = await searchParams;
+
+    if (preview === "interaction") return <InteractionPreview />;
 
     return (
         <main

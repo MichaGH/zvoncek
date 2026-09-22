@@ -1,12 +1,13 @@
-import { auth } from "@/auth";
-import { notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import NewUserForm from "@/components/admin/NewUserForm";
 import { can } from "@/lib/permissions";
+import { requireUser } from "@/lib/access/user";
 
 export default async function NewUserPage() {
-    const session = await auth();
-    if (!can(session?.user, "admin.access")) notFound();
+    const viewer = await requireUser();
+    if (!viewer) redirect("/login?deactivated=1");
+    if (!can(viewer, "admin.access")) redirect("/dashboard");
 
     return (
         <DashboardPage>

@@ -1,63 +1,133 @@
 import Link from "next/link";
-import { LeadStatus } from "@/app/generated/prisma/enums";
+import { redirect } from "next/navigation";
+import { History, TriangleAlert } from "lucide-react";
 import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import RefreshButton from "@/components/dashboard/RefreshButton";
-import PipelineSearch from "@/components/pipeline/PipelineSearch";
-import PipelineStatusTabs from "@/components/pipeline/PipelineStatusTabs";
-import PipelineTable from "@/components/pipeline/PipelineTable";
-import PipelineViewTabs from "@/components/pipeline/PipelineViewTabs";
+import DealFilters from "@/components/pipeline/DealFilters";
+import DealList from "@/components/pipeline/DealList";
+import TransferDealsDialog from "@/components/pipeline/TransferDealsDialog";
 import { Button } from "@/components/ui/button";
-import { getPipelineList, PIPELINE_PAGE_SIZE } from "@/lib/queries/pipeline";
+import { requireUser } from "@/lib/access/user";
+import { dealCapabilities } from "@/lib/domain/dealCapabilities";
+import {
+    DEFAULT_OWNER,
+    DEFAULT_STATUS_KEY,
+    dealsHref,
+    parseDealParams,
+    resolveView,
+    statusOf,
+    viewOf,
+    type DealFilterParams,
+} from "@/lib/domain/dealFilters";
+import { ownerFilterParam, resolveOwnerFilter } from "@/lib/domain/dealScope";
+import { can } from "@/lib/permissions";
+import prisma from "@/lib/db";
+import {
+    DEAL_PAGE_SIZE,
+    getDealCounts,
+    getDealList,
+    getDealOwnerOptions,
+    getDealScope,
+    getDealStepCounts,
+    getHandoffOptions,
+    getResolverOptions,
+} from "@/lib/queries/pipeline";
 
-const FILTERS: Record<string, LeadStatus | undefined> = {
-    active: "ACTIVE",
-    new: "NEW",
-    snoozed: "SNOOZED",
-    won: "WON",
-    lost: "LOST",
-    unreachable: "UNREACHABLE",
-    all: undefined,
-};
+// Jedna obrazovka obchodov pre obchodníka aj manažéra (round 2, D-01). Rozsah rieši dealScope() na serveri,
+// rola mení len ponuku filtrov a ovládacie prvky.
 
-export default async function PipelinePage({
+export default async function DealsPage({
     searchParams,
 }: {
-    searchParams: Promise<{ filter?: string; q?: string; view?: string; limit?: string }>;
+    searchParams: Promise<{ filter?: string; view?: string; step?: string; owner?: string; q?: string; from?: string; limit?: string }>;
 }) {
-    const { filter = "active", q, view, limit } = await searchParams;
-    const parsedLimit = Number(limit);
-    const take =
-        Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : PIPELINE_PAGE_SIZE;
+    const viewer = await requireUser();
+    if (!viewer) redirect("/login?deactivated=1");
+    if (!can(viewer, "deals.view")) redirect("/dashboard");
 
-    // Sekundárny "pohľad" má zmysel len v rámci Aktívnych.
-    const showViews = filter === "active";
-    const activeView = showViews ? view : undefined;
+    const parsed = parseDealParams(await searchParams);
+    const caps = dealCapabilities(viewer);
+    // „Pre mňa" je len pre toho, kto úlohy vybavuje, a ignoruje vlastníka, stav aj „Od:" (schránka, wave 3 §7).
+    const raw: DealFilterParams =
+        parsed.view === "inbox"
+            ? caps.resolver
+                ? { ...parsed, owner: DEFAULT_OWNER, filter: DEFAULT_STATUS_KEY, from: undefined }
+                : { ...parsed, view: "today" }
+            : parsed;
+    const scope = await getDealScope(viewer);
+    const ownerFilter = resolveOwnerFilter(raw.owner, viewer, scope);
+    // Parametre normalizujeme na to, čo server naozaj použil – odkazy potom nikdy neukazujú niečo iné než zoznam.
+    const normalized: DealFilterParams = { ...raw, owner: ownerFilterParam(ownerFilter, viewer.id) };
+    const take = normalized.limit ?? DEAL_PAGE_SIZE;
+    // Zoznam aj počty dostanú tie isté vstupy (jeden predikát na pilulku).
+    const filters = {
+        scope,
+        owner: ownerFilter,
+        status: statusOf(normalized),
+        query: normalized.q,
+        handedOffBy: normalized.from,
+        viewerId: viewer.id,
+    };
 
-    const { rows, hasMore } = await getPipelineList({
-        status: FILTERS[filter],
-        query: q,
-        view: activeView,
-        take,
-    });
+    // Počty rádov najprv: bez `view` v adrese sa otvorí „Na spracovanie", kým je čo spracovať, inak „Na dnes".
+    const counts = await getDealCounts(filters);
+    const params: DealFilterParams = { ...normalized, view: resolveView(normalized.view, counts) };
 
-    const moreParams = new URLSearchParams({ filter });
-    if (q) moreParams.set("q", q);
-    if (activeView) moreParams.set("view", activeView);
-    moreParams.set("limit", String(take + PIPELINE_PAGE_SIZE));
+    const [{ rows, hasMore }, stepCounts, owners, handoffs, callers, resolvers] = await Promise.all([
+        getDealList({ ...filters, view: viewOf(params), step: params.step, take }),
+        getDealStepCounts(filters, viewOf(params)),
+        caps.seeOthers ? getDealOwnerOptions(scope) : Promise.resolve([]),
+        caps.seeOthers ? getHandoffOptions(scope) : Promise.resolve([]),
+        caps.transferDeals
+            ? prisma.user.findMany({
+                  where: { handedOffLeads: { some: {} } },
+                  select: { id: true, firstName: true, lastName: true },
+                  orderBy: { firstName: "asc" },
+              })
+            : Promise.resolve([]),
+        caps.work ? getResolverOptions(viewer.id) : Promise.resolve([]),
+    ]);
+
+    const showOwner = caps.seeOthers && ownerFilter === "all";
 
     return (
         <DashboardPage>
             <DashboardPageHeader
                 title="Pipeline"
-                description="Firmy, ktoré sa posunuli do reálneho riešenia"
-                actions={<RefreshButton />}
+                description={`${counts.open} otvorených · ${counts.today} na dnes${caps.resolver && counts.inbox ? ` · ${counts.inbox} pre mňa` : ""}`}
+                actions={
+                    <>
+                        {caps.transferDeals && <TransferDealsDialog owners={owners} callers={callers} resolvers={resolvers} />}
+                        <Button asChild variant="ghost" size="sm">
+                            <Link href="/dashboard/pipeline/historia">
+                                <History className="mr-1.5 h-4 w-4" />
+                                História
+                            </Link>
+                        </Button>
+                        <RefreshButton />
+                    </>
+                }
             >
                 <div className="flex flex-col gap-3">
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                        <PipelineStatusTabs current={filter} query={q} />
-                        <PipelineSearch filter={filter} query={q} view={activeView} />
-                    </div>
-                    {showViews && <PipelineViewTabs filter={filter} view={activeView} query={q} />}
+                    {caps.manage && counts.unassignedOpen > 0 && (
+                        <Link
+                            href={dealsHref(params, { filter: "all", view: "all", owner: "unassigned" })}
+                            className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive hover:bg-destructive/10"
+                        >
+                            <TriangleAlert className="h-4 w-4 shrink-0" />
+                            {counts.unassignedOpen} {counts.unassignedOpen === 1 ? "obchod nemá" : "obchodov nemá"} vlastníka – priradiť
+                        </Link>
+                    )}
+                    <DealFilters
+                        params={params}
+                        counts={counts}
+                        stepCounts={stepCounts}
+                        owners={owners}
+                        handoffs={handoffs}
+                        showOwner={caps.seeOthers}
+                        showInbox={caps.resolver}
+                        showWaiting={caps.work}
+                    />
                 </div>
             </DashboardPageHeader>
 
@@ -65,14 +135,20 @@ export default async function PipelinePage({
                 {rows.length} {hasMore ? "+ záznamov" : "záznamov"}
             </div>
 
-            <PipelineTable rows={rows} showStatus={filter === "all"} />
+            <DealList
+                rows={rows}
+                caps={caps}
+                showStatus={params.filter === "all"}
+                showOwner={showOwner}
+                inbox={params.view === "inbox"}
+                viewerId={viewer.id}
+                resolvers={resolvers}
+            />
 
             {hasMore && (
                 <div className="mt-4 flex justify-center">
                     <Button asChild variant="outline">
-                        <Link href={`/dashboard/pipeline?${moreParams.toString()}`}>
-                            Načítať ďalších {PIPELINE_PAGE_SIZE}
-                        </Link>
+                        <Link href={dealsHref(params, { limit: take + DEAL_PAGE_SIZE })}>Načítať ďalších {DEAL_PAGE_SIZE}</Link>
                     </Button>
                 </div>
             )}

@@ -1,17 +1,18 @@
-import { auth } from "@/auth";
-import { notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 import Link from "next/link";
 import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
 import { Button } from "@/components/ui/button";
 import TeamsManager from "@/components/admin/TeamsManager";
 import { can } from "@/lib/permissions";
+import { requireUser } from "@/lib/access/user";
 import { getTeams } from "@/lib/queries/teams";
 import { getUserOptions } from "@/lib/queries/users";
 import { ArrowLeft } from "lucide-react";
 
 export default async function AdminTeamsPage() {
-    const session = await auth();
-    if (!can(session?.user, "teams.manage")) notFound();
+    const viewer = await requireUser();
+    if (!viewer) redirect("/login?deactivated=1");
+    if (!can(viewer, "teams.manage")) redirect("/dashboard");
 
     const [teams, userOptions] = await Promise.all([getTeams(), getUserOptions()]);
 

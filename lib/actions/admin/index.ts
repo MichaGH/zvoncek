@@ -1,21 +1,22 @@
 "use server";
 
-import { auth } from "@/auth";
 import prisma from "@/lib/db";
 import bcrypt from "bcrypt";
 import { revalidatePath } from "next/cache";
 import { can } from "@/lib/permissions";
+import { requireUser, type AccessUser } from "@/lib/access/user";
+import { deactivateUserAs, updateUserProfileAs, type RemainingWork } from "@/lib/commands/admin";
 import { usernameSchema, emailSchema, passwordSchema } from "@/lib/domain/validation";
 import { z } from "zod";
 import { Role } from "@/app/generated/prisma/enums";
 
 type Result<T = void> = { ok: true; data?: T } | { ok: false; error: string };
 
-async function assertAdmin(): Promise<{ ok: true; userId: string } | { ok: false; error: string }> {
-    const session = await auth();
-    if (!session?.user?.id) return { ok: false, error: "Nie si prihlásený." };
-    if (!can(session.user, "admin.access")) return { ok: false, error: "Nemáš oprávnenie." };
-    return { ok: true, userId: session.user.id };
+async function assertAdmin(): Promise<{ ok: true; userId: string; user: AccessUser } | { ok: false; error: string }> {
+    const user = await requireUser();
+    if (!user) return { ok: false, error: "Nie si prihlásený." };
+    if (!can(user, "admin.access")) return { ok: false, error: "Nemáš oprávnenie." };
+    return { ok: true, userId: user.id, user };
 }
 
 function revalidateAdmin() {
@@ -120,21 +121,21 @@ export async function adminUpdateUser(
         if (existingEmail) return { ok: false, error: "Tento email už existuje." };
     }
 
-    await prisma.user.update({
-        where: { id },
-        data: {
-            firstName: firstName.trim(),
-            lastName: lastName.trim(),
-            username,
-            email: email || null,
-            phone: phone?.trim() || null,
-            role: role as Role,
-            note: note?.trim() || null,
-        },
+    // Zmena roly bez calls.work/claim uvoľní nevolané NEW v tej istej transakcii (plán §9).
+    const result = await updateUserProfileAs(guard.user, id, {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        username,
+        email: email || null,
+        phone: phone?.trim() || null,
+        role: role as Role,
+        note: note?.trim() || null,
     });
+    if (!result.ok) return { ok: false, error: result.error };
 
     revalidateAdmin();
     revalidatePath(`/dashboard/admin/users/${id}`);
+    revalidatePath("/dashboard/calls");
     return { ok: true };
 }
 
@@ -165,15 +166,18 @@ export async function adminResetPassword(
 
 // ── Deaktivácia / reaktivácia ─────────────────────────────────────────────────
 
-export async function adminDeactivateUser(id: string): Promise<Result> {
+// Deaktivácia počká na rozbehnutú prácu používateľa, uvoľní jeho nevolané NEW (musí ostať 0, inak sa nevykoná)
+// a vráti, čo ešte drží (retry, callbacky, spiace, obchody) – tie presúva manažér ručne.
+export async function adminDeactivateUser(id: string): Promise<Result<RemainingWork>> {
     const guard = await assertAdmin();
     if (!guard.ok) return guard;
-    if (id === guard.userId) return { ok: false, error: "Nemôžeš deaktivovať vlastný účet." };
 
-    await prisma.user.update({ where: { id }, data: { deletedAt: new Date() } });
+    const result = await deactivateUserAs(guard.user, id);
+    if (!result.ok) return { ok: false, error: result.error };
     revalidateAdmin();
     revalidatePath(`/dashboard/admin/users/${id}`);
-    return { ok: true };
+    revalidatePath("/dashboard/calls/assignments");
+    return { ok: true, data: result.data };
 }
 
 export async function adminReactivateUser(id: string): Promise<Result> {

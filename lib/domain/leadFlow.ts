@@ -4,127 +4,300 @@ import {
     LeadStatus,
     NextActionKind,
     NextActionMode,
+    RequestContent,
 } from "@/app/generated/prisma/enums";
+import { businessTodayStart, nextBusinessWorkingDayStart } from "@/lib/domain/businessTime";
+import { defaultStep } from "@/lib/domain/clientRequests";
+import { defaultStepNote, nextStepOption } from "@/lib/domain/nextStepOptions";
 
-export type LeadFlowData = {
-    status: LeadStatus;
-    callbackKind: CallbackKind | null;
-    callbackAt?: Date | null;
-    callbackHasTime?: boolean;
-    callbackNote?: string | null;
-    nextActionKind?: NextActionKind | null;
-    nextActionAt?: Date | null;
-    nextActionHasTime?: boolean;
-    nextActionMode?: NextActionMode;
-    nextActionNote?: string | null;
-    lostReason?: string | null;
+// Prechody stavov – čisté funkcie bez DB. Kontrola prístupu, zámky a revízia sú v akciách.
+
+export const FIRST_CALL_OUTCOMES = [
+    "NO_ANSWER",
+    "CALL_AGAIN",
+    "SNOOZE",
+    "NOT_INTERESTED",
+    "BAD_NUMBER",
+    "INTERESTED",
+    "WANTS_QUOTE",
+    "WANTS_EMAIL",
+    "WANTS_DESIGN",
+] as const satisfies readonly CallOutcome[];
+
+export type FirstCallOutcome = (typeof FIRST_CALL_OUTCOMES)[number];
+
+// Wave 5 (§6.5): jeden pozitívny výsledok hovoru, ČO chceli je v LeadRequest riadkoch. Staré WANTS_* hodnoty ostávajú
+// platné a v histórii sa naďalej zobrazujú – nový hovor ich už nezapisuje (fronta volaní posiela INTERESTED).
+export const HANDOFF_OUTCOMES = ["INTERESTED", "WANTS_QUOTE", "WANTS_EMAIL", "WANTS_DESIGN"] as const;
+
+export function isHandoffOutcome(outcome: CallOutcome): outcome is (typeof HANDOFF_OUTCOMES)[number] {
+    return (HANDOFF_OUTCOMES as readonly string[]).includes(outcome);
+}
+
+export type NextActionFields = {
+    nextActionKind: NextActionKind | null;
+    nextActionAt: Date | null;
+    nextActionHasTime: boolean;
+    nextActionMode: NextActionMode;
+    nextActionNote: string | null;
 };
 
+const NO_NEXT_ACTION: NextActionFields = {
+    nextActionKind: null,
+    nextActionAt: null,
+    nextActionHasTime: false,
+    nextActionMode: "SCHEDULED",
+    nextActionNote: null,
+};
+
+export type CallStageState = {
+    status: LeadStatus;
+    callbackKind: CallbackKind | null;
+    callbackAt: Date | null;
+    callbackHasTime: boolean;
+    callbackNote: string | null;
+    lostReason: string | null;
+    keepsAssignment: boolean;
+} & NextActionFields;
+
+// Stav po prvom hovore. `when` = vyriešený Schedule (CALL_AGAIN povinný, SNOOZE deň-only povinný).
+// Výsledky fázy volania NEzapisujú nextAction* (staré hodnoty z legacy CALL_AGAIN/SNOOZE sa vymažú).
 export function leadStateForOutcome(
-    outcome: CallOutcome,
-    when?: Date | null,
-    callbackNote?: string | null,
-    hasTime: boolean = false,
-): LeadFlowData {
+    outcome: FirstCallOutcome,
+    when: { at: Date; hasTime: boolean } | null,
+    callbackNote: string | null,
+    now: Date = new Date(),
+    asked: readonly RequestContent[] = [],
+): CallStageState {
+    const cleared = { callbackKind: null, callbackAt: null, callbackHasTime: false, callbackNote: null };
     switch (outcome) {
+        case "INTERESTED": {
+            // Krok vyplýva z toho, čo klient pýtal (§5, §6.8) – žiadne hádanie dominantnej hodnoty výsledku.
+            const step = defaultStep(asked, { nextActionKind: null, nextActionAt: null, nextActionHasTime: false, nextActionMode: "SCHEDULED", nextActionNote: null }, { now });
+            if (!step) throw new Error("INTERESTED vyžaduje aspoň jednu vec, ktorú klient chce");
+            return { status: "ACTIVE", ...cleared, lostReason: null, keepsAssignment: false, ...step };
+        }
         case "NO_ANSWER":
             return {
                 status: "CALLING",
                 callbackKind: "RETRY",
                 callbackAt: null,
+                callbackHasTime: false,
                 callbackNote: callbackNote || null,
-                nextActionKind: null,
-                nextActionAt: null,
-                nextActionNote: null,
+                lostReason: null,
+                keepsAssignment: true,
+                ...NO_NEXT_ACTION,
             };
         case "CALL_AGAIN":
+            if (!when) throw new Error("CALL_AGAIN vyžaduje termín");
             return {
                 status: "CALLING",
                 callbackKind: "SCHEDULED",
-                callbackAt: when ?? null,
-                callbackHasTime: hasTime,
+                callbackAt: when.at,
+                callbackHasTime: when.hasTime,
                 callbackNote: callbackNote || null,
-                nextActionKind: "CALL",
-                nextActionAt: when ?? null,
-                nextActionHasTime: hasTime,
-                nextActionMode: "SCHEDULED",
-                nextActionNote: callbackNote || "Dohodnutý spätný hovor",
+                lostReason: null,
+                keepsAssignment: true,
+                ...NO_NEXT_ACTION,
             };
+        case "SNOOZE":
+            if (!when || when.hasTime) throw new Error("SNOOZE vyžaduje deň bez času");
+            return {
+                status: "SNOOZED",
+                callbackKind: null,
+                callbackAt: when.at,
+                callbackHasTime: false,
+                callbackNote: callbackNote || null,
+                lostReason: null,
+                keepsAssignment: true,
+                ...NO_NEXT_ACTION,
+            };
+        case "NOT_INTERESTED":
+            return { status: "LOST", ...cleared, lostReason: "Nemajú záujem", keepsAssignment: false, ...NO_NEXT_ACTION };
         case "BAD_NUMBER":
             return {
                 status: "UNREACHABLE",
-                callbackKind: null,
-                callbackAt: null,
-                nextActionKind: null,
-                nextActionAt: null,
-                nextActionNote: null,
+                ...cleared,
                 lostReason: "Zlé / nefunkčné číslo",
-            };
-        case "NOT_INTERESTED":
-            return {
-                status: "LOST",
-                callbackKind: null,
-                callbackAt: null,
-                nextActionKind: null,
-                nextActionAt: null,
-                nextActionNote: null,
-                lostReason: "Nemajú záujem",
+                keepsAssignment: false,
+                ...NO_NEXT_ACTION,
             };
         case "WANTS_QUOTE":
             return {
                 status: "ACTIVE",
-                callbackKind: null,
-                callbackAt: null,
+                ...cleared,
+                lostReason: null,
+                keepsAssignment: false,
                 nextActionKind: "SEND_QUOTE",
-                nextActionAt: new Date(), // dnes – deň bez presného času → svieti "dnes"
+                nextActionAt: businessTodayStart(now),
                 nextActionHasTime: false,
                 nextActionMode: "SCHEDULED",
-                nextActionNote: "Poslať cenovú ponuku",
-            };
-        case "WANTS_DESIGN":
-            return {
-                status: "ACTIVE",
-                callbackKind: null,
-                callbackAt: null,
-                nextActionKind: "SEND_DESIGN",
-                nextActionAt: new Date(), // dátum vyžiadania – ráta sa „trvá X dní"
-                nextActionHasTime: false,
-                nextActionMode: "IN_PROGRESS", // rozpracované, nie termín → modré, nie červené
-                nextActionNote: "Vytvoriť a poslať dizajnový návrh",
+                nextActionNote: "Poslať cenu",
             };
         case "WANTS_EMAIL":
             return {
                 status: "ACTIVE",
-                callbackKind: null,
-                callbackAt: null,
+                ...cleared,
+                lostReason: null,
+                keepsAssignment: false,
                 nextActionKind: "SEND_EMAIL",
-                nextActionAt: new Date(),
+                nextActionAt: businessTodayStart(now),
                 nextActionHasTime: false,
                 nextActionMode: "SCHEDULED",
-                nextActionNote: "Napísať email / poslať informácie o nás",
+                nextActionNote: "Poslať info / cenník",
             };
-        case "SNOOZE":
+        case "WANTS_DESIGN":
             return {
-                status: "SNOOZED",
-                callbackKind: null,
-                callbackAt: when ?? null, // dátum „ozvať sa" – aby sa dal snoozed vynoriť v calls
-                callbackHasTime: false, // snooze je vždy len deň, nikdy presný čas
-                callbackNote: callbackNote || null,
-                nextActionKind: "CALL",
-                nextActionAt: when ?? null,
+                status: "ACTIVE",
+                ...cleared,
+                lostReason: null,
+                keepsAssignment: false,
+                nextActionKind: "SEND_DESIGN",
+                nextActionAt: businessTodayStart(now),
                 nextActionHasTime: false,
-                nextActionMode: "SCHEDULED",
-                nextActionNote: callbackNote || "Znovu osloviť neskôr",
+                nextActionMode: "IN_PROGRESS",
+                nextActionNote: "Vytvoriť a poslať dizajnový návrh",
             };
-        case "POSITIVE":
-            return { status: "ACTIVE", callbackKind: null, callbackAt: null };
     }
 }
 
-export function hasNextAction(data: LeadFlowData): boolean {
-    return Boolean(data.nextActionKind || data.nextActionAt || data.nextActionNote);
-}
+// ── Follow-up na obchode (/dashboard/pipeline) ─────────────────────────────────
 
-export function leavesCallsBoard(): boolean {
-    return true;
+export const FOLLOW_UP_OUTCOMES = [
+    "POSITIVE",
+    "NO_ANSWER",
+    "CALL_AGAIN",
+    "WANTS_QUOTE",
+    "WANTS_DESIGN",
+    "WANTS_TO_ORDER",
+    "SNOOZE",
+    "NOT_INTERESTED",
+    "BAD_NUMBER",
+] as const satisfies readonly CallOutcome[];
+
+export type FollowUpOutcome = (typeof FOLLOW_UP_OUTCOMES)[number];
+
+// Kroky, ktoré sa dajú vybrať po hovore (= všetky druhy kroku; ORDER wave 3 zrušila – D15).
+export const FOLLOW_UP_NEXT_KINDS = ["CALL", "WAITING_FOR_CLIENT", "SEND_QUOTE", "SEND_DESIGN", "SEND_EMAIL", "CUSTOM"] as const;
+export type FollowUpNextKind = (typeof FOLLOW_UP_NEXT_KINDS)[number];
+
+export type DealFollowUpState = {
+    status: LeadStatus;
+    closes: boolean; // LOST/UNREACHABLE → closedAt = now
+    lostReason?: string | null;
+} & NextActionFields;
+
+// Predpoklad: aktuálny stav ACTIVE alebo SNOOZED. Uzavreté obchody sa tu nikdy neotvárajú.
+// `stepNote` = „Poznámka ku kroku" (wave 3, F1) – ide LEN do Lead.nextActionNote; prázdna = predvolený text kroku.
+// Čo klient povedal, ide do histórie kontaktu v príkaze, nie sem.
+export function dealStateForFollowUp(
+    outcome: FollowUpOutcome,
+    input: {
+        when: { at: Date; hasTime: boolean } | null;
+        nextKind?: FollowUpNextKind | null;
+        stepNote?: string | null;
+        lostReason?: string | null;
+    },
+    current: { status: LeadStatus },
+    now: Date = new Date(),
+): DealFollowUpState {
+    if (current.status !== "ACTIVE" && current.status !== "SNOOZED") {
+        throw new Error("Follow-up je možný len na otvorenom obchode");
+    }
+    const note = input.stepNote?.trim() || null;
+    switch (outcome) {
+        // „Chcú objednať" je obyčajná odpoveď s vybraným krokom (wave 3, D15) – rovnako ako posun.
+        case "WANTS_TO_ORDER":
+        case "POSITIVE": {
+            const kind = input.nextKind;
+            if (!kind) throw new Error("Vyber ďalší krok");
+            // Pravidlá dátumu a režimu sú v zdieľanom zozname krokov, takže UI a server nemôžu tvrdiť niečo iné.
+            const option = nextStepOption(kind);
+            if (option?.date === "required" && !input.when) throw new Error("Tento krok vyžaduje termín");
+            const startsToday = option?.date === "today" && !input.when;
+            return {
+                status: "ACTIVE",
+                closes: false,
+                nextActionKind: kind,
+                nextActionAt: input.when?.at ?? (startsToday ? businessTodayStart(now) : null),
+                nextActionHasTime: input.when?.hasTime ?? false,
+                nextActionMode: option?.mode ?? "SCHEDULED",
+                nextActionNote: note ?? defaultStepNote(kind),
+            };
+        }
+        case "NO_ANSWER": {
+            // Predvolene „zavolať ďalší pracovný deň"; ak si volajúci vyberie iný krok alebo termín, rešpektuje sa
+            // – výsledok hovoru (nedovolal sa) tým ostáva zaznamenaný (round 2, D-05).
+            const kind = input.nextKind ?? "CALL";
+            const option = nextStepOption(kind);
+            const fallback =
+                kind === "CALL" ? nextBusinessWorkingDayStart(now) : option?.date === "today" ? businessTodayStart(now) : null;
+            return {
+                status: current.status,
+                closes: false,
+                nextActionKind: kind,
+                nextActionAt: input.when?.at ?? fallback,
+                nextActionHasTime: input.when?.hasTime ?? false,
+                nextActionMode: option?.mode ?? "SCHEDULED",
+                nextActionNote: note ?? "Nezdvihli – skúsiť znova",
+            };
+        }
+        case "CALL_AGAIN":
+            if (!input.when) throw new Error("Dohodnutý hovor vyžaduje termín");
+            return {
+                status: "ACTIVE",
+                closes: false,
+                nextActionKind: "CALL",
+                nextActionAt: input.when.at,
+                nextActionHasTime: input.when.hasTime,
+                nextActionMode: "SCHEDULED",
+                nextActionNote: note ?? "Dohodnutý hovor",
+            };
+        case "WANTS_QUOTE":
+            return {
+                status: "ACTIVE",
+                closes: false,
+                nextActionKind: "SEND_QUOTE",
+                nextActionAt: businessTodayStart(now),
+                nextActionHasTime: false,
+                nextActionMode: "SCHEDULED",
+                nextActionNote: note ?? "Poslať cenu",
+            };
+        case "WANTS_DESIGN":
+            // Návrh robí manažér – obchodník o neho požiada sám („Požiadať manažéra"); nič sa nezakladá automaticky (D9).
+            return {
+                status: "ACTIVE",
+                closes: false,
+                nextActionKind: "SEND_DESIGN",
+                nextActionAt: businessTodayStart(now),
+                nextActionHasTime: false,
+                nextActionMode: "IN_PROGRESS",
+                nextActionNote: note ?? "Vytvoriť a poslať dizajnový návrh",
+            };
+        case "SNOOZE":
+            if (!input.when || input.when.hasTime) throw new Error("Odloženie vyžaduje deň");
+            return {
+                status: "SNOOZED",
+                closes: false,
+                nextActionKind: "CALL",
+                nextActionAt: input.when.at,
+                nextActionHasTime: false,
+                nextActionMode: "SCHEDULED",
+                nextActionNote: note ?? "Znovu osloviť neskôr",
+            };
+        case "NOT_INTERESTED":
+            return {
+                status: "LOST",
+                closes: true,
+                lostReason: input.lostReason?.trim() || "Nemajú záujem",
+                ...NO_NEXT_ACTION,
+            };
+        case "BAD_NUMBER":
+            return {
+                status: "UNREACHABLE",
+                closes: true,
+                lostReason: "Zlé / nefunkčné číslo",
+                ...NO_NEXT_ACTION,
+            };
+    }
 }

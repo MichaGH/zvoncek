@@ -1,8 +1,9 @@
 "use server";
 
-import { auth } from "@/auth";
 import prisma from "@/lib/db";
 import { can } from "@/lib/permissions";
+import { requireUser } from "@/lib/access/user";
+import { deleteTeamAs, setTeamLeaderAs, setUserTeamAs } from "@/lib/commands/teams";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
@@ -11,10 +12,10 @@ type Result<T = void> = { ok: true; data?: T } | { ok: false; error: string };
 async function assertCanManageTeams(): Promise<
     { ok: true; userId: string } | { ok: false; error: string }
 > {
-    const session = await auth();
-    if (!session?.user?.id) return { ok: false, error: "Nie si prihlásený." };
-    if (!can(session.user, "teams.manage")) return { ok: false, error: "Nemáš oprávnenie." };
-    return { ok: true, userId: session.user.id };
+    const user = await requireUser();
+    if (!user) return { ok: false, error: "Nie si prihlásený." };
+    if (!can(user, "teams.manage")) return { ok: false, error: "Nemáš oprávnenie." };
+    return { ok: true, userId: user.id };
 }
 
 function revalidateTeams() {
@@ -56,63 +57,36 @@ export async function renameTeam(id: string, formData: FormData): Promise<Result
 }
 
 // ── Zmazanie tímu ──────────────────────────────────────────────────────────────
-// Členom sa teamId nastaví na null (FK je optional), vedúci sa uvoľní. Kontakty
-// ani ich história sa NEMAŽÚ – tie visia na Lead, nie na Team.
+// Členom sa teamId nastaví na null, vedúci sa uvoľní. Kontakty ani ich história sa NEMAŽÚ.
 
 export async function deleteTeam(id: string): Promise<Result> {
     const guard = await assertCanManageTeams();
     if (!guard.ok) return guard;
-
-    await prisma.$transaction([
-        prisma.user.updateMany({ where: { teamId: id }, data: { teamId: null } }),
-        prisma.team.delete({ where: { id } }),
-    ]);
-    revalidateTeams();
-    return { ok: true };
+    const result = await deleteTeamAs(id);
+    if (result.ok) revalidateTeams();
+    return result;
 }
 
 // ── Vedúci tímu ────────────────────────────────────────────────────────────────
-// leaderId má @unique: jeden user vedie max. jeden tím. leaderId=null vedúceho uvoľní.
+// Vedúci s deals.receive dostáva obchody z pozitívnych hovorov členov – zámky zdieľané s handoffom.
 
 export async function setTeamLeader(teamId: string, leaderId: string | null): Promise<Result> {
     const guard = await assertCanManageTeams();
     if (!guard.ok) return guard;
-
-    if (leaderId) {
-        const leader = await prisma.user.findUnique({
-            where: { id: leaderId, deletedAt: null },
-            select: { id: true },
-        });
-        if (!leader) return { ok: false, error: "Používateľ neexistuje." };
-
-        const alreadyLeads = await prisma.team.findUnique({
-            where: { leaderId },
-            select: { id: true },
-        });
-        if (alreadyLeads && alreadyLeads.id !== teamId) {
-            return { ok: false, error: "Tento používateľ už vedie iný tím." };
-        }
-    }
-
-    await prisma.team.update({ where: { id: teamId }, data: { leaderId } });
-    revalidateTeams();
-    return { ok: true };
+    const result = await setTeamLeaderAs(teamId, leaderId);
+    if (result.ok) revalidateTeams();
+    return result;
 }
 
 // ── Členstvo používateľa v tíme ─────────────────────────────────────────────────
-// teamId=null používateľa z tímu vyradí. Priraďuje sa z detailu používateľa.
 
 export async function setUserTeam(userId: string, teamId: string | null): Promise<Result> {
     const guard = await assertCanManageTeams();
     if (!guard.ok) return guard;
-
-    if (teamId) {
-        const team = await prisma.team.findUnique({ where: { id: teamId }, select: { id: true } });
-        if (!team) return { ok: false, error: "Tím neexistuje." };
+    const result = await setUserTeamAs(userId, teamId);
+    if (result.ok) {
+        revalidateTeams();
+        revalidatePath(`/dashboard/admin/users/${userId}`);
     }
-
-    await prisma.user.update({ where: { id: userId }, data: { teamId } });
-    revalidateTeams();
-    revalidatePath(`/dashboard/admin/users/${userId}`);
-    return { ok: true };
+    return result;
 }

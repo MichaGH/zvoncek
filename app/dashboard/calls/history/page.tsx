@@ -1,4 +1,3 @@
-import { auth } from "@/auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/DashboardPage";
@@ -11,8 +10,11 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { OUTCOME_LABEL } from "@/lib/dictionaries";
+import { BUSINESS_TZ } from "@/lib/domain/businessTime";
 import { getCallHistory, getCallHistoryUsers } from "@/lib/queries/calls/history";
 import { can } from "@/lib/permissions";
+import { requireUser } from "@/lib/access/user";
+import { redirect } from "next/navigation";
 import HistoryRowActions from "@/components/calls/HistoryRowActions";
 import Link from "next/link";
 
@@ -21,20 +23,20 @@ export default async function CallsHistoryPage({
 }: {
     searchParams: Promise<{ userId?: string }>;
 }) {
-    const session = await auth();
-    if (!session?.user?.id) return null;
+    const viewer = await requireUser();
+    if (!viewer) redirect("/login?deactivated=1");
+    if (!can(viewer, "callHistory.access")) redirect("/dashboard");
 
     const { userId } = await searchParams;
-    const canFilterUsers = can(session.user, "callHistory.viewAll");
-    const canViewPipeline = can(session.user, "pipeline.view");
+    const canFilterUsers = can(viewer, "callHistory.viewAll");
     // Manageri: konkrétny user alebo „Všetci" (null). Ostatní vždy len svoje.
     const selectedUserId = canFilterUsers
         ? userId && userId !== "all"
             ? userId
             : null
-        : session.user.id;
+        : viewer.id;
     const [rows, users] = await Promise.all([
-        getCallHistory(selectedUserId),
+        getCallHistory(viewer, selectedUserId),
         canFilterUsers ? getCallHistoryUsers() : Promise.resolve([]),
     ]);
 
@@ -80,15 +82,17 @@ export default async function CallsHistoryPage({
                         {rows.map((row) => (
                             <div key={row.id} className="rounded-xl border bg-card p-4 shadow-sm">
                                 <div className="flex items-start justify-between gap-3">
-                                    <LeadName row={row} canViewPipeline={canViewPipeline} />
+                                    <LeadName row={row} />
                                     {row.outcome && (
-                                        <Badge variant="secondary" className="shrink-0">
+                                        <Badge variant={row.reverted ? "outline" : "secondary"} className={row.reverted ? "shrink-0 line-through" : "shrink-0"}>
                                             {OUTCOME_LABEL[row.outcome]}
                                         </Badge>
                                     )}
                                 </div>
+                                {/* Wave 5, Q2: čo chceli, sa nedá vyčítať z výsledku – je to samostatný riadok. */}
+                                {row.asked && <div className="mt-1 text-xs text-muted-foreground">Chceli: {row.asked}</div>}
                                 <div className="mt-1 text-xs text-muted-foreground tabular-nums">
-                                    {new Date(row.createdAt).toLocaleString("sk-SK")} · {row.user.firstName}{" "}
+                                    {new Date(row.createdAt).toLocaleString("sk-SK", { timeZone: BUSINESS_TZ })} · {row.user.firstName}{" "}
                                     {row.user.lastName}
                                 </div>
                                 {row.note && (
@@ -96,8 +100,12 @@ export default async function CallsHistoryPage({
                                 )}
                                 <div className="mt-3 border-t pt-3">
                                     <HistoryRowActions
+                                        activityId={row.id}
                                         leadId={row.lead.id}
-                                        locked={row.lead.locked}
+                                        leadRevision={row.lead.revision}
+                                        canRevert={row.canRevert}
+                                        canEdit={row.canEdit}
+                                        reverted={row.reverted}
                                         phone={row.lead.phone}
                                         email={row.lead.email}
                                     />
@@ -123,15 +131,21 @@ export default async function CallsHistoryPage({
                                 {rows.map((row) => (
                                     <TableRow key={row.id}>
                                         <TableCell className="whitespace-nowrap text-muted-foreground">
-                                            {new Date(row.createdAt).toLocaleString("sk-SK")}
+                                            {new Date(row.createdAt).toLocaleString("sk-SK", { timeZone: BUSINESS_TZ })}
                                         </TableCell>
                                         <TableCell>
-                                            <LeadName row={row} canViewPipeline={canViewPipeline} />
+                                            <LeadName row={row} />
                                         </TableCell>
                                         <TableCell>
                                             {row.outcome && (
-                                                <Badge variant="secondary">{OUTCOME_LABEL[row.outcome]}</Badge>
+                                                <Badge variant={row.reverted ? "outline" : "secondary"} className={row.reverted ? "line-through" : undefined}>
+                                                    {OUTCOME_LABEL[row.outcome]}
+                                                </Badge>
                                             )}
+                                            {row.reverted && (
+                                                <Badge variant="outline" className="ml-1">vrátené</Badge>
+                                            )}
+                                            {row.asked && <div className="mt-1 text-xs text-muted-foreground">Chceli: {row.asked}</div>}
                                         </TableCell>
                                         <TableCell className="max-w-sm whitespace-normal text-muted-foreground">
                                             {row.note ?? "—"}
@@ -141,8 +155,12 @@ export default async function CallsHistoryPage({
                                         </TableCell>
                                         <TableCell>
                                             <HistoryRowActions
+                                                activityId={row.id}
                                                 leadId={row.lead.id}
-                                                locked={row.lead.locked}
+                                                leadRevision={row.lead.revision}
+                                                canRevert={row.canRevert}
+                                                canEdit={row.canEdit}
+                                                reverted={row.reverted}
                                                 phone={row.lead.phone}
                                                 email={row.lead.email}
                                             />
@@ -160,12 +178,12 @@ export default async function CallsHistoryPage({
 
 type HistoryRow = Awaited<ReturnType<typeof getCallHistory>>[number];
 
-// Názov firmy – odkaz na pipeline ak má používateľ právo, inak text. Zdieľané
+// Názov firmy – odkaz na detail obchodu (/dashboard/pipeline/[id]) podľa práv, inak text. Zdieľané
 // medzi mobilnou kartou a desktop tabuľkou.
-function LeadName({ row, canViewPipeline }: { row: HistoryRow; canViewPipeline: boolean }) {
+function LeadName({ row }: { row: HistoryRow }) {
     const label = `#${row.lead.number} ${row.lead.companyName ?? row.lead.website ?? "Bez mena"}`;
-    return canViewPipeline ? (
-        <Link href={`/dashboard/pipeline/${row.lead.id}`} className="min-w-0 font-medium hover:underline">
+    return row.lead.href ? (
+        <Link href={row.lead.href} className="min-w-0 font-medium hover:underline">
             {label}
         </Link>
     ) : (

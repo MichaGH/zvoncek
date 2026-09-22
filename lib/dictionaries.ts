@@ -3,6 +3,10 @@ import {
     ActivitySource,
     ActivityType,
     CallOutcome,
+    DealOwnershipReason,
+    DealTaskContent,
+    DealTaskStatus,
+    DealTaskType,
     LeadStatus,
     NextActionKind,
     ProjectType,
@@ -39,18 +43,20 @@ export const OUTCOME_LABEL: Record<CallOutcome, string> = {
     BAD_NUMBER: "Zlé číslo",
     NOT_INTERESTED: "Nemajú záujem",
     CALL_AGAIN: "Zavolať neskôr",
-    WANTS_QUOTE: "Chcú cenovú ponuku",
+    WANTS_QUOTE: "Chcú konkrétnu cenu",
     WANTS_DESIGN: "Chcú návrh",
-    WANTS_EMAIL: "Máme napísať",
+    WANTS_EMAIL: "Chcú info emailom",
     SNOOZE: "Ozvať sa neskôr",
     POSITIVE: "Pozitívny posun",
+    WANTS_TO_ORDER: "Chcú objednať",
+    INTERESTED: "Majú záujem",
 };
 
 export const ACTIVITY_LABEL: Record<ActivityType, string> = {
     CALL: "Hovor",
-    QUOTE_SENT: "Poslaná CP",
-    DESIGN_SENT: "Poslaný návrh",
-    EMAIL_SENT: "Email",
+    QUOTE_SENT: "CP (starý záznam)",
+    DESIGN_SENT: "Návrh odoslaný (starý záznam)",
+    EMAIL_SENT: "Email (starý záznam)",
     SMS_SENT: "SMS",
     NOTE: "Poznámka",
     NEXT_ACTION_SET: "Ďalší krok nastavený",
@@ -63,6 +69,25 @@ export const ACTIVITY_LABEL: Record<ActivityType, string> = {
     TRACKER_ATTACHED: "Tracker pripojený",
     TRACKER_UPDATED: "Dizajn aktualizovaný",
     TRACKER_OPENED: "Klient otvoril",
+    CALLER_ASSIGNED: "Presunuté volanie",
+    CALLER_RELEASED: "Uvoľnené do fronty",
+    CALL_REVERTED: "Výsledok hovoru vrátený",
+    DEAL_REOPENED: "Obchod znovu otvorený",
+    OFFER_SENT: "Poslali sme",
+    CLIENT_REPLIED: "Odpísali",
+    TASK_CREATED: "Úloha pre manažéra",
+    TASK_MESSAGE: "Správa k úlohe",
+    TASK_DONE: "Úloha vybavená",
+    TASK_DECLINED: "Úloha zamietnutá",
+    TASK_CANCELLED: "Úloha zrušená",
+    TASK_REASSIGNED: "Úloha presunutá",
+    TASK_RESULT_DISMISSED: "Výsledok sa neposiela",
+    CLIENT_ASK_CHANGED: "Upravené, čo klient chce",
+    TASK_PART_ADDED: "K úlohe pribudlo",
+    TASK_PART_DONE: "Manažér odovzdal",
+    TASK_PART_DECLINED: "Manažér to nerobí",
+    TASK_PART_WITHDRAWN: "Časť úlohy stiahnutá",
+    PRICE_CHANGED: "Cena zmenená",
 };
 
 export const ACTIVITY_CATEGORY_LABEL: Record<ActivityCategory, string> = {
@@ -76,6 +101,7 @@ export const ACTIVITY_SOURCE_LABEL: Record<ActivitySource, string> = {
     PIPELINE: "Pipeline",
     CONTACTS: "Kontakty",
     ADMIN: "Administrácia",
+    CLIENTS: "Klienti",
 };
 
 export const PROJECT_TYPE_LABEL: Record<ProjectType, string> = {
@@ -91,17 +117,24 @@ export const ROLE_LABEL: Record<Role, string> = {
     SCOUT: "Pridávač kontaktov",
     SCOUT_LEADER: "Vedúci pridávačov",
     TELESALES: "Marketing (volania)",
+    SALES_REP: "Obchodník",
     MANAGER: "Manažér",
     ADMIN: "Admin",
 };
 
 // Poradie rolí pre výbery (admin formuláre). Jediné miesto – nová rola sa dopĺňa tu.
-export const ROLES: Role[] = ["SCOUT", "SCOUT_LEADER", "TELESALES", "MANAGER", "ADMIN"];
+export const ROLES: Role[] = ["SCOUT", "SCOUT_LEADER", "TELESALES", "SALES_REP", "MANAGER", "ADMIN"];
+
+// Ručne písané pole nie je typovo vynútené – pri novej hodnote Role enumu spadne hneď pri štarte.
+for (const role of Object.values(Role)) {
+    if (!ROLES.includes(role)) throw new Error(`ROLES chýba rola ${role}`);
+}
 
 export const ROLE_VARIANT: Record<Role, "default" | "secondary" | "outline" | "destructive"> = {
     ADMIN: "destructive",
     MANAGER: "default",
     TELESALES: "secondary",
+    SALES_REP: "secondary",
     SCOUT_LEADER: "default",
     SCOUT: "outline",
 };
@@ -128,9 +161,37 @@ export const CONFIDENCE_VARIANT: Record<
 
 export const NEXT_ACTION_LABEL: Record<NextActionKind, string> = {
     CALL: "Zavolať",
-    SEND_QUOTE: "Poslať cenovú ponuku",
+    SEND_QUOTE: "Poslať cenu",
     SEND_DESIGN: "Poslať návrh",
     SEND_EMAIL: "Poslať email",
     WAITING_FOR_CLIENT: "Čakáme na klienta",
     CUSTOM: "Vlastný krok",
+};
+
+// Úlohy pre manažéra (wave 3). Slovo „požiadavka" sa v UI nepoužíva.
+export const TASK_CONTENT_LABEL: Record<DealTaskContent, string> = {
+    PRICE: "Cena",
+    DESIGN: "Návrh",
+    OTHER: "Otázka / konzultácia",
+};
+
+export const TASK_TYPE_LABEL: Record<DealTaskType, string> = {
+    HELP: "Pomoc",
+    HANDOVER: "Odovzdanie klienta",
+};
+
+export const TASK_STATUS_LABEL: Record<DealTaskStatus, string> = {
+    OPEN: "Otvorená",
+    DONE: "Vybavená",
+    DECLINED: "Zamietnutá",
+    CANCELLED: "Zrušená",
+};
+
+export const OWNERSHIP_REASON_LABEL: Record<DealOwnershipReason, string> = {
+    HANDOFF: "odovzdané po prvom hovore",
+    CHANGE: "presunuté",
+    BULK: "hromadne presunuté",
+    TAKEOVER: "prevzaté",
+    HANDOVER: "odovzdané manažérovi",
+    REVERT: "hovor vrátený",
 };
