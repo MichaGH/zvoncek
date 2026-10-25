@@ -1,0 +1,24 @@
+
+C:\000_DEV\0_ZVONCEK\zvoncek\.claude\recycle-ui-check.ts
+  23:5  warning  Expected an assignment or function call and instead saw an expression  @typescript-eslint/no-unused-expressions
+
+C:\000_DEV\0_ZVONCEK\zvoncek\components\layout\MobileNav.tsx
+  17:9  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\000_DEV\0_ZVONCEK\zvoncek\components\layout\MobileNav.tsx:17:9
+  15 |
+  16 |     useEffect(() => {
+> 17 |         setOpen(false);
+     |         ^^^^^^^ Avoid calling setState() directly within an effect
+  18 |     }, [pathname]);
+  19 |
+  20 |     return (  react-hooks/set-state-in-effect
+
+✖ 2 problems (1 error, 1 warning)
+

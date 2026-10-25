@@ -1,0 +1,16 @@
+(node:22876) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS SCOUT: server refuses edit and delete of recycled contact HTTP 200/200
+PASS SCOUT_LEADER: server refuses edit and delete of recycled contact HTTP 200/200
+PASS denied actions leave identity, data, revision and soft-delete unchanged 
+PASS control: scout can still edit untouched first-round contact 
+PASS manager/scout with stale ADMIN JWT cannot call recycle server action directly HTTP 200/200
+PASS unauthorized recycle performs no write 
+cleanup complete; failures=0

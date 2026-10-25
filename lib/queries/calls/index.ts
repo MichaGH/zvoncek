@@ -1,5 +1,5 @@
 import prisma from "@/lib/db";
-import type { Prisma } from "@/app/generated/prisma/client";
+import { Prisma } from "@/app/generated/prisma/client";
 import type { AccessUser } from "@/lib/access/user";
 import { can } from "@/lib/permissions";
 
@@ -12,6 +12,7 @@ const SELECT = {
     email: true,
     note: true,
     revision: true,
+    round: true,
     callbackKind: true,
     callbackAt: true,
     callbackHasTime: true,
@@ -29,7 +30,7 @@ const SELECT = {
 
 function map(l: {
     id: string; number: number; companyName: string | null; website: string | null;
-    phone: string | null; email: string | null; note: string | null; revision: number;
+    phone: string | null; email: string | null; note: string | null; revision: number; round: number;
     callbackAt: Date | null; callbackHasTime: boolean; callbackNote: string | null;
     activities: { id: string; createdAt: Date }[];
 }) {
@@ -42,6 +43,7 @@ function map(l: {
         email: l.email,
         note: l.note,
         revision: l.revision,
+        round: l.round,
         callbackAt: l.callbackAt?.toISOString() ?? null,
         callbackHasTime: l.callbackHasTime,
         callbackNote: l.callbackNote,
@@ -60,6 +62,17 @@ export const POOL_WHERE = {
     assignedCallerId: null,
     activities: { none: { type: "CALL" } },
 } satisfies Prisma.LeadWhereInput;
+
+// Poradie spoločnej fronty: FIFO podľa vstupu do fronty – pridanie, alebo recyklácia (feature 02, Q3). Jediný zdroj
+// pre claimBatchAs aj Kontakty → Na volanie (§15); test kvClaimOrder overuje, že prvých 10 je presne ďalší claim.
+// Stĺpce sú bez aliasu: použiť len v dopyte nad samotnou tabuľkou "Lead".
+export const POOL_ORDER_SQL = Prisma.sql`COALESCE("roundStartedAt", "createdAt"), id`;
+
+// SQL dvojča POOL_WHERE (pravidlo existuje dvakrát – test kvPoolParity): claim aj poradie vo fronte v Kontaktoch.
+// Bez aliasu, nad tabuľkou "Lead".
+export const POOL_SQL = Prisma.sql`"deletedAt" IS NULL AND status = 'NEW' AND "pipelineEnteredAt" IS NULL
+    AND "assignedCallerId" IS NULL
+    AND NOT EXISTS (SELECT 1 FROM "Activity" a WHERE a."leadId" = "Lead".id AND a.type = 'CALL')`;
 
 export async function getPoolCount(): Promise<number> {
     return prisma.lead.count({ where: POOL_WHERE });

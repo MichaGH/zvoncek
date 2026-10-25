@@ -13,7 +13,17 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
-import { CONTACTS_PAGE_SIZE, getContactsList, getContactsOverview } from "@/lib/queries/contacts";
+import { CONTACTS_PAGE_SIZE, getContactsList, getContactsOverview, getContactsViewCounts } from "@/lib/queries/contacts";
+import {
+    CONTACT_VIEWS,
+    CONTACT_VIEW_LABEL,
+    DEFAULT_CONTACT_ROUND,
+    DEFAULT_CONTACT_VIEW,
+    parseContactRound,
+    parseContactView,
+    type ContactRound,
+    type ContactView,
+} from "@/lib/domain/contactFilters";
 import { STATUS_LABEL, STATUS_VARIANT } from "@/lib/dictionaries";
 import { can } from "@/lib/permissions";
 import { requireUser } from "@/lib/access/user";
@@ -26,6 +36,16 @@ import { Plus, StickyNote } from "lucide-react";
 
 function toHref(website: string): string {
     return /^https?:\/\//i.test(website) ? website : `https://${website}`;
+}
+
+// „2. kolo" – recyklovaný kontakt (feature 02 §15); rovnaké slovo ako na tabuli volajúceho.
+function RoundBadge({ round }: { round: number }) {
+    if (round < 2) return null;
+    return (
+        <Badge variant="secondary" className="whitespace-nowrap">
+            {round}. kolo
+        </Badge>
+    );
 }
 
 function formatDate(iso: string) {
@@ -47,13 +67,17 @@ export default async function ContactsPage({
         assignedTo?: string;
         owner?: string;
         team?: string;
+        view?: string;
+        round?: string;
     }>;
 }) {
     const viewer = await requireUser();
     if (!viewer) redirect("/login?deactivated=1");
     if (!can(viewer, "contacts.access")) redirect("/dashboard");
 
-    const { q, limit, createdBy, assignedTo, owner, team } = await searchParams;
+    const { q, limit, createdBy, assignedTo, owner, team, view: rawView, round: rawRound } = await searchParams;
+    const view = parseContactView(rawView);
+    const round = parseContactRound(rawRound);
     const parsedLimit = Number(limit);
     const take =
         Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : CONTACTS_PAGE_SIZE;
@@ -110,24 +134,56 @@ export default async function ContactsPage({
         createdById = viewer.id;
     }
 
-    const [{ rows, hasMore }, overview] = await Promise.all([
-        getContactsList({ query: q, take, createdById, createdByIds, assignedCallerId, ownerId }),
+    const filter = { query: q, createdById, createdByIds, assignedCallerId, ownerId, round };
+    const [{ rows, hasMore }, overview, viewCounts] = await Promise.all([
+        getContactsList({ ...filter, view, take }),
         getContactsOverview(createdById ? { createdById } : { createdByIds }),
+        getContactsViewCounts(filter),
     ]);
 
-    const moreParams = new URLSearchParams();
-    if (q) moreParams.set("q", q);
-    if (createdBy) moreParams.set("createdBy", createdBy);
-    if (assignedTo) moreParams.set("assignedTo", assignedTo);
-    if (owner) moreParams.set("owner", owner);
-    if (team) moreParams.set("team", team);
-    moreParams.set("limit", String(take + CONTACTS_PAGE_SIZE));
+    // Odkazy nesú všetky filtre; zmena pohľadu vracia stránkovanie na začiatok.
+    function contactsHref(patch: { view?: ContactView; round?: ContactRound; limit?: number } = {}) {
+        const params = new URLSearchParams();
+        if (q) params.set("q", q);
+        if (createdBy) params.set("createdBy", createdBy);
+        if (assignedTo) params.set("assignedTo", assignedTo);
+        if (owner) params.set("owner", owner);
+        if (team) params.set("team", team);
+        const nextView = patch.view ?? view;
+        const nextRound = patch.round ?? round;
+        if (nextView !== DEFAULT_CONTACT_VIEW) params.set("view", nextView);
+        if (nextRound !== DEFAULT_CONTACT_ROUND) params.set("round", nextRound);
+        if (patch.limit) params.set("limit", String(patch.limit));
+        const qs = params.toString();
+        return `/dashboard/contacts${qs ? `?${qs}` : ""}`;
+    }
+    const isPool = view === "pool";
+    // R02-06: číslo v hlavičke („N voľných na volanie") počíta len rozsah (scout / tím / „Od koho"), preto aj jeho
+    // odkaz nesie len rozsah – inak by klik ukázal iné číslo než to, na ktoré sa kliklo.
+    const poolHrefParams = new URLSearchParams({ view: "pool" });
+    if (createdBy) poolHrefParams.set("createdBy", createdBy);
+    if (team) poolHrefParams.set("team", team);
+    const poolHref = `/dashboard/contacts?${poolHrefParams.toString()}`;
+    // R02-02: zámok podľa toho, KTO sa pozerá – tak ako server (lockContactForManage). Manažér / admin
+    // (contacts.deleteAny) môže upraviť aj recyklovaný kontakt vo fronte (napr. opraviť zlé číslo); scout len svoj
+    // nedotknutý kontakt v 1. kole.
+    const canManageAll = can(viewer, "contacts.deleteAny");
+    const lockOf = (row: (typeof rows)[number]) => !(row.editable || (canManageAll && row.callable));
+    // R02-07: recyklovaný kontakt vo fronte je zamknutý preto, že už nie je scoutov – nie preto, že je obvolaný.
+    const lockReasonOf = (row: (typeof rows)[number]) => (row.round > 1 && row.callable ? "recycled" : "called");
 
     return (
         <DashboardPage>
             <DashboardPageHeader
                 title="Kontakty"
-                description={`${overview.callable} voľných na volanie · ${overview.total} v databáze · dnes pridaných ${overview.addedToday}`}
+                description={
+                    <>
+                        <Link href={poolHref} className="underline-offset-2 hover:underline">
+                            {overview.callable} voľných na volanie
+                        </Link>
+                        {` · ${overview.total} v databáze · dnes pridaných ${overview.addedToday}`}
+                    </>
+                }
                 actions={
                     <>
                         <RefreshButton />
@@ -151,16 +207,39 @@ export default async function ContactsPage({
                     showCreatedByFilter={showCreatedByFilter}
                     showOwnerFilter={showOwnerFilter}
                     createdByLabel={createdByLabel}
+                    view={view}
+                    round={round}
                 />
             </DashboardPageHeader>
 
-            <div className="mb-3 text-sm text-muted-foreground">
-                {rows.length} {hasMore ? "+ záznamov" : "záznamov"}
+            {/* Pohľad (feature 02 §15): Pridané = podľa pridania; Na volanie = spoločná fronta v poradí volajúceho. */}
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1 rounded-lg bg-muted p-1">
+                    {CONTACT_VIEWS.map((v) => (
+                        <Link
+                            key={v}
+                            href={contactsHref({ view: v })}
+                            aria-current={v === view ? "page" : undefined}
+                            className={cn(
+                                "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                                v === view ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                            )}
+                        >
+                            {CONTACT_VIEW_LABEL[v]}
+                            <span className="text-xs tabular-nums text-muted-foreground">{viewCounts[v]}</span>
+                        </Link>
+                    ))}
+                </div>
+                <div className="text-sm text-muted-foreground">
+                    {isPool
+                        ? "V poradí, v akom ich dostane volajúci („Vziať ďalších 10“)."
+                        : `${rows.length} ${hasMore ? "+ záznamov" : "záznamov"}`}
+                </div>
             </div>
 
             {rows.length === 0 ? (
                 <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-                    {q ? "Nič sa nenašlo." : "Zatiaľ žiadne kontakty."}
+                    {q ? "Nič sa nenašlo." : isPool ? "Nič nečaká na volanie." : "Zatiaľ žiadne kontakty."}
                 </div>
             ) : (
                 <>
@@ -206,9 +285,12 @@ export default async function ContactsPage({
                                         </span>
                                     </div>
                                     <div className="flex shrink-0 flex-col items-end gap-2">
-                                        <Badge variant={STATUS_VARIANT[row.status]}>
-                                            {STATUS_LABEL[row.status]}
-                                        </Badge>
+                                        <div className="flex items-center gap-1">
+                                            <RoundBadge round={row.round} />
+                                            <Badge variant={STATUS_VARIANT[row.status]}>
+                                                {STATUS_LABEL[row.status]}
+                                            </Badge>
+                                        </div>
                                         <ContactRowActions
                                             contact={{
                                                 id: row.id,
@@ -218,12 +300,17 @@ export default async function ContactsPage({
                                                 phone: row.phone,
                                                 note: row.note,
                                             }}
-                                            locked={!row.callable}
+                                            locked={lockOf(row)}
+                                            lockReason={lockReasonOf(row)}
                                         />
                                     </div>
                                 </div>
                                 <div className="mt-3 border-t pt-2 text-xs text-muted-foreground tabular-nums">
+                                    {isPool && row.queueRank !== null && (
+                                        <span className="font-medium text-foreground">{row.queueRank}. v poradí · </span>
+                                    )}
                                     #{row.number} · {row.addedBy ?? "—"} · {formatDate(row.createdAt)}
+                                    {row.recycledAt && ` · recykl. ${formatDate(row.recycledAt)}`}
                                 </div>
                             </div>
                         ))}
@@ -234,10 +321,11 @@ export default async function ContactsPage({
                         <Table className="min-w-[760px]">
                             <TableHeader>
                                 <TableRow>
+                                    {isPool && <TableHead className="w-16 text-right">Poradie</TableHead>}
                                     <TableHead className="w-10">#</TableHead>
                                     <TableHead>Firma</TableHead>
                                     <TableHead className="w-36">Telefón</TableHead>
-                                    <TableHead className="w-28">Stav</TableHead>
+                                    <TableHead className="w-36">Stav</TableHead>
                                     <TableHead className="w-28">Pridal</TableHead>
                                     <TableHead className="w-28 text-right">Pridané</TableHead>
                                     <TableHead className="w-20 text-center">Akcie</TableHead>
@@ -246,6 +334,9 @@ export default async function ContactsPage({
                             <TableBody>
                                 {rows.map((row) => (
                                     <TableRow key={row.id} className={row.callable ? "" : "opacity-60"}>
+                                        {isPool && (
+                                            <TableCell className="text-right font-medium tabular-nums">{row.queueRank}.</TableCell>
+                                        )}
                                         <TableCell className="text-muted-foreground tabular-nums">
                                             {row.number}
                                         </TableCell>
@@ -275,13 +366,19 @@ export default async function ContactsPage({
                                         </TableCell>
                                         <TableCell className="tabular-nums">{row.phone ?? "—"}</TableCell>
                                         <TableCell>
-                                            <Badge variant={STATUS_VARIANT[row.status]}>
-                                                {STATUS_LABEL[row.status]}
-                                            </Badge>
+                                            <div className="flex items-center gap-1">
+                                                <Badge variant={STATUS_VARIANT[row.status]}>
+                                                    {STATUS_LABEL[row.status]}
+                                                </Badge>
+                                                <RoundBadge round={row.round} />
+                                            </div>
                                         </TableCell>
                                         <TableCell className="text-muted-foreground">{row.addedBy ?? "—"}</TableCell>
                                         <TableCell className="text-right text-muted-foreground tabular-nums">
                                             {formatDate(row.createdAt)}
+                                            {row.recycledAt && (
+                                                <span className="block text-xs">recykl. {formatDate(row.recycledAt)}</span>
+                                            )}
                                         </TableCell>
                                         <TableCell className="text-center">
                                             <ContactRowActions
@@ -293,7 +390,8 @@ export default async function ContactsPage({
                                                     phone: row.phone,
                                                     note: row.note,
                                                 }}
-                                                locked={!row.callable}
+                                                locked={lockOf(row)}
+                                                lockReason={lockReasonOf(row)}
                                             />
                                         </TableCell>
                                     </TableRow>
@@ -307,7 +405,7 @@ export default async function ContactsPage({
             {hasMore && (
                 <div className="mt-4 flex justify-center">
                     <Button asChild variant="outline">
-                        <Link href={`/dashboard/contacts?${moreParams.toString()}`}>
+                        <Link href={contactsHref({ limit: take + CONTACTS_PAGE_SIZE })}>
                             Načítať ďalších {CONTACTS_PAGE_SIZE}
                         </Link>
                     </Button>

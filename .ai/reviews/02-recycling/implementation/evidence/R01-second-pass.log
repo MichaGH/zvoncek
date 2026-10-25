@@ -1,0 +1,65 @@
+endpoint=ep-divine-waterfall-asbkuort run=rv2b_mvo90v7d
+(node:27976) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS database FK inventory contains exactly the five moved children and archive relation ["Activity.leadId","DealOwnership.leadId","DealTask.leadId","Design.leadId","Lead.archiveOfId","LeadRequest.leadId"]
+PASS reader fixtures really qualify before archive 
+PASS pipeline actual list and every pill count exclude archive/current NEW {"work":0,"today":0,"all":0,"call":0,"quote":0,"email":0,"design":0,"waiting":0,"got_pricelist":0,"got_price":0,"got_design":15,"waiting_manager":0,"inbox":0,"open":0,"unassignedOpen":0}
+PASS owner dashboard and manager owner totals exclude archived active deal 
+PASS ownership history really disappears after archive 
+PASS manager inbox and remaining deal work exclude archive 
+PASS contacts-added daily and adding-log retain one original attribution 
+PASS call and demand statistics retain real historical events 
+PASS seven ordinary mutation routes refuse archived parents/children [{"error":"Nenašlo sa.","code":"NOT_FOUND"},{"error":"Nenašlo sa.","code":"NOT_FOUND"},{"error":"Nenašlo sa.","code":"NOT_FOUND"},{"error":"Nenašlo sa.","code":"NOT_FOUND"},{"error":"Nenašlo sa.","code":"NOT_FOUND"},{"error":"Nenašlo sa.","code":"NOT_FOUND"},{"error":"Nenašlo sa.","code":"NOT_FOUND"}]
+PASS refused archive mutations leave every sampled record unchanged 
+PASS caller dashboard fixture qualifies before recycling 
+PASS caller dashboard/assignment overview exclude archived scheduled call 
+PASS filter matrix 1: list/counts/first-N/holders agree with independent fixtures {"patch":{},"expected":16,"actual":16}
+PASS filter matrix 2: list/counts/first-N/holders agree with independent fixtures {"patch":{"older":"7"},"expected":15,"actual":15}
+PASS filter matrix 3: list/counts/first-N/holders agree with independent fixtures {"patch":{"older":"30"},"expected":12,"actual":12}
+PASS filter matrix 4: list/counts/first-N/holders agree with independent fixtures {"patch":{"older":"60"},"expected":9,"actual":9}
+PASS filter matrix 5: list/counts/first-N/holders agree with independent fixtures {"patch":{"older":"90"},"expected":8,"actual":8}
+PASS filter matrix 6: list/counts/first-N/holders agree with independent fixtures {"patch":{"tries":"1"},"expected":3,"actual":3}
+PASS filter matrix 7: list/counts/first-N/holders agree with independent fixtures {"patch":{"tries":"2"},"expected":2,"actual":2}
+PASS filter matrix 8: list/counts/first-N/holders agree with independent fixtures {"patch":{"tries":"3"},"expected":1,"actual":1}
+PASS filter matrix 9: list/counts/first-N/holders agree with independent fixtures {"patch":{"got":"info"},"expected":1,"actual":1}
+PASS filter matrix 10: list/counts/first-N/holders agree with independent fixtures {"patch":{"got":"pricelist"},"expected":1,"actual":1}
+PASS filter matrix 11: list/counts/first-N/holders agree with independent fixtures {"patch":{"got":"price"},"expected":2,"actual":2}
+PASS filter matrix 12: list/counts/first-N/holders agree with independent fixtures {"patch":{"got":"design"},"expected":2,"actual":2}
+PASS filter matrix 13: list/counts/first-N/holders agree with independent fixtures {"patch":{"round":"1"},"expected":12,"actual":12}
+PASS filter matrix 14: list/counts/first-N/holders agree with independent fixtures {"patch":{"round":"2"},"expected":4,"actual":4}
+PASS filter matrix 15: list/counts/first-N/holders agree with independent fixtures {"patch":{"holder":"cmvo90vh50004l4vm5kpnnd98"},"expected":7,"actual":7}
+PASS filter matrix 16: list/counts/first-N/holders agree with independent fixtures {"patch":{"holder":"cmvo90vhp0005l4vmnfifs03u"},"expected":3,"actual":3}
+PASS filter matrix 17: list/counts/first-N/holders agree with independent fixtures {"patch":{"holder":"none"},"expected":3,"actual":3}
+PASS filter matrix 18: list/counts/first-N/holders agree with independent fixtures {"patch":{"b":"call_retry,deal_active","tries":"1","round":"2","got":"price","older":"30"},"expected":1,"actual":1}
+PASS filter matrix 19: list/counts/first-N/holders agree with independent fixtures {"patch":{"b":"call_lost,call_unreachable","holder":"none","older":"90"},"expected":2,"actual":2}
+PASS filter matrix 20: list/counts/first-N/holders agree with independent fixtures {"patch":{"b":"deal_lost,deal_snoozed","got":"design","round":"1"},"expected":1,"actual":1}
+PASS recent reverted calls and internal notes do not reset last-contact/tries 
+PASS last-call tie order and assigned-caller precedence 
+PASS literal search _% 1
+PASS literal search _under_score 1
+PASS literal search _back\slash 1
+PASS literal search _O'Brien 1
+PASS literal search _Žltý 1
+PASS number search identifies exactly the live contact 
+PASS recycle vs new manager task (recycle first) {"a":{"recycled":1,"skipped":[]},"b":{"error":"Nenašlo sa.","code":"NOT_FOUND"}}
+PASS recycle vs new manager task (other first) {"a":{"success":true},"b":{"recycled":0,"skipped":[{"leadId":"cmvo911cz001kl4vm3ewzuvgk","number":10846,"reason":"CHANGED"}]}}
+PASS fresh revision still cannot recycle open manager work {"recycled":0,"skipped":[{"leadId":"cmvo911cz001kl4vm3ewzuvgk","number":10846,"reason":"OPEN_TASK"}]}
+PASS recycle vs owner change (recycle first) {"a":{"recycled":1,"skipped":[]},"b":{"error":"Nenašlo sa.","code":"NOT_FOUND"}}
+PASS recycle vs owner change (other first) {"a":{"success":true},"b":{"recycled":0,"skipped":[{"leadId":"cmvo912rg001rl4vmg8ro8gja","number":10849,"reason":"CHANGED"}]}}
+PASS recycle vs caller transfer (recycle first) {"a":{"recycled":1,"skipped":[]},"b":{"moved":0}}
+PASS recycle vs caller transfer (other first) {"a":{"moved":1},"b":{"recycled":0,"skipped":[{"leadId":"cmvo913qw001wl4vm08b6k84z","number":10852,"reason":"CHANGED"}]}}
+PASS full cycle old deal really has price, sent proposal and resolved asks 
+PASS full cycle real claim gets only ten review fixtures including recycled deal {"claimed":10}
+PASS full cycle round-two positive call creates a clean new deal projection 
+PASS full cycle original requests/send/design remain attached to archive 
+PASS pipeline search control without receipt view matches only ALPHA 
+FAIL INHERITED: got_design preserves the search predicate {"expected":1,"actualRows":2,"actualCount":2,"returnedUnrelatedBeta":true}
+FAIL INHERITED: search for recycled ALPHA does not return unrelated BETA {"expected":0,"actualRows":1,"returnedUnrelatedBeta":true}
+cleanup complete; 52/54 passed; failures=2

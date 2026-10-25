@@ -6,6 +6,133 @@ In this file progress of feature implementation is tracked. Should contain
 
 ---
 
+# Feature 02: R02 resolution (verified on development, 2026-10-25)
+
+Review `.ai/reviews/02-recycling/implementation/R02.md`; record `R02-resolution.md`; decisions in spec §16. Database
+`ep-divine-waterfall-asbkuort` / `neondb` only; production untouched; no schema change. Nothing committed.
+
+- **R02-01:** `archiveRounds` writes a whole chunk set-based (~8 statements per 100 contacts). Measured: 100 contacts
+  **460 ms** (was 14.9 s) at a 20 ms round trip. Vercel region switched to `fra1` by Michal (runbook A7a).
+- **R02-08:** queue order of a recycled batch = admin's selection order (`roundStartedAt` = request start + position).
+- **R02-03 / R02-06:** Kontakty → Na volanie shows the rank in the whole queue (`POOL_SQL` twin of `POOL_WHERE`, also
+  used by the claim); the header number links only with the scope it counts.
+- **R02-02 / R02-07:** Kontakty lock per viewer (manager / admin can edit an unclaimed NEW contact incl. recycled);
+  recycled lock label "recyklovaný".
+- **R02-04 / R02-05:** do-not-call word list hides matching candidates by default (count + "zobraziť aj tieto"),
+  Poznámka column, search in note / loss reason, dialog warning; per-active-caller warning. Backlog BL-15.
+- **R02-09 / 10 / 11 / 12 / 14:** documented number gaps; feature 02 scripts in `code-standards.md` §7 and
+  `operations.md`; spec drift fixed; runbook A7a (region + Fluid compute); UI nits.
+- **Tests added:** `rc10Budget`, `rc11Order`, `rc12DoNotCall`, `rc13Callers`, `rc14DeleteRecycled`, `rc15PoolStats`,
+  `kvQueueRank`, `kvPoolParity` (check-concurrency); new tracked `prisma/backfill/check-recycling-http.ts` (8 checks).
+- **Checks (all run):** `tsc` clean · `eslint .` only `MobileNav.tsx` · `next build` OK · business time (local +
+  UTC), client sections passed · `migrate diff` empty · `check-concurrency --iterations 100` **274/274** ·
+  `check-recycling-review` 0 failures · `second-pass` **55/55** · `resolution` **20/20** · `check-recycling-http`
+  **8/8** · browser: dialog shows the active-caller warning and the Poznámka column (cancelled, nothing recycled).
+- **Owner actions left:** R02-13 (production admin password), confirm `fra1` + Fluid compute on the next deployment,
+  decide BL-15.
+
+# Feature 02 §15: Kontakty — Pridané / Na volanie + Kolo (built on development, 2026-10-25, after R01 resolution)
+
+Design: `context/features/02-recycling/recycling-spec.md` §15 (Michal found recycled contacts buried in Kontakty during
+the click-through; K1–K5 left to Claude, defaults taken). No schema change. Nothing committed.
+
+- **Code.** `lib/domain/contactFilters.ts` (views `added` / `pool`, rounds `all` / `1` / `2`); `POOL_ORDER_SQL` in
+  `lib/queries/calls` is now the one queue order for `claimBatchAs` and the Kontakty pool list;
+  `lib/queries/contacts`: one `contactsWhere` for list and counts, `getContactsList({ view, round, … })` (pool view:
+  ids ordered in SQL, rows via Prisma), `getContactsViewCounts`, rows carry `round` / `recycledAt`;
+  `app/dashboard/contacts/page.tsx`: view switch with counts, header number links to Na volanie, queue position
+  column / line, "N. kolo" badge and "recykl." date in both layouts; `ContactsFilterBar`: Kolo select, every filter
+  change keeps `view` and `round`.
+- **Checks (all actually run):** `tsc` clean · `eslint .` only the known `MobileNav.tsx` error · `next build` OK ·
+  business time (local + `TZ=UTC`) and client sections passed · `check-concurrency --expect-endpoint
+  ep-divine-waterfall-asbkuort --iterations 100` **264/264** (new `kvClaimOrder`: the first 10 of Na volanie = the
+  next claim, recycled contact in its queue place; `kvCountsScope`: 6 view × round combinations for a scout, every
+  count = its list, another scout's contact excluded); fixtures cleaned · HTTP render
+  (`.claude/kontakty-ui-check.ts`, throwaway admin) **5/5**: switch, header link, Poradie column, the 200 recycled
+  contacts visible with "2. kolo" + "recykl.", links keep view + round.
+- **Not verified:** a human click-through of the switch and the Kolo select on a phone and desktop.
+
+# Feature 02: R01 resolution (verified on development, 2026-10-25)
+
+Fixing R01-01–05 and inherited R01-FU-01; original reviews remain immutable. Child FK moves preserve historical
+timestamps, selection warnings carry owner/request/recency metadata across pages and first-N, OPEN request filters
+are URL-backed, archive history has no dead links, out-of-range pages redirect, and pipeline OR predicates compose.
+Chunk timeout aligned to the approved 30 s; recycle route requests 300 s hosting duration (actual deployment still
+requires verification). No schema/backfill/production changes, commits or deployment during this resolution.
+Record: `.ai/reviews/02-recycling/implementation/R01-resolution.md`. All six confirmed findings resolved.
+Final checks: type checking/build/changed-file lint passed; full lint has only the known MobileNav error and ignored
+render-script warning. Business time (normal + UTC) and client-section checks passed. Concurrency **261/261**;
+expanded archive regression **36/36**, second pass **55/55**, new filter/summary/page HTTP checks **26/26**, actual
+server actions **10/10**, existing HTTP render **10/10**. Browser verified manual cross-page and first-N warnings,
+request-filter selection reset, mobile confirmation, last-page redirect (102→100) and unlinked archive history.
+500 contacts with CALL children completed in **71.148 s**; partial retry and discarded HTTP-success retry created
+no duplicate round. Tightened forced-race helpers to follow only their fixture's lock queue after one intermediate
+false ordering failure. Schema diff empty; all review/suite fixtures cleaned and invariants clean. Obsolete global
+assignment-backfill delta check not run. Actual deployed duration/disconnect rehearsal, S-R1 rollout and Michal's
+smoke/approval remain owed; originals R01 and R01-follow-up remain unchanged.
+
+# Feature 02: recycling contacts (built on the development copy 2026-10-25, NOT in production)
+
+Design: `context/features/02-recycling/recycling-spec.md` (all questions decided 2026-10-25). Rollout:
+`context/features/02-recycling/production-rollout.md`. Database: development copy `ep-divine-waterfall-asbkuort` /
+`neondb` (copy of production 2026-10-24); production `…m0xyun` untouched. Nothing committed.
+
+- **Schema S-R1** (additive): `Lead.round` (NOT NULL DEFAULT 1), `roundStartedAt`, `archiveOfId` (FK → Lead, RESTRICT,
+  indexed), `archivedById` (FK → User, SET NULL). Pre-check: `migrate diff` dev copy → schema was empty. Reviewed SQL
+  (4 × ADD COLUMN, 1 index, 2 FKs) applied with `db execute`; second `migrate diff` empty; `prisma generate`.
+  Production script `context/features/02-recycling/sql/01-recycling-schema.sql`. `db-changes.md` cleared of the
+  2026-09-22 rollout (Q11) and now lists only S-R1.
+- **Code.** `lib/domain/recycling.ts` (buckets, `recycleBucketOf`, `recycleBlocker`, strict input, field lists, URL
+  model), `lib/domain/recycleMutations.ts` (`archiveCopy`, `RECYCLE_RESET`, `archiveRound`),
+  `lib/commands/recycling.ts` (`recycleLeadsAs`), `lib/actions/recycling` (`recycleLeads`, `pickRecycleFirst`),
+  `lib/queries/recycling` (list / counts / holders / first N / header, SQL twins), permission `contacts.recycle`
+  (ADMIN), page `/dashboard/admin/recycle` + `components/admin/recycle/{RecycleFilters,RecyclePanel}.tsx`, card on
+  `/dashboard/admin`. Side effects: claim order `COALESCE(roundStartedAt, createdAt)`; scout edit/delete only in
+  round 1 (`lockContactForManage`, contacts list `editable`); "N. kolo" in `CallRow` / `CallDrawer`; call history
+  shows archived calls under the live `#number` with "(N. kolo)".
+- **Found while checking:** "Nemajú záujem" / "Zlé číslo" clear `assignedCallerId`, so "Kto to mal" was empty for
+  closed call-stage contacts. The holder is now the assigned caller or the author of the last call (spec §5.2).
+- **Checks (all actually run, 2026-10-25):**
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | clean |
+| `npx eslint .` | only the known `components/layout/MobileNav.tsx` error |
+| `npx next build` | OK, 21 routes incl. `/dashboard/admin/recycle` |
+| `check-business-time.ts` (local and `TZ=UTC`) | passed |
+| `check-client-sections.ts` | passed |
+| `check-concurrency.ts --expect-endpoint ep-divine-waterfall-asbkuort --iterations 100` | **261/261** (incl. rc1Snapshot, rc2Reset, rc3Pool, rc4Invisible, rc5Stale, rc6Race ×20, rc7Scout, rc9Parity over all leads); fixtures cleaned, dev data unchanged |
+| HTTP render check (`.claude/recycle-ui-check.ts`, throwaway admin / manager / caller, signed local sessions, `next dev` on :3100) | **10/10**: page renders with buckets, counts, holder, header; manager redirected; admin card; after one recycle the list shrinks and caller history shows "(1. kolo)" |
+| `check-backfill-delta.ts` | not run — it checks the one-time round-1 backfill against seed users that the dev copy does not have; not touched by this feature |
+
+- **Not verified / still owed:** Michal's click-through in a browser (selection, "Vybrať prvých N", confirm dialog,
+  skipped list, paging) — runbook A3; commit + PR; the production rollout.
+
+- **Implementation review R01 (2026-10-25): CHANGES REQUIRED.** Review:
+  `.ai/reviews/02-recycling/implementation/R01.md`. Five confirmed issues: child `updatedAt` timestamps overwritten
+  during archival; incomplete bulk warnings; missing open-client-request filters; archived-deal history links open
+  404; recycling the last page can leave a blank list with no paging controls. No application fixes in this review.
+  Original concurrency suite **261/261**, existing HTTP render check **10/10**, additional actual server-action
+  checks **6/6**. Added `prisma/backfill/check-recycling-review.ts`: **26 passed / 3 failed** (two timestamp assertions
+  and the dead history link), including forced races in both lock orders, transaction rollback, partial-batch retry,
+  repeated rounds, tracking ingest, and a 500-contact batch (68.448 s). Type checking/build passed; full lint still
+  has the known MobileNav error and an existing check-script warning; new review scripts lint clean. Schema diff
+  empty on `ep-divine-waterfall-asbkuort` / `neondb`; no schema/backfill/production changes. Automated browser
+  click-through completed on desktop and at 390 × 844 as admin and an isolated TELESALES caller, including selection,
+  first-N, skips, recycling, claim, round badge and a fresh call; it reproduced the warning, history and paging bugs.
+  This does not mark Michal's separate rollout approval complete. Review fixtures cleaned and invariants audited.
+- **R01 second pass (2026-10-25).** `.ai/reviews/02-recycling/implementation/R01-follow-up.md`; original R01 unchanged.
+  Added `check-recycling-second-pass.ts`: **52/54 passed**. Both failures reproduce one inherited pipeline bug:
+  `got_design` overwrites the search OR, so its list/count ignore text search (same code in `origin/main`, not
+  introduced by recycling). No additional recycling-specific defect confirmed. New passing coverage: actual pipeline,
+  dashboards, ownership history and daily attribution readers; 20 filter combinations, literal searches; seven
+  archive mutation refusals; forced races against task creation, owner change and caller transfer, both orders;
+  complete recycle → claim → interested call → clean new deal projection; actual FK inventory. Type check and targeted
+  lint passed. Review fixtures cleaned, invariant audit clean on the same development endpoint. No application fixes
+  or production/schema changes; the original five findings remain open.
+
+---
+
 # Feature: caller assignment, SALES_REP, /dashboard/clients, manager oversight
 
 Source of truth: `context/features/01-salesrep/planning.md` (rev. 4). Phases = plan §13.

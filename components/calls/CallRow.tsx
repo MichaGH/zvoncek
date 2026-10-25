@@ -36,6 +36,9 @@ export default function CallRow({
                     {lead.attempts > 0 && (
                         <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] font-medium tabular-nums">{lead.attempts}×</span>
                     )}
+                    {lead.round > 1 && (
+                        <span className="shrink-0 rounded bg-primary/10 px-1.5 text-[11px] font-medium text-primary">{lead.round}. kolo</span>
+                    )}
                 </div>
 
                 {tone === "retry" && (lead.callbackNote || lead.lastAttemptAt) && (

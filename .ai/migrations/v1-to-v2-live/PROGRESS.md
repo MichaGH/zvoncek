@@ -2,7 +2,7 @@
 
 Updated: 2026-09-21
 
-Overall status: **NO-GO until rehearsal 3 passes** on a fresh V1 copy with the post-review code (`RECIPE.md`)
+Overall status: **LIVE DATABASE MIGRATED 2026-09-22** (`ep-ancient-glitter-asm0xyun`, one pass, ALL STEPS PASSED) — deploy of `feature/sales-rep` pending
 
 This tracker records preparation and rollout evidence. It does not authorize production access or production writes.
 
@@ -56,6 +56,8 @@ Add one row per material run. Never include secrets or customer PII.
 | 2026-09-21 12:25 | clone `ep-dark-band-asjtba8q` / neondb, direct, READ ONLY tx | `inventory/*.mjs` | Inventory 1: identity + canary, schema diff, census, Round 1 simulation, send census | schema = V1 exactly; 0 Round 1 conflicts; 86 send leads → 88 sends; 3 per-lead decisions | `INVENTORY-2026-09-21.md` |
 | 2026-09-21 16:20 | clone `ep-dark-band-asjtba8q`, direct | working tree (uncommitted) | Rehearsal 1: schema → team → Round 1 → sends → Chceli → post-check | all green: 116 deals, 88 sends, 129 requests, invariants hold | `06-production-cutover.md` §D numbers |
 | 2026-09-22 | clone `ep-fragrant-sunset-aswxy5xw` | feature/sales-rep 62ab361 | Rehearsal 2 (full route incl. D-009) | all steps passed; review NO-GO → fixes in RECIPE.md "Review 2026-09-22" | `RECIPE.md` |
+| 2026-09-22 | final test clone `ep-raspy-forest-asru4x1z` | e149768 | Rehearsal 3 (3 fixes, resumed) | ALL STEPS PASSED | `RECIPE.md` |
+| 2026-09-22 | **PRODUCTION** `ep-ancient-glitter-asm0xyun` (freeze, restore branch taken) | b54ce01 | `run-migration.sh … --production-window` | **ALL STEPS PASSED in one pass**: 116 deals, 88 sends, 97 old rows removed, 116 Chceli, 0 markers, empty diff | local log |
 
 ## Current blockers
 

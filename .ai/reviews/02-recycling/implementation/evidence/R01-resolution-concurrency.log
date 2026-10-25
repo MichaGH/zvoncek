@@ -1,0 +1,511 @@
+endpoint=ep-divine-waterfall-asbkuort run=mvoa24dk
+
+── claims
+(node:18732) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS  claims: 2 users × 20 parallel – A=10 B=10 overlap=0 successes=2 outcomes={"OK":40}
+PASS  claims: second batch refused while batch not empty – {"claimed":0,"reason":"BATCH_NOT_EMPTY"}
+PASS  claims: next batch after the batch is fully called – {"claimed":10}
+PASS  claims: retries stay with the caller – retries=10
+
+── stale
+PASS  stale tabs: 2 parallel outcomes, same revision (30×) – bad=0
+
+── idempotency
+PASS  idempotency: same key twice → one CALL, both success – calls=1
+PASS  idempotency: same key in parallel → one CALL, both success – calls=1 {"OK":2}
+PASS  idempotency: same key, different outcome → IDEMPOTENCY_CONFLICT – ERR:IDEMPOTENCY_CONFLICT
+
+── revert
+PASS  revert: immediately after NO_ANSWER – OK {"status":"CALLING","callbackKind":"RETRY","assignedCallerId":"cmvoa2j3f003agcvmkrmli9av"}
+PASS  revert: immediately after NOT_INTERESTED – OK {"status":"CALLING","callbackKind":"RETRY","assignedCallerId":"cmvoa2j3f003agcvmkrmli9av"}
+PASS  revert: immediately after BAD_NUMBER – OK {"status":"CALLING","callbackKind":"RETRY","assignedCallerId":"cmvoa2j3f003agcvmkrmli9av"}
+PASS  revert: twice in parallel → one CALL_REVERTED – {"ERR:STALE":1,"OK":1} reverted=1
+PASS  revert: repeated revert rejected – ERR:FORBIDDEN Už bolo vrátené.
+PASS  revert: rejected after a later contact edit – ERR:FORBIDDEN Kontakt sa od hovoru zmenil – vrátenie nie je možné.
+
+── handoff
+PASS  handoff: team member → team leader, marker = call createdAt, no automatic task, one HANDOFF ownership row – {"r1":{"success":true,"recipient":{"id":"cmvoa2ln2003qgcvmgb0mp80l","name":"CC6 ADMIN"}},"ownerOk":true,"tasks1":0,"own1":[{"reason":"HANDOFF","fromUserId":null,"toUserId":"cmvoa2ln2003qgcvmgb0mp80l","byUserId":"cmvoa2lox003sgcvm3zrlio78"}],"leadRevision":1,"revision":1}
+PASS  handoff: no team → unassigned (not blocked), no ownership row (owner did not change) – {"r2":{"success":true,"recipient":null},"own2":0}
+PASS  handoff: SALES_REP → own deal – {"success":true,"recipient":{"id":"cmvoa2lq4003ugcvm246cm96x","name":"CC9 SALES_REP"}}
+PASS  handoff revert: back to caller as retry, REVERT ownership row – OK {"status":"CALLING","pipelineEnteredAt":null,"ownerId":null,"assignedCallerId":"cmvoa2lox003sgcvm3zrlio78"} revert={"fromUserId":"cmvoa2ln2003qgcvmgb0mp80l","toUserId":null}
+
+── scope
+PASS  scope: logCall on someone else's lead → NOT_ASSIGNED – ERR:NOT_ASSIGNED
+PASS  scope: contact edit on someone else's lead → NOT_FOUND – ERR:NOT_FOUND
+PASS  scope: logCall rejects POSITIVE – ERR:generic
+
+── dealLifecycle
+PASS  lifecycle: WANTS_DESIGN sets 'Poslať návrh' and creates no task (D9) – OK tasks=0 {"nextActionKind":"SEND_DESIGN","nextActionMode":"IN_PROGRESS"}
+PASS  lifecycle: price sent (OFFER_SENT) → CALL +7 business days (day-only), one revision bump – {"at":"2026-11-01","expected":"2026-11-01","delta":1}
+PASS  lifecycle: manager price keeps owner – owner=rep
+PASS  lifecycle: WON closes (closedAt set, step cleared) – {"status":"WON","closedAt":"2026-10-25T20:26:12.986Z","nextActionKind":null}
+PASS  closed deal: rep follow-up / edit / task all rejected (reopen is not a task – D13) – ERR:DEAL_CLOSED ERR:DEAL_CLOSED ERR:DEAL_CLOSED
+PASS  closed deal: manager reopens → ACTIVE, CALL today, owner kept – {"status":"ACTIVE","closedAt":null,"ownerId":"cmvoa2nci004egcvm4k8lwkhy","nextActionKind":"CALL"}
+PASS  follow-up NOT_INTERESTED → LOST, closedAt, reason – {"status":"LOST","closedAt":"2026-10-25T20:26:14.284Z","lostReason":"drahé"}
+PASS  stats: follow-ups use source CLIENTS, first-call count unchanged – CALL_QUEUE calls=1
+
+── dealScope
+PASS  deal scope: foreign rep → NOT_FOUND; rep cannot use manager commands – ERR:NOT_FOUND ERR:NOT_FOUND ERR:FORBIDDEN ERR:FORBIDDEN
+PASS  deal scope: page view own OK, foreign/non-deal NOT_FOUND – OK NOT_FOUND NOT_FOUND
+
+── transferRace
+PASS  transfer race: follow-up vs bulk owner transfer (20×) – bad=0
+
+── revision
+PASS  revision: every deal command bumps exactly once
+
+── claimVsDeactivate
+PASS  deactivation vs claim (100×): never deactivated with NEW – bad=0 {"claim=OK(10) deact=OK":58,"claim=ERR:FORBIDDEN deact=OK":42}
+
+── deactivateInflight
+PASS  deactivation waits for in-flight call that rolls back (100×) → 0 NEW – bad=0, deactivation waited in 100/100
+
+── deactivateTimeout
+PASS  deactivation past lock_timeout → rolled back, RETRYABLE, user active, lead still assigned – deact=RETRYABLE took=10145ms active=true
+
+── transferThenRevert
+PASS  transfer then revert by former caller → rejected, lead stays with B; former caller cannot edit – tr={"moved":1} rv=ERR:FORBIDDEN owner=B edit=ERR:NOT_FOUND
+
+── bulkTransfer
+PASS  bulk transfer 1050 retries A → B – moved=1050 leftA=0 atB=1050 audits=1050 took=1514ms
+PASS  NEW transfer respects target capacity (8 held → 2 moved, then refused) – cap={"moved":2} bNew=10 full=ERR:FORBIDDEN
+PASS  release batch → pool – rel={"moved":4} aNew=0
+
+── handoffVsLeader
+PASS  handoff vs setTeamLeader (100×): owner = leader valid when the handoff locked the team – bad=0 deals=100 outcomes={"call=OK leader=OK":100}
+
+── deleteTeamVsHandoffs
+PASS  deleteTeam vs handoffs: no non-retryable errors; unrouted after delete – delete=OK {"OK":20} bad=0
+
+── r01CraftedInput
+PASS  R-01: extra fields rejected on client + pipeline contact edit and next-action; deal unchanged – ERR:FORBIDDEN ERR:FORBIDDEN ERR:FORBIDDEN ERR:FORBIDDEN unchanged=true
+PASS  R-01: valid contact edit still works – {"phone":"0911 000 111","email":"ok@test.invalid","status":"ACTIVE","ownerId":"cmvoa6lfk036dgcvm06q2lfba"}
+
+── r02PipelineOrder
+PASS  R-02: overdue deal first on page 1 among 56 deals – first=overdue rows=50 hasMore=true
+PASS  R-02: oldest task first in 'Pre mňa' with > 50 tasks – first=oldest rows=50
+PASS  R-02: SQL order matches nextActionSort over all deals – deals=394 inversions=0
+PASS  R-02: deterministic, no duplicates across a larger page – n=56
+
+── r03DetailScope
+PASS  R-03: detail query scoped - former owner null after transfer, new owner and manager see it – before=true former=false new=true manager=true
+PASS  R-05: rep detail has no design version field
+PASS  W1: rep detail hides audit activities
+
+── r04SearchPaging
+PASS  R-04: 101 matches - first page 50 + hasMore, larger page reaches all 101 in the same order – first=50 all=101
+
+── w1RepScope
+PASS  W1-A: rep list never returns another owner's deal for any ?owner= value – leaked=0 missingOwn=0 foreignDetail=false
+
+── w1ManagerSeesRepBoard
+PASS  W1-B: manager filtering by a rep sees exactly the rep's own board, same order – rep=5 manager=5
+
+── w1TodayParity
+PASS  W1-C: Na dnes SQL matches clientSection() over every open deal (locked deal excluded, closed task not) – open=422 expected=332 got=332 missing=0 extra=0 count=332
+
+── r06TaskCount
+PASS  R-06: task count exact beyond 50 (only mine), preview bounded – count=51 preview=10
+
+── w2NoAnswerKeepsOutcome
+PASS  W2-A: no-answer keeps its outcome with a custom next step – default=CALL override=WAITING_FOR_CLIENT calls=NO_ANSWER,NO_ANSWER,WANTS_QUOTE
+
+── w2ReplyStored
+PASS  W2-B: reply stored in meta + label in the note, unknown reply rejected – meta=NOT_LOOKED_YET note=Ešte sa na to nepozreli – vraj v piatok bogus=ERR:generic
+
+── w2OrderReply
+PASS  W2-C: wants-to-order is an ordinary reply – needs a chosen step, records the call, creates no task – noStep=ERR:FORBIDDEN r=OK kind=CALL tasks=0
+
+── w2NoAnswerStreak
+PASS  W2-D: no-answer streak counts consecutive misses and resets after a real contact – list=3 detail=3 afterAnswered=0
+
+── w2NextStepRules
+PASS  W2-E: shared step rules – design is in progress from today, call without a date is refused – kind=SEND_DESIGN mode=IN_PROGRESS call=ERR:FORBIDDEN
+
+── w3aRecordIdempotent
+PASS  W3a-A: record sets summary + CALL +7, one bump; same key twice in parallel and again = one record – r=OK,OK,OK rows=1 rev+1 next=CALL
+PASS  W3a-A: a reused key with different content is a conflict, not a second write – ERR:IDEMPOTENCY_CONFLICT
+PASS  W3a-A: two different submits on the same revision → exactly one wins – {"ERR:STALE":1,"OK":1}
+
+── w3aPriceSnapshot
+PASS  W3a-B: price is snapshotted at send time; no price → refused – noPrice=ERR:FORBIDDEN last={"amount":"1000","note":"Web 550 · admin 450","channel":"EMAIL","sentOn":"2026-10-25"} price=1200
+
+── w3aCorrectionOrder
+PASS  W3a-C: correcting two price sends in either order ends with no price known – OK|mid=set|end=null ; OK|mid=set|end=null
+PASS  W3a-C: design sent date = first valid send; correcting the earlier one moves it to the later one – before=2026-10-20 after=2026-10-24
+
+── w3aHistorical
+PASS  W3a-D: historical entry is manager-only and touches no step, task or 'Naposledy'; empty content means 'no' – rep=ERR:generic hist=OK step=SEND_QUOTE/SEND_QUOTE open=1 last=CALL k=yes/no
+
+── w3aMigratedSend
+PASS  MIG-1: a migrated send behaves like any other send – received, 'Odoslané', no 'doplnené spätne' badge – historical=false price=499 lastOffer=o nás + cena 499 €/o nás + cena 499 €
+PASS  MIG-2: correcting a migrated send keeps its provenance and clears the price summary – fix=OK sources=2 priceAt=undefined
+
+── migNormalize
+PASS  MIG-3: a closed V1 deal normalizes exactly like V2 closes it (INTERESTED+fp, ask from the call, withdrawn at closedAt, HANDOFF, OWNER_CHANGED, CLIENT_ASK_CHANGED, NEXT_ACTION_CLEARED, no step) – blocker=undefined failing= meta={"fp":"{\"asked\":[\"DESIGN\"]}","asked":["DESIGN"]} req=WITHDRAWN/2026-10-15T20:30:00.101Z/true/2026-09-25T20:30:00.101Z/true own=true/2026-09-25T20:30:00.101Z t0=2026-09-25T20:30:00.101Z t1=2026-10-15T20:30:00.101Z step=null
+PASS  MIG-4: a second normalization run changes nothing (no rows, no revision bump) – rev 1→1 rows 6→6
+
+── w3aContactTypes
+PASS  W3a-E: 'bez kontaktu' writes no call (replay OK), a reply is CLIENT_REPLIED and resets the streak, SMS is SMS_SENT without outcome – none=OK/OK calls=0 plan=1 streak=2→0 sms={"note":"web + kontakt","outcome":null} bad=ERR:generic,ERR:generic,ERR:generic
+
+── w3aPhonePrice
+PASS  W3a-F: phone price saves the price + a PHONE record linked to the call, one bump; 'Naposledy' stays the call; refused on no-answer – r=OK price=900 rev+1 meta={"price":{"note":null,"amount":"900"},"sentOn":"2026-10-25","channel":"PHONE","contents":["PRICE"],"correction":null,"historical":false,"callActivityId":"cmvoa7odc03orgcvm6zy461o6"} last=CALL na=ERR:generic
+
+── w3aCorrectionRules
+PASS  W3a-G: foreign rep NOT_FOUND, short reason / a CALL refused, manager corrects, twice = STALE, 'Naposledy' skips it – foreign=ERR:NOT_FOUND short=ERR:generic call=ERR:FORBIDDEN mgr=OK twice=ERR:STALE last=SMS_SENT→CALL
+
+── w3aOrdering
+PASS  W3a-H: a backdated entry never overtakes a normal one on the same day; the latest price is the anchor – sameDay=1100 later=1300
+
+── w3bReplanKeepsStatus
+PASS  W3b-A: replanning a snoozed deal keeps it SNOOZED, writes no call, updates the step – r=OK status=SNOOZED kind=CALL calls 2→2
+
+── w3bFollowUpDate
+PASS  W3b-B: chosen follow-up day is used; a past day or a day without follow-up is refused – past=ERR:generic noFollow=ERR:generic ok=OK at=2026-10-28
+
+── w3bListDialogData
+PASS  W3b-C: list row carries price, breakdown and designs (with the copy link) for the in-place dialog – {"price":990,"note":"Web 550 · SEO 440","designs":[{"url":"smrek1.thegrandpoints.com","tracked":true}],"sent":false}
+
+── w3bLastOfferStays
+PASS  W3b-D: after a later call, list and detail still show the last send (návrh smrek1) – row=CALL/návrh smrek1 detail=CALL/návrh smrek1
+
+── w3cLegacyNoDesignRow
+PASS  R3-4: legacy designSentAt without Design rows still shows as sent (list + detail) – row=true detail=2026-10-05T20:30:13.459Z
+
+── w3cReplayPayload
+PASS  R3-5: same key + same content = replay OK; same key + different content = IDEMPOTENCY_CONFLICT – offer=OK,OK,ERR:IDEMPOTENCY_CONFLICT sms=OK,OK,ERR:IDEMPOTENCY_CONFLICT
+
+── w3cLastTouchRules
+PASS  R3-6: a task and a historical entry change neither 'Naposledy' nor the 'Odoslané' line – detail=CALL/null row=CALL/null
+
+── w3cDeleteDesign
+PASS  R3-7: deleting the only sent design clears Lead.designSentAt, one revision bump – before=2026-10-25T20:30:18.262Z after=null rev+1
+
+── w3cPhoneBreakdown
+PASS  R3-8: phone price — new amount drops the old breakdown, same amount keeps it, a given breakdown is stored – {"diff":{"snap":null,"lead":null},"same":"Web 600 · SEO 400","given":"Web 500 · admin 300"}
+
+── w3Create
+PASS  W3-1: foreign rep NOT_FOUND, telesales / manager FORBIDDEN, assignee must be a resolver, price task needs the send step (D3), text required – ERR:NOT_FOUND ERR:FORBIDDEN ERR:FORBIDDEN ERR:FORBIDDEN ERR:STALE ERR:generic
+PASS  W3-1: snoozed deal wakes, step locked without a date, one bump; same key (parallel + again) = one task; changed payload = conflict – r=OK,OK,OK tasks=1 status=ACTIVE at=null rev+1 changed=ERR:IDEMPOTENCY_CONFLICT,ERR:IDEMPOTENCY_CONFLICT,ERR:IDEMPOTENCY_CONFLICT
+PASS  W3-1: a second open task on the same deal is refused (I1) – ERR:STALE
+PASS  W3-1: closed deal → DEAL_CLOSED; a manager never asks on his own deal (D7) – ERR:DEAL_CLOSED ERR:FORBIDDEN
+
+── w3AutoStep
+PASS  W3-1b: stepAfterTask matrix (price/design fixed, other keeps step + note, I10 narrows, design wins)
+PASS  W3-1b: price task without a step keeps 'Poslať cenu' + its note; from 'Zavolať' it becomes 'Poslať cenu' (locked, no date) – OK SEND_QUOTE→SEND_QUOTE "Poslať cenu"→"Poslať cenu" | OK SEND_QUOTE "Poslať cenu"
+PASS  W3-1b: design → 'Poslať návrh'; other keeps 'Zavolať' + note; other with a chosen step honours it; price with a different step is refused – OK SEND_DESIGN | OK CALL "dohodnúť stretnutie" | OK SEND_EMAIL | ERR:STALE SEND_QUOTE
+PASS  W3-1b: pending design narrows a new price task to 'Poslať návrh'; other with 'Zavolať' → RESULT_PENDING – OK ERR:RESULT_PENDING OK SEND_DESIGN OPEN PRICE
+PASS  W3-1b: default manager = team leader, else the last asked manager, else none – {"team":1,"last":1,"fresh":0}
+
+── w3R01
+PASS  R01-1: a manager on a rep's deal cannot dismiss returned items through a call or a send (FORBIDDEN, item stays); the same call / send without dismiss works; the owner can – ERR:FORBIDDEN ERR:FORBIDDEN pending=true OK OK OK
+PASS  R01-2: finish-and-send never leaves 'Poslať…' for what was sent: opt-out refused, default = 'Zavolať'; an older unsent návrh keeps 'Poslať návrh' – ERR:generic OK CALL | OK SEND_DESIGN
+PASS  R01-3: reopen with a deactivated / demoted owner → the reopening manager owns it (one revision, OWNER_CHANGED + DealOwnership CHANGE); a valid owner stays; nobody eligible → unassigned – {"ok":true,"data":{"retries":0,"schedule OK OK OK A=true B=true C=true rows=2 rev+1
+PASS  R01-5: send with KEEP_OPEN + withdrawParts, WITHDRAW_PARTS without a reason, or withdrawParts without the choice are refused; the task stays OPEN – ERR:generic ERR:generic ERR:generic
+
+── w3R02
+PASS  R02-1: a profile save is checked against the NEW role under the User lock – a SCOUT holding an open deal is refused even with an unchanged role; a rep's ordinary edit still works – {"ok":false,"error":"Najprv presuň 1 obchod (Pipeline → Presunúť obchody).","cod {"ok":true,"data":{"released":0}}
+PASS  R02-3: with an equal createdAt the list's attempt counter and the detail agree (ordered by createdAt, id) – list=0 detail=0 last=POSITIVE (NO_ANSWER first)
+
+── w3R03
+PASS  R03-1: sendCompletesStep – the last pending returned item completes 'Poslať…', anything still pending keeps it
+PASS  R03-1 + W5: návrh first → step follows the rest ('Poslať cenu'), last price + call → CALL; price first → 'Poslať návrh', last návrh + call → CALL – a: OK SEND_QUOTE → OK CALL; b: SEND_DESIGN → OK CALL
+
+── w3Lock
+PASS  W3-2: every step/status writer returns STEP_LOCKED while a task is open; nothing changes – ERR:STEP_LOCKED,ERR:STEP_LOCKED,ERR:STEP_LOCKED,ERR:STEP_LOCKED,ERR:STEP_LOCKED,ERR:STEP_LOCKED,ERR:STEP_LOCKED,ERR:STEP_LOCKED,ERR:STEP_LOCKED
+PASS  W3-2: fact-only contact of every kind (and the manager's call) saves, moves 'Naposledy', leaves the locked step, one bump each –  last=OFFER_SENT
+PASS  W3-2: fact-only mode rejects any step / status input – ERR:generic,ERR:generic,ERR:generic,ERR:generic
+PASS  W3-2: cancel + snooze = one transaction (task CANCELLED with reason, status SNOOZED, one bump); wrong id STALE; no reason refused; a manager cannot cancel by replanning – ERR:FORBIDDEN ERR:STALE ERR:FORBIDDEN OK task=CANCELLED status=SNOOZED rev+1
+PASS  W3-2: manager status select (WON) and rep 'zlé číslo' cancel the task with 'obchod uzavretý' in the same save (I7) – OK OK CANCELLED/obchod uzavretý CANCELLED WON UNREACHABLE
+
+── w3Overlap
+PASS  W3-3: price send / phone price on a price task need a choice; 'keep open' is fact-only; unrelated contents need none – ERR:TASK_OVERLAP ERR:TASK_OVERLAP OK OK OK step=SEND_QUOTE/null
+PASS  W3-3: 'už to netreba' = cancel + send + follow-up atomically (one bump); a manager cannot cancel the rep's task this way – ERR:FORBIDDEN OK task=CANCELLED step=CALL rev+1
+PASS  W3-3: a návrh send on a DESIGN task and a price send on a combined task are refused without a choice – ERR:TASK_OVERLAP ERR:TASK_OVERLAP
+
+── w3Finish
+PASS  W3-4 / wave 4: a návrh without a URL is refused, the rep cannot deliver; delivering both parts saves the price + result, closes the task, step due today, one bump – ERR:FORBIDDEN ERR:FORBIDDEN OK price=1285 status=DONE section=TODAY pending=2
+PASS  W3-4: finish retry with the same key = OK, with a changed amount = conflict – OK ERR:IDEMPOTENCY_CONFLICT
+PASS  W3-4: 'Vybavil som to sám' = one OFFER_SENT (manager's, fulfils this task) + DONE + follow-up call, one bump; retry OK; changed date = conflict – OK OK ERR:IDEMPOTENCY_CONFLICT offers=1 fulfils=[{"kind":"PRICE","taskId":"cmvoa9fkd0438gcvmarlxqsxx"}] step=CALL rev+1
+PASS  W3-4: decline needs a reason and unlocks the step due today – a system 'Poslať cenu' is not restored (R02-1), the neutral CALL is – and the reason waits as 'zamietnuté' – ERR:generic OK step=CALL pending=["DECLINED"]
+
+── w3Results
+PASS  W3-5: price done, then návrh done, neither sent → all three items pending together – ["PRICE","DESIGN","DESIGN"]
+PASS  W3-5: a generic send consumes nothing; historical / another lead's task / content not in the send / not in the result → rejected – OK ERR:generic ERR:STALE ERR:FORBIDDEN ERR:STALE
+PASS  W3-5: sending the price consumes only the price; with návrhy still pending the follow-up call is refused (I10), the step stays 'Poslať návrh' – ERR:RESULT_PENDING OK pending=DESIGN,DESIGN step=SEND_DESIGN
+PASS  W3-5: a step change to a call is refused while a návrh waits; 'Neposielam' needs a reason, is one row + one bump, retry-safe; návrh A stays – ERR:RESULT_PENDING ERR:FORBIDDEN OK OK rows=1 pending=[true]
+PASS  W3-5: crossing out the consuming send brings the price back – ["PRICE","DESIGN"]
+PASS  W3-5: a step change with the remaining items dismissed in the same save is allowed – OK
+PASS  W3-5: two pending prices – one send cannot fulfil both; one fulfilled + the older dismissed as superseded → follow-up allowed – ERR:FORBIDDEN OK
+PASS  W3-5: a phone price can fulfil a returned price – OK
+PASS  W3-5: closing dismisses pending items with 'obchod uzavretý'; reopening does not revive them – OK {"items":[{"kind":"PRICE"}],"reason":"obchod uzavretý"}
+PASS  W3-5: a manager cannot decide on the rep's result; the deal moved to nobody keeps it; then the manager may dismiss it – ERR:FORBIDDEN kept=1 OK
+PASS  W3-5: an 'Iné' answer stays after an unrelated call and goes with the pre-ticked 'Beriem na vedomie' in the next contact – OK stays=1 OK
+
+── w3Handover
+PASS  W3-6: handover accepted via the task card → owner = manager, task DONE, DealOwnership(HANDOVER), his step, rep loses access and sees it in História – OK OK owner=true task=DONE own=true repView=false rev+1
+PASS  W3-6: handover accepted via the owner select → the same outcome (DONE + HANDOVER), step due today – OK DONE own=true
+PASS  W3-6: 'Nie, pokračuj ty' → DECLINED, rep keeps the deal, step unlocked and due – OK
+PASS  W3-6: takeover of an own deal / by a rep is refused – ERR:FORBIDDEN ERR:FORBIDDEN
+
+── w3OwnerTransition
+PASS  W3-7: → rep keeps the task (reassigned as chosen, still locked); → manager cancels HELP (step due today); → nobody cancels; HANDOVER → rep stays open – OK,OK,OK,OK t1=true t2=CANCELLED t3=CANCELLED/obchod bez vlastníka t4=true rows=4
+PASS  W3-7: the task can never go to a non-resolver (assignee choice refused) – ERR:FORBIDDEN
+PASS  W3-7: bulk to a rep keeps tasks (assignee as chosen), one BULK row per deal; retry same id = same total, nothing twice; other target same id = conflict – b1={"moved":3,"skipped":0} again={"moved":3,"skipped":0} conflict=ERR:IDEMPOTENCY_CONFLICT tasks=[{"status":"OPEN","assigneeId":"cmvoaa55u048egcvmdj96not3"},{"status":"OPEN","assigneeId":"cmvoaa55u048egcvmdj96not3"}] rows=3
+PASS  W3-7: bulk to a manager ends tasks – HELP cancelled, HANDOVER accepted (reason HANDOVER) – b2={"moved":5,"skipped":0} tasks=[{"type":"HELP","status":"CANCELLED"},{"type":"HANDOVER","status":"DONE"}] reasons=BULK,HANDOVER,BULK
+
+── w3Deactivation
+PASS  W3-8 (D14): deactivation / demotion refused with owned open deals or assigned open tasks; allowed after moving them – Najprv presuň 1 obchod (Pipeline → Presunúť obchody). | Najprv presuň 1 obchod (Pipeline → Presunúť obchody). | Najprv presuň 1 úlohu (Pre mňa → Presunúť). | false | true | true
+PASS  W3-8: ask vs deactivation of the assignee (15×) – never a deactivated manager with an open task – bad=0 {"ask=ERR:FORBIDDEN deact=OK":8,"ask=OK deact=FORBIDDEN":7}
+PASS  W3-8: finish vs reassign on the same revision → exactly one wins – OK ERR:STALE
+
+── w3Freshness
+PASS  W3-9: takeover / owner / status / lost / ask with an old revision → STALE – ERR:STALE,ERR:STALE,ERR:STALE,ERR:STALE,ERR:STALE
+PASS  W3-9: double click on owner / status / lost / reopen / takeover / dismiss → both OK, one effect – changeOwner: OK,OK rows=1 | changeStatus: OK,OK rows=1 | markLost: OK,OK rows=1 | reopen: OK,OK rows=1 | takeover: OK,OK rows=1 | dismiss: OK,OK rows=1
+
+── w3LockParity
+PASS  W3-10: isStepLocked ↔ STEP_LOCKED_SQL agree over 18 task × status combinations – mismatch=0
+PASS  W3-10: a locked deal appears in no actionable view (Na dnes, step pills, dashboard) – only in 'Čakám na manažéra' – leaks= waiting=4 (locked open deals: 4)
+PASS  W3-10: every pill count equals its full list under status / owner / search filters
+PASS  W3-10: a rep never sees a foreign task (inbox empty, foreign detail null) – inbox=0 detail=false
+
+── w3History
+PASS  W3-11: História hides a reverted first call (even after re-entry for another rep), a deal back with me, a deleted contact; one row per deal (latest move) – [{"l":2,"reason":"TAKEOVER"}]
+
+── w3Fingerprints
+PASS  W3-12: follow-up – same key + same payload replays; changed phone price / step note / overlap / cancel / dismiss / date = conflict – OK OK ERR:IDEMPOTENCY_CONFLICT,ERR:IDEMPOTENCY_CONFLICT,ERR:IDEMPOTENCY_CONFLICT,ERR:IDEMPOTENCY_CONFLICT,ERR:IDEMPOTENCY_CONFLICT,ERR:IDEMPOTENCY_CONFLICT
+PASS  W3-12: send – changed price / breakdown / follow-up day / follow-up choice under the same key = conflict – OK OK ERR:IDEMPOTENCY_CONFLICT,ERR:IDEMPOTENCY_CONFLICT,ERR:IDEMPOTENCY_CONFLICT,ERR:IDEMPOTENCY_CONFLICT
+
+── w3InboxHref
+PASS  W3-13: the 'Pre mňa' link clears owner, status, 'Od:' and paging (keeps search) – /dashboard/pipeline?view=inbox /dashboard/pipeline?view=inbox&q=pek /dashboard/pipeline?view=inbox
+
+── w3TaskRowsNotLastTouch
+PASS  W3-14: TASK_* rows never change 'Naposledy' (list and detail keep the first call) – CALL CALL
+
+── w3SheetNotes
+PASS  W3-15 (F1): 'Čo povedali' only in the contact row, 'Poznámka ku kroku' only in the step; empty = default text; misplaced fields refused – OK call="Majú poradu / rozhodujú sa – porada v piatok" step="zavolať po porade" empty="Poslať info / cenník" quote="Poslať cenu" ERR:generic ERR:generic
+
+── w5FirstCall
+PASS  W5-1: first call records every ticked content, the step follows the dominant one, reordered = same payload, changed = conflict, parallel = one write – INFO:SEND_EMAIL:1:OPEN PRICELIST:SEND_EMAIL:1:OPEN PRICE:SEND_QUOTE:1:OPEN DESIGN:SEND_DESIGN:1:OPEN REVIEW:SEND_EMAIL:1:OPEN | multi=SEND_DESIGN/3 meta=PRICELIST+PRICE+DESIGN | OK OK ERR:IDEMPOTENCY_CONFLICT | {"OK":5} | empty=ERR:generic
+
+── w5PhonePrice
+PASS  W5-2: a price told on the call satisfies that call's PRICE request by link; a deliberately chosen step survives later reconciliation – OK SENT step=SEND_QUOTE → OK CALL outstanding=DESIGN
+
+── w5AskAgain
+PASS  W5-3: an older receipt never satisfies a later request; two open requests of one content are one work row and one send closes both; a backdated send does not satisfy a later request – sent=SENT again=OK rows=2 work=1/2 closed=0 backdated=OPEN
+
+── w5PartialSend
+PASS  W5-4: a partial send drops what went out and the step follows the rest; a deliberately narrower step keeps its own label and warns about what it does not cover; list and detail agree – SEND_DESIGN → OK SEND_DESIGN | narrow={"headline":null,"warn":["DESIGN"]} combined="Poslať návrh + cenu + cenník" | detail="Poslať návrh + cenu" list="Poslať návrh + cenu" warn="null"
+
+── w5Correction
+PASS  W5-5: crossing out a send reopens a row only when no other valid receipt satisfies it; the earliest eligible receipt wins; a withdrawn row is never revived – OK OPEN | OK SENT moved=true | pure a=r1 b=WITHDRAWN c=OPEN
+
+── w5Revert
+PASS  W5-6: the first-call revert deletes that call's request rows; a row the client already received refuses the revert – OK 2→0 refused=STALE
+
+── w5ManagerWork
+PASS  W5-7: an open DESIGN request keeps the stored kind 'Poslať návrh' even for a price task; manager work without any client request stays outstanding, holds the step, is consumed by the send and comes back when that send is crossed out – task=OK/ERR:STALE locked=SEND_DESIGN | making=PRICE prepared=PRICE step=SEND_QUOTE → OK after= step=CALL back=PRICE
+
+── w5Pencil
+PASS  W5-8: the pencil adds and withdraws open rows only, a reason is required for a withdrawal, a satisfied row cannot be withdrawn, another rep gets NOT_FOUND, the same key saves once, and an open task is never cancelled by it – add=OK rev=1→2 step=SEND_DESIGN | noReason=ERR:generic withdraw=OK step=SEND_QUOTE | sent=ERR:STALE foreign=ERR:NOT_FOUND manager=OK | {"OK":2} conflict=ERR:IDEMPOTENCY_CONFLICT | task=OK/true
+
+── w5CloseReopen
+PASS  W5-9: WON (the deliberate exception) leaves the request rows untouched; reopening with outstanding work gives that send step today, and 'Zavolať' only when nothing is outstanding – OK rows=OPEN → OK SEND_DESIGN | nothing outstanding → CALL "Obchod znovu otvorený – ozvať sa"
+
+── w5Links
+PASS  W5-10: a source activity from another lead, a crossed-out record and a wrong type are refused under the lock – crossLead=NOT_FOUND crossedOut=STALE wrongType=FORBIDDEN
+
+── w5Migration
+PASS  W5-11: the deterministic migrationKey makes a rerun a no-op; a migrated row carries no actor and is excluded from demand statistics – insert=1/0 rows=2 actor=null demand={"INFO":0,"PRICELIST":0,"PRICE":1,"DESIGN":0,"REVIEW":0}
+
+── w5Parity
+PASS  W5-12: the list row and the detail describe the same work, the stored step is the projection's default and every such deal lands in 'Na dnes' (TS + SQL) – same=true expected=true today=2/3
+
+── w5Race
+PASS  W5-13: two tabs sending overlapping subsets leave exactly what the client received (one send lands, the other is STALE); the pencil is refused on a closed deal – {"OK":1,"ERR:STALE":1} offers=1 sent=INFO,PRICELIST open=PRICE closed=ERR:DEAL_CLOSED
+
+── w5MigrationPricelist
+PASS  R01-1: a PRICELIST receipt migrates to ONE linked SENT row (never an OPEN one); a second run adds nothing; no migrated PRICELIST row is left open – first=43 second=0 rows=1 state=SENT linked=true openPricelist=0
+
+── w5StepFromRequests
+PASS  R01-2: with the phone price the derived step is what is STILL outstanding (INFO → send info; DESIGN → návrh), a retry replays, a changed payload conflicts – OK step=SEND_EMAIL rows=INFO:OPEN,PRICE:SENT retry=OK changed=ERR:IDEMPOTENCY_CONFLICT | OK SEND_DESIGN/IN_PROGRESS
+PASS  R01-2: nothing left outstanding → refused and nothing written; the flag with an explicit step, without asks or on another outcome is invalid – ERR:STALE rows 1→1 | ERR:generic ERR:generic ERR:generic
+
+── w5CloseWithdraw
+PASS  R01-3: snoozing with open asks needs their exact ids and a reason (missing / blank / partial / foreign id refused, nothing written); one save withdraws them all under one revision bump – none=ERR:FORBIDDEN blank=ERR:generic partial=ERR:STALE foreign=ERR:STALE → OK SNOOZED rev+1 audit=1/1 replay=OK conflict=ERR:IDEMPOTENCY_CONFLICT
+PASS  R01-3: a request changed in another tab → STALE and nothing is withdrawn; LOST / UNREACHABLE withdraw; closing without them or a withdraw on another outcome is refused; reopening does not revive them; a deal with nothing open snoozes as before – stale=ERR:STALE kept=true | noWithdraw=ERR:FORBIDDEN wrongOutcome=ERR:generic | lost=OK LOST bad=OK UNREACHABLE | reopen=OK CALL | plain=OK
+
+── w5DialogDefaults
+PASS  R01-4: a návrh-only request (or nothing asked) preticks no e-mail content; only what was asked is ticked – design={"aboutUs":false,"pricelist":false,"review":false} none={"aboutUs":false,"pricelist":false,"review":false} info+review={"aboutUs":true,"pricelist":false,"review":true}
+
+── w5UntrackedDesign
+PASS  R01-5: DESIGN without ids and without the untracked flag is refused; the flag with ids / on other contents is refused; the flag records DESIGN with no Design row, satisfies the request, sets designSentAt and creates no Design – noIds=ERR:FORBIDDEN both=ERR:FORBIDDEN wrong=ERR:FORBIDDEN ok=OK untracked=true req=SENT designSentAt=2026-10-25T20:33:58.079Z designRows=0 retry=OK/1
+PASS  R01-5: crossing out the untracked send reopens the request and clears designSentAt; a deal that HAS a Design cannot use the flag; an old designSentAt survives unrelated sends – fix=OK req=OPEN designSentAt=null | bypass=ERR:STALE | legacy=2026-01-05T10:00:00.000Z
+
+── w5ManagerClose
+PASS  Q2: manager LOST / UNREACHABLE with open asks needs exact ids + a reason and withdraws them; WON leaves them and refuses a withdraw – no=ERR:FORBIDDEN blank=ERR:FORBIDDEN partial=ERR:STALE ok=OK | lost=ERR:FORBIDDEN/OK | won+w=ERR:FORBIDDEN won=OK
+
+── w5SmsPrice
+PASS  SMS with a price: one SMS_SENT + one OFFER_SENT (PHONE via SMS, linked to the SMS), the open PRICE request is satisfied, the price is the deal's; NONE cannot carry a price; a plain SMS writes no offer – OK PHONE/SMS linked=true req=SENT price=990 none=ERR:generic plain=OK
+
+── w5SmsKeepStep
+PASS  SMS + keepStep: only the SMS is recorded, step / date / status stay, one bump; a price in the SMS may keep a deliberate CALL but NOT a system send step; keepStep on a call or with an explicit step is refused – OK step SEND_DESIGN→SEND_DESIGN rev+1 planningRows=0 priceOnSystem=ERR:FORBIDDEN call=ERR:generic withStep=ERR:generic priceOnPlan=OK CALL
+
+── w5SmsCorrection
+PASS  R02-3: crossing out an SMS crosses out the price it carried in the same transaction (one bump, the PRICE request reopens, the deal's price knowledge clears); two concurrent corrections → one wins; crossing out only the price leaves the SMS – priced=true req SENT→OPEN results=OK,ERR:STALE offerReverted=true offerPriceAt=null rev+1 | smsKept=true
+
+── w5ManagerSnooze
+PASS  R02-1: a manager's SNOOZED needs the exact open ask ids + a reason (none / blank / partial refused, nothing written), withdraws them once under one bump, replays by key, and a withdraw on ACTIVE is refused – none=ERR:FORBIDDEN blank=ERR:FORBIDDEN partial=ERR:STALE ok=OK SNOOZED rev+1 audit=1/1 replay=OK wake=ERR:FORBIDDEN
+PASS  R02-1: with an open task AND open asks the snooze needs both the task cancellation and the withdrawal – task=OK taskOnly=ERR:FORBIDDEN both=OK
+
+── w5UntrackedLifecycle
+PASS  R02-2: designSentAt is the latest valid date across tracked designs AND untracked sends — a deleted Design does not suppress it, a later Design (and its deletion) does not clear it, crossing the send out with another unsent Design present clears it; the 'Dostali návrh' filter agrees – a=2026-10-25T20:34:18.138Z b=2026-10-25T20:34:19.150Z=2026-10-25T20:34:19.150Z afterDelete=2026-10-25T20:34:19.150Z d=null filter=true
+
+── w5InstantParity
+PASS  R02-6: the migration SQL's send instant equals offerInstant() for today's, backdated and historical rows (Bratislava midnight, not UTC), and a migrated historical receipt stays SENT after the first reconcile – rows=5 diffs=none afterReconcile=SENT/true
+
+── w4Pure
+PASS  W4-0 (§2.4): the task status is a pure, order-independent function of its parts over all 64 combinations – all 64 combinations agree
+PASS  W4-0 (§2.4): two declined parts of one task are two distinct item addresses; an old whole-task decline keeps its key – T:PRICE: · T:DESIGN:d1 · T:DECLINED:PRICE · T:DECLINED:OTHER · T:DECLINED:
+PASS  W4-0 (§2.3, R02-2): the compact mark never claims a client receipt for a deliberately unsent item, and never says 'pripravené' when nothing is left to send – pripravené · 1 z 2 poslané · neposiela sa (1) · 1 z 2 poslané · 1 neposlané · poslané klientovi (2)
+PASS  W4-0 (P0 / P6): for every outstanding set and every current step, the LOCKED step has no date and mode SCHEDULED, and its kind satisfies I10 – 32 sets × 6 current steps
+
+── w4Ask
+PASS  W4-1: one task carries 1–3 parts (one per kind), duplicates are refused, the step follows the whole set (návrh wins) and the step has no date – ERR:generic OK parts=PRICE+DESIGN+OTHER step=SEND_DESIGN/null
+PASS  W4-1 (R02-3): the deal's step before the lock is stored as the task's fallback; an 'Iné'-only task keeps that step, without a date – fallback=CALL step=CALL/null
+
+── w4Partial
+PASS  W4-2: delivering the price leaves the task OPEN, the step locked and still 'Poslať návrh'; the price waits as prepared – OK task=OPEN step=SEND_DESIGN/null pending=PRICE
+PASS  W4-2: the ready price can be sent while the task runs – no overlap question, the task stays OPEN, the step stays locked on 'Poslať návrh' – OK task=OPEN step=SEND_DESIGN/null
+PASS  W4-2: the last part closes the task (DONE), the step unlocks to today, the návrh waits to be sent, and the card shows both parts – OK task=DONE step=SEND_DESIGN marks=PRICE:SENT,DESIGN:PREPARED
+PASS  W4-2: both orders reach the same end, and all three parts in one save close the task with all three items waiting – reverse=OPEN→DONE atOnce=OK/DONE items=PRICE,DESIGN,OTHER
+
+── w4Selection
+PASS  W4-3 (R02-4): delivering only the návrh leaves PRICE requested, writes no price result and does not touch the deal's price; values for a kind that was not named are refused – OK {"PRICE":"REQUESTED","DESIGN":"DELIVERED"} price=700 cross=ERR:FORBIDDEN
+
+── w4StepLocked
+PASS  W4-4 (P6 / R02-5): the locked step follows outstanding through deliver / send / correction – always without a date and SCHEDULED; a correction while locked re-derives it; closing keeps the mode – ask=SEND_DESIGN/null/SCHEDULED · priceDelivered=SEND_DESIGN/null/SCHEDULED · priceSent=SEND_DESIGN/null/SCHEDULED · correction=SEND_DESIGN/null/SCHEDULED · closed=SEND_DESIGN/date/SCHEDULED
+PASS  W4-4 (B1): an SMS with a price on a deal with NO task keeps the step, its date and its mode untouched – OK CALL/2026-10-28T23:00:00.000Z → CALL/2026-10-28T23:00:00.000Z
+
+── w4Fallback
+PASS  W4-5 (R02-3): an 'Iné'-only task keeps the deliberate call; adding PRICE moves the locked step to 'Poslať cenu' although CALL is not a system step; withdrawing it restores the call – CALL → OK/SEND_QUOTE → OK/CALL
+PASS  W4-5 (R02-3): once the sendable part is gone the locked step becomes the fallback instead of lying about 'Poslať cenu'; closing the task makes it due today – afterSend=CALL/null afterClose=CALL/Sun Oct 25 2026 00:00:00 GMT+0200 (Central European Summer Time)
+
+── w4Terminal
+PASS  W4-6 (R02-1): every ending follows the RESULTING status – decline / withdraw / deal close after a delivery all end as DONE with a TASK_DONE row, never TASK_CANCELLED – status=DONE,DONE,DECLINED,DONE,CANCELLED,DONE,CANCELLED,DONE rows=TASK_DONE,TASK_DONE,TASK_DECLINED,TASK_DONE,TASK_CANCELLED,TASK_DONE,TASK_CANCELLED,TASK_DONE d=TASK_PART_DONE:keyed,TASK_PART_DECLINED:keyed
+PASS  W4-6: a delivered part survives a declined rest, a withdrawn rest and a closed deal – DELIVERED,DELIVERED,DELIVERED
+
+── w4Items
+PASS  W4-7 (R02-2): a DESIGN part returning two návrhy tracks each item on its own – waiting, sent (with its date) and deliberately not sent (with who and why); the part never reads as fully received – both=PREPARED sent=PARTLY_SENT/1 end=PARTLY_SENT/1 DISMISSED,SENT
+PASS  W4-7: two declined parts are two separate acknowledgements; dismissing one leaves the other – declined=PRICE,OTHER OK left=OTHER
+
+── w4WithdrawAdd
+PASS  W4-8: only the owner withdraws a part, a reason is required, a new step is refused while the task stays open; the rest of the task runs on – ERR:FORBIDDEN ERR:NOT_FOUND ERR:generic ERR:FORBIDDEN OK {"PRICE":"WITHDRAWN","DESIGN":"REQUESTED"}
+PASS  W4-8: a withdrawn kind returns to REQUESTED with a clean record; a kind already in play, an empty message and a non-owner are refused – OK price=REQUESTED/null ERR:STALE ERR:generic ERR:FORBIDDEN
+PASS  W4-8: a delivered part can be neither withdrawn nor re-added, and a chosen step is refused while a delivered návrh is still waiting to be sent (I10) – ERR:STALE ERR:STALE ERR:STALE
+PASS  W4-8: withdrawing the LAST open part with a chosen step closes the task (CANCELLED) and plans that step today – OK step=CALL/ozvem sa
+
+── w4SendWhileOpen
+PASS  W4-9: sending a content whose part is still being made needs a choice; unrelated contents need none; KEEP_OPEN records the send and keeps every part – ERR:TASK_OVERLAP OK OK {"PRICE":"REQUESTED","DESIGN":"REQUESTED"}
+PASS  W4-9: WITHDRAW_PARTS takes back exactly the overlapping part; the task stays OPEN for the rest and the step stays locked on 'Poslať návrh' – OK task=OPEN {"PRICE":"WITHDRAWN","DESIGN":"REQUESTED"} step=SEND_DESIGN/null
+PASS  W4-9: withdrawing the last part in a send closes the task and unlocks the step (the follow-up call is planned) – OK task=CANCELLED step=CALL
+PASS  W4-9: no follow-up call is planned while the task is open – the step stays locked (the neutral CALL fallback, never 'Zavolať, či cena prišla') – OK step=CALL/null
+
+── w4FollowUpGate
+PASS  W4-10 (P1): 'Poslal som to sám' closes the task but plans NO 'Zavolať, či prišlo' while the client is still owed info + cenník – the step becomes the remaining send – OK step=SEND_EMAIL callRows=0
+PASS  W4-10 (P1): the same send including info + cenník DOES plan the call; a hand-crafted followUp with outstanding work is refused server-side and nothing is written – OK step=CALL | ERR:FORBIDDEN step3=SEND_QUOTE
+
+── w4Survives
+PASS  W4-11: a delivered price keeps waiting through a declined rest, a takeover, an owner change and a deal moved to nobody; every ending that does close the task is DONE, never CANCELLED – kept=1,1,1,1 status=DONE,DONE,OPEN,DONE
+
+── w4ReviewR01
+PASS  W4A-R01-1: crossing out a send while the task is open flips the locked step CALL → SEND_QUOTE (no date, SCHEDULED, one revision, one planning row); on an unlocked deal the same correction leaves the user's step alone – send=CALL/null/SCHEDULED corr=SEND_QUOTE/null/SCHEDULED rows=1 free=CALL/date/SCHEDULED→CALL/date/SCHEDULED
+PASS  W4A-R01-2: the 'Chceli' pencil on an open task uses the same P6 formula – CALL → add PRICE → SEND_QUOTE → withdraw PRICE → CALL, always without a date and SCHEDULED, one revision each, task stays open – CALL/null/SCHEDULED → OK SEND_QUOTE/null/SCHEDULED → OK CALL/null/SCHEDULED
+PASS  W4A-R01-2: two tabs on the same revision – exactly one pencil save wins – ERR:STALE OK
+PASS  W4A-R01-3 (CALL): withdrawing PRICE on a PRICE + DESIGN task saves the contact + price, keeps the task OPEN and the step locked on SEND_DESIGN; without keepLockedStep it is STEP_LOCKED, forged / foreign kinds and a non-owner are refused with nothing written; replay is one save, a changed body is a conflict – ERR:STEP_LOCKED ERR:FORBIDDEN ERR:FORBIDDEN ERR:FORBIDDEN untouched=true | OK OK OK ERR:IDEMPOTENCY_CONFLICT | {"PRICE":"WITHDRAWN","DESIGN":"REQUESTED"} OPEN SEND_DESIGN/null/SCHEDULED contacts=1
+PASS  W4A-R01-3 (SMS): withdrawing PRICE on a PRICE + DESIGN task saves the contact + price, keeps the task OPEN and the step locked on SEND_DESIGN; without keepLockedStep it is STEP_LOCKED, forged / foreign kinds and a non-owner are refused with nothing written; replay is one save, a changed body is a conflict – ERR:STEP_LOCKED ERR:FORBIDDEN ERR:FORBIDDEN ERR:FORBIDDEN untouched=true | OK OK OK ERR:IDEMPOTENCY_CONFLICT | {"PRICE":"WITHDRAWN","DESIGN":"REQUESTED"} OPEN SEND_DESIGN/null/SCHEDULED contacts=1
+PASS  W4A-R01-3: withdrawing the LAST open part by phone closes the task – the chosen step wins; a stale keepLockedStep client still gets the task closed and the step unlocked (kind CALL from the fallback, due today), never a locked null date – OK CALL/date/SCHEDULED | OK CALL/date/SCHEDULED
+PASS  W4A-R01-4: forged withdrawParts (extra kind, kind the send does not cover, wrong task, wrong kind) are refused before anything is written; the exact overlap still works – ERR:FORBIDDEN ERR:FORBIDDEN ERR:STALE ERR:FORBIDDEN clean=true valid=OK
+PASS  W4A-R01-5: an owner change (to nobody, to a manager) and a snooze that end the task derive the final step – the deal that was locked on SEND_DESIGN comes out on the CALL fallback, due today (a snooze: on the chosen wake date, and refused without one), not on the design that was just withdrawn – before=SEND_DESIGN/null/SCHEDULED nobody=OK CALL/date/SCHEDULED manager=OK CALL/date/SCHEDULED snooze=ERR:FORBIDDEN/ERR:generic/OK SNOOZED/CALL/date/SCHEDULED
+PASS  W4A-R01-6: a delivered part whose every item was deliberately not sent is marked DISMISSED (⊘ 'neposiela sa'), not PREPARED – OK mark=DISMISSED waiting=0 dismissed=1
+
+── w4aFilterLevels
+PASS  W4A-F-1: 'Na dnes' × 'Volať' is the intersection; 'Všetko' × 'Volať' lists every unlocked CALL deal; the old view=call equals it; a locked deal is in neither – todayCall=1 allCall=2 legacy=2
+PASS  W4A-F-2: every step chip count equals its list in every queue; 'Čakám na manažéra' ignores the step
+PASS  W4A-F-3: parse – legacy ?view=quote → all + quote, a step is dropped where it makes no sense or is unknown, no view = auto; links keep the step across queues but not into 'Čakám na manažéra' – {"filter":"active","view":"all","step":"quote","owner":"me"} {"filter":"active","view":"waiting_manager","owner":"me"}
+PASS  W4A-F-4: any status other than Aktívne is a plain list (no queue, no step, even from a hand-made URL); switching to it drops queue and step, switching back to Aktívne picks the queue by work again – {"filter":"won","view":"all","owner":"me"} /dashboard/pipeline?filter=lost /dashboard/pipeline
+PASS  W4A-F-5: entering 'Dostali …' from a step clears the step (link and hand-made URL); the list equals the displayed count –  count=0 list=0
+
+── w4ReviewR02
+PASS  W4A-R02-1 (PRICE): from a real Wave 5 SEND_QUOTE, after the price is sent only OTHER is left – the locked step is never SEND_QUOTE and reads 'Čaká na … – otázka / konzultácia'; closing OTHER unlocks CALL due today with the neutral note – start=SEND_QUOTE locked=CALL/null/SCHEDULED headline="Čaká na CC441 – otázka / konzultácia" done=CALL/date/SCHEDULED note="Pokračovať s klientom po odpovedi manažéra"
+PASS  W4A-R02-1 (DESIGN): the same from SEND_DESIGN – locked 'čaká na manažéra', never SEND_DESIGN, then CALL today – start=SEND_DESIGN locked=CALL/null/SCHEDULED headline="Čaká na CC441 – otázka / konzultácia" done=CALL/date/SCHEDULED
+PASS  W4A-R02-1 (INFO): a still-outstanding INFO keeps the locked step on the send ('Poslať …'), not on 'čaká na manažéra' – SEND_EMAIL/null/SCHEDULED headline="Poslať info"
+PASS  W4A-R02-1 (manual): a deliberately chosen step (Čakáme na klienta) still comes back after the task – WAITING_FOR_CLIENT/date/SCHEDULED
+PASS  W4A-R02-2 (system fallback, no follow-up): withdrawing the last part in an e-mail closes the task, records the receipt and leaves NO stale 'Poslať cenu'; one keyed event, one revision, replay = one save, changed body = conflict – task=CANCELLED step=CALL/date/SCHEDULED due=2026-10-25 rows=SENT rev=2→3 keyed=1 | OK OK OK ERR:IDEMPOTENCY_CONFLICT
+PASS  W4A-R02-2 (manual CALL fallback, no follow-up): withdrawing the last part in an e-mail closes the task, records the receipt and leaves NO stale 'Poslať cenu'; one keyed event, one revision, replay = one save, changed body = conflict – task=CANCELLED step=CALL/date/SCHEDULED due=2026-10-25 rows= rev=3→4 keyed=1 | OK OK OK ERR:IDEMPOTENCY_CONFLICT
+PASS  W4A-R02-2 (system fallback, with follow-up): withdrawing the last part in an e-mail closes the task, records the receipt and leaves NO stale 'Poslať cenu'; one keyed event, one revision, replay = one save, changed body = conflict – task=CANCELLED step=CALL/date/SCHEDULED due=2026-11-01 rows=SENT rev=2→3 keyed=1 | OK OK OK ERR:IDEMPOTENCY_CONFLICT
+
+── w4Race
+PASS  W4-12: deliver vs withdraw of the SAME part on the same revision → exactly one wins and the part has exactly one outcome – ERR:STALE OK price=WITHDRAWN
+PASS  W4-12: the same key replays once (both row types are looked up), a changed payload conflicts, and 1285 vs 1285.00 is the same fingerprint (B7) – OK OK ERR:IDEMPOTENCY_CONFLICT rows=1 money=OK/OK
+
+── w4PriceHistory
+PASS  W4-13 (D5): every price change is one BUSINESS row the rep can see – including a breakdown-only edit; an unchanged save writes none; via names what caused it; the row is not correctable – rows=3 via=EDIT,EDIT,TASK repSees=true correct=ERR:FORBIDDEN
+PASS  W4-13 (D5): PRICE_CHANGED is in neither whitelist – it never moves 'Naposledy' and cannot be crossed out – lastTouch=CALL
+
+── w4Conversion
+PASS  W4-14 (§6.3): a partially delivered OPEN task is real part state a pure re-derivation could not produce – the conversion refuses to run again and cannot destroy it – beforeDelivery=0 afterDelivery=1
+
+── rc1Snapshot
+PASS  RC-1: every Lead column is kept, reset or counted – exactly once – missing= twice= unknown=
+PASS  RC-1: RECYCLE_RESET writes exactly RECYCLE_RESET_FIELDS – assignedCallerAt,assignedCallerId,callbackAt,callbackHasTime,callbackKind,callbackNote,closedAt,designSentAt,handedOffById,lostReason,nextActionAt,nextActionHasTime,nextActionKind,nextActionMode,nextActionNote,offerAboutUsAt,offerPriceAt,offerPricelistAt,offerReviewAt,ownerId,pipelineEnteredAt,price,priceNote,projectType,status
+PASS  RC-1: the archive copies every column except the listed exceptions – notCopied=
+
+── rc2Reset
+PASS  RC-2: recycling one lost deal succeeds – {"recycled":1,"skipped":[]}
+PASS  RC-2: live row keeps id, number, contact data, note, creator; everything else is a fresh NEW contact – kept=true reset=true
+PASS  RC-8: exactly one revision bump on the live row; round 1 → 2; roundStartedAt set – rev 3→4 round=2
+PASS  RC-2: the live contact has no child rows left – {"activity":[],"request":[],"task":[],"ownership":[],"design":[]}
+PASS  RC-2: archive row = exact copy of the old state, hidden, linked, by the admin – copy=true deleted=Sun Oct 25 2026 21:36:51 GMT+0100 (Central European Standard Time) by=true
+PASS  RC-2: every child row moved to the archive with its id unchanged – before={"activity":["cmvoagd5e05p1gcvmp2lcinkg","cmvoagd9h05p4gcvmz23my08a","cmvoagda205p5gcvmnr69n26i","cmvoagdiu05p7gcvm508c1fis","cmvoagdk005p8gcvm624a31hv"],"request":["cmvoagd7505p2gcvm86aq22b4","cmvoagd7r05p3gcvmxuflbq42"],"task":["cmvoagdwo05pbgcvmyaxvdeti"],"ownership":["cmvoagdan05p6gcvm1p3s77ou"],"design":["cmvoagdtt05p9gcvmmnwkfn4y"]} archive={"activity":["cmvoagd5e05p1gcvmp2lcinkg","cmvoagd9h05p4gcvmz23my08a","cmvoagda205p5gcvmnr69n26i","cmvoagdiu05p7gcvm508c1fis","cmvoagdk005p8gcvm624a31hv"],"request":["cmvoagd7505p2gcvm86aq22b4","cmvoagd7r05p3gcvmxuflbq42"],"task":["cmvoagdwo05pbgcvmyaxvdeti"],"ownership":["cmvoagdan05p6gcvm1p3s77ou"],"design":["cmvoagdtt05p9gcvmmnwkfn4y"]}
+PASS  RC-2: rows below the children (task parts, tracker) came along – parts=1/1 tracker=1
+PASS  RC-2: the archive is internally consistent – recomputing its send summary changes nothing – ["2026-10-25T20:36:50.976Z","2026-10-25T20:36:50.976Z",null,"500"] vs ["2026-10-25T20:36:50.976Z","2026-10-25T20:36:50.976Z",null,"500"]
+
+── rc3Pool
+PASS  RC-3: a recycled call-stage contact is in the shared pool – {"recycled":1,"skipped":[]}
+PASS  RC-3: pool order is FIFO by entering the pool (roundStartedAt), not by the original createdAt – cmvoagf9w05pjgcvmztkcikcw,cmvoageru05pggcvmitmgf944
+PASS  RC-3: claimBatchAs takes the recycled contact like any new contact – {"claimed":10} {"assignedCallerId":"cmvoagfix05pugcvmhyr1i5j4","status":"NEW"}
+
+── rc4Invisible
+PASS  RC-4: the archive row (an ACTIVE deal owned by the rep) is in no list, count or guard – {"pool":0,"deals":0,"board":0,"repOpenDeals":0,"contacts":0,"recyclePanel":0}
+PASS  RC-4: call history shows the archived call under the live #number with its round, no revert / edit – {"id":"cmvoaghu705qagcvm0gt1zprx","number":16126,"archivedRound":1,"companyName":"CC-TEST mvoa24dk #740","website":null,"phone":"+000 mvoa24dk 740","email":null,"revision":2,"href":null}
+
+── rc5Stale
+PASS  RC-5: wrong expectedRevision → skipped CHANGED, nothing written – {"recycled":0,"skipped":[{"leadId":"cmvoagiia05qdgcvmh79u091p","number":16131,"reason":"CHANGED"}]}
+PASS  RC-5: the same request again = already recycled (success), never a second round – first={"recycled":1,"skipped":[]} again={"recycled":1,"skipped":[]} round=2 archives=1
+PASS  RC-5: a recycled (NEW) contact is not recyclable again – {"recycled":0,"skipped":[{"leadId":"cmvoagiia05qdgcvmh79u091p","number":16131,"reason":"NOT_ELIGIBLE"}]}
+PASS  RC-5: an open manager task → OPEN_TASK; WON → NOT_ELIGIBLE – {"recycled":0,"skipped":[{"leadId":"cmvoagjc705qggcvmm64y28xr","number":16133,"reason":"OPEN_TASK"},{"leadId":"cmvoagke205qwgcvmk0vhq0vt","number":16134,"reason":"NOT_ELIGIBLE"}]}
+PASS  RC-5: an archive row cannot be recycled – {"recycled":0,"skipped":[{"leadId":"cmvoagivg05qegcvmaen4xd7h","number":16132,"reason":"NOT_FOUND"}]}
+PASS  RC-5: MANAGER has no contacts.recycle (Q7) → FORBIDDEN – ERR:FORBIDDEN
+PASS  RC-5: duplicate ids in one request are refused – {"error":"Neplatný výber kontaktov."}
+
+── rc6Race
+PASS  RC-6: recycle vs logCall on the same lead ×20 (both orders) – exactly one wins, state consistent – {"skipped/OK":12,"recycled/ERR:NOT_ASSIGNED":8}
+PASS  RC-6: recycling races deactivation of the holder – both succeed, the caller keeps nothing – deact={"ok":true,"data":{"retries":2,"scheduled":0,"snoozed":0,"deals":0,"released":0}} rec={"recycled":2,"skipped":[]} left=0
+PASS  RC-6: contacts of an already deactivated caller can be recycled (timea, spec §2.3) – {"recycled":1,"skipped":[]}
+
+── rc7Scout
+PASS  RC-7: the scout sees the recycled contact as callable but not editable; an untouched one stays editable – {"rec":{"id":"cmvoagttk05stgcvmr3snyuew","number":16170,"name":"CC-TEST mvoa24dk #768","companyName":"CC-TEST mvoa24dk #768","website":null,"phone":"+000 mvoa24dk 768","note":null,"status":"NEW","callable":true,"editable":false,"createdAt":"2001-01-01T00:12:48.000Z","addedBy":"CC468 SCOUT","owner":null},"fresh":{"id":"cmvoagtve05sugcvmfwb2i09i","number":16171,"name":"CC-TEST mvoa24dk #769","companyName":"CC-TEST mvoa24dk #769","website":null,"phone":"+000 mvoa24dk 769","note":null,"status":"NEW","callable":true,"editable":true,"createdAt":"2001-01-01T00:12:49.000Z","addedBy":"CC468 SCOUT","owner":null}}
+
+── rc9Parity
+PASS  RC-9: bucket + eligibility agree in TS and SQL over 6251 leads
+
+261/261 checks passed

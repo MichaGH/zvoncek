@@ -1,0 +1,47 @@
+endpoint=ep-divine-waterfall-asbkuort run=rv02_mvoa52ck
+(node:29064) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS timestamp fixture recycled {"recycled":1,"skipped":[]}
+PASS all Activity scalar values preserved except leadId 
+PASS all LeadRequest scalar values preserved except leadId 
+PASS all DealTask scalar values preserved except leadId 
+PASS all DealOwnership scalar values preserved except leadId 
+PASS all Design scalar values preserved except leadId 
+PASS archived Design.updatedAt preserved {"before":"2020-02-03T04:05:06.000Z","after":"2020-02-03T04:05:06.000Z"}
+PASS archived LeadRequest.updatedAt preserved {"before":"2020-02-03T04:05:06.000Z","after":"2020-02-03T04:05:06.000Z"}
+PASS nested versions/events retained 
+PASS old tracker accepts events on archived design without revision bump 
+PASS contacts-added total unchanged 
+PASS real round-two first call {"success":true}
+PASS two independent archives, round three 
+PASS old call key cannot write into current round {"error":"Kontakt sa medzitým zmenil – obnovujem.","code":"IDEMPOTENCY_CONFLICT"}
+PASS archived call cannot be reverted {"error":"Nenašlo sa.","code":"NOT_FOUND"}
+PASS round-two history uses live number, no edit/revert/link 
+PASS interested-call fixture created {"success":true,"recipient":{"id":"cmvoa5480000ifcvmrpniewxq","name":"rv02_mvoa52ck SALES_REP"}}
+PASS live deal history keeps working owner link 
+PASS archived deal history has no dead detail link {"id":"cmvoa54qm000pfcvm8b86fjom","number":11220,"archivedRound":1,"companyName":"rv02_mvoa52ck","website":null,"phone":"+000 rv02_mvoa52ck","email":null,"revision":1,"href":null}
+PASS former owner archive has correct number and no link/edit/revert 
+PASS all nine buckets returned and counted once {"call_retry":1,"call_scheduled":1,"call_snoozed":1,"call_lost":1,"call_unreachable":1,"deal_active":1,"deal_snoozed":1,"deal_lost":1,"deal_unreachable":1}
+PASS first-N/list parity last_asc 
+PASS first-N/list parity last_desc 
+PASS first-N/list parity added_asc 
+PASS first-N/list parity added_desc 
+PASS first-N/list parity number 
+PASS deactivated holder remains selectable 
+PASS DB permission overrides stale ADMIN object {"error":"Nemáš oprávnenie.","code":"FORBIDDEN"}
+PASS child move timeout rolls back archive, moved history and reset atomically {"error":"Niekto práve pracuje s tými istými dátami – skús znova o chvíľu.","code":"RETRYABLE"}
+PASS concurrent identical requests produce two archives total [{"recycled":2,"skipped":[]},{"recycled":2,"skipped":[]}]
+PASS forced recycle-first race has exactly the expected winner {"r":{"recycled":1,"skipped":[]},"c":{"error":"Kontakt sa medzitým zmenil – obnovujem.","code":"NOT_ASSIGNED"}}
+PASS forced call-first race has exactly the expected winner {"r":{"recycled":0,"skipped":[{"leadId":"cmvoa5f1x001kfcvmjxaigm3h","number":12312,"reason":"CHANGED"}]},"c":{"success":true}}
+PASS later chunk timeout reports RETRYABLE with first 100 committed {"result":{"error":"Niekto práve pracuje s tými istými dátami – skús znova o chvíľu. (recyklované už: 100)","code":"RETRYABLE"},"committed":100,"durationMs":24706}
+PASS retry after partial commit creates exactly one archive per lead {"retry":{"recycled":101,"skipped":[]},"archives":101,"durationMs":2780}
+PASS 501 items rejected before writing {"error":"Neplatný výber kontaktov."}
+PASS 500 retries across all five chunks recycle completely {"result":{"recycled":500,"skipped":[]},"archives":500,"fresh":500,"durationMs":70000}
+cleanup complete; failures=0

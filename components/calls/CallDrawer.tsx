@@ -98,6 +98,9 @@ export default function CallDrawer({
                     {L.attempts > 0 && (
                         <span className="ml-2 text-sm font-normal text-muted-foreground">· {L.attempts}. pokus</span>
                     )}
+                    {L.round > 1 && (
+                        <span className="ml-2 text-sm font-normal text-muted-foreground">· {L.round}. kolo</span>
+                    )}
                 </>
             }
         >

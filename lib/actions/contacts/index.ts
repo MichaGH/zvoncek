@@ -24,7 +24,8 @@ async function lockContactForManage(tx: Tx, user: AccessUser, leadId: string, te
     if (can(actor, "contacts.deleteAny")) return lead;
 
     const calls = await tx.activity.count({ where: { leadId, type: "CALL" } });
-    const untouched = lead.status === "NEW" && lead.assignedCallerId === null && calls === 0;
+    // Recyklovaný kontakt (kolo 2+) vyzerá ako nový, ale nie je scoutov – nesmie ho upraviť ani zmazať (feature 02).
+    const untouched = lead.round === 1 && lead.status === "NEW" && lead.assignedCallerId === null && calls === 0;
     if (untouched && lead.createdById === actor.id) return lead;
     if (untouched && can(actor, "contacts.manageTeam") && lead.createdById && teamIds?.includes(lead.createdById)) {
         return lead;

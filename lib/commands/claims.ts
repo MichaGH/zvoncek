@@ -3,6 +3,7 @@ import { lockUsers, withLockTx } from "@/lib/access/locks";
 import type { AccessUser } from "@/lib/access/user";
 import { CLAIM_BATCH_SIZE } from "@/lib/domain/callAssignment";
 import { can } from "@/lib/permissions";
+import { POOL_ORDER_SQL, POOL_SQL } from "@/lib/queries/calls";
 
 export type ClaimResult = { claimed: number; reason?: "BATCH_NOT_EMPTY" } | ActionError;
 
@@ -25,10 +26,8 @@ export async function claimBatchAs(user: AccessUser): Promise<ClaimResult> {
             const claimed = await tx.$queryRaw<{ id: string }[]>`
                 WITH picked AS (
                     SELECT id FROM "Lead"
-                     WHERE "deletedAt" IS NULL AND status = 'NEW'
-                       AND "pipelineEnteredAt" IS NULL AND "assignedCallerId" IS NULL
-                       AND NOT EXISTS (SELECT 1 FROM "Activity" a WHERE a."leadId" = "Lead".id AND a.type = 'CALL')
-                     ORDER BY "createdAt", id
+                     WHERE ${POOL_SQL}
+                     ORDER BY ${POOL_ORDER_SQL}
                      LIMIT ${CLAIM_BATCH_SIZE}
                      FOR UPDATE SKIP LOCKED
                 )

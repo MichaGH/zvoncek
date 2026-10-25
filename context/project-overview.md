@@ -64,7 +64,7 @@ Deal permissions (round 2 naming; `clients.*` and `pipeline.*` no longer exist):
 | `deals.receive` | may own deals (handoff targets, owner selects) |
 
 Others: `today.view`, `calls.*`, `callHistory.*`, `contacts.*`, `requests.resolve` (receives and resolves manager tasks; the name predates tasks), `stats.*`, `teams.manage`,
-`admin.access`, `users.manage`.
+`admin.access`, `users.manage`, `contacts.recycle` (feature 02: recycle contacts — ADMIN only; MANAGER deliberately lacks it).
 
 The hand-written `ROLES` array in `lib/dictionaries.ts` must contain every `Role` (asserted at startup).
 
@@ -90,6 +90,7 @@ permission; a page may add a more specific check (for example, `teams.manage` on
 | `/dashboard/stats` | `stats.view` | unfinished |
 | `/dashboard/admin`, `/admin/users`, `/admin/users/new`, `/admin/users/[id]` | `admin.access` | |
 | `/dashboard/admin/teams` | `admin.access` + `teams.manage` | the page checks `teams.manage` itself |
+| `/dashboard/admin/recycle` | `admin.access` + `contacts.recycle` | "Recyklácia kontaktov" (feature 02); the page and `recycleLeadsAs` check `contacts.recycle` themselves |
 | `/api/p` | public | tracking ingest; excluded from the proxy matcher |
 | `/dev/proposal` | public | dev-only test page for the tracker; `notFound()` in production |
 

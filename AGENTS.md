@@ -16,7 +16,7 @@ This file is an index. The content lives in `context/`.
 | `context/domain/database-map.md` | what the database holds **today** |
 | `context/domain/operations.md` | reusable server operations — call them, do not re-implement them |
 | `context/domain/db-changes.md` | verified test–production DB delta (applied entries cleared after rollout) |
-| `context/features/<feature>/` | design decisions per feature (currently `01-salesrep`) |
+| `context/features/<feature>/` | design decisions per feature (`01-salesrep`, `02-recycling`) |
 | `context/features/backlog.md` | ideas and unfinished business not scheduled in any wave — not requirements |
 | `context/progress-tracker.md` | what has been implemented, with check results |
 

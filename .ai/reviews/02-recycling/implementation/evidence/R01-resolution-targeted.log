@@ -1,0 +1,37 @@
+endpoint=ep-divine-waterfall-asbkuort run=rvfix_mvoab2zw
+(node:26488) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS INFO: exact OPEN deal IDs, excludes SENT/WITHDRAWN/archive/call-stage 
+PASS INFO: repeated requests counted once across list/counts/holders/first-N 
+PASS INFO: URL round trip preserves all filters 
+PASS INFO: first-N carries identical warning metadata 
+PASS PRICE: exact OPEN deal IDs, excludes SENT/WITHDRAWN/archive/call-stage 
+PASS PRICE: repeated requests counted once across list/counts/holders/first-N 
+PASS PRICE: URL round trip preserves all filters 
+PASS PRICE: first-N carries identical warning metadata 
+PASS DESIGN: exact OPEN deal IDs, excludes SENT/WITHDRAWN/archive/call-stage 
+PASS DESIGN: repeated requests counted once across list/counts/holders/first-N 
+PASS DESIGN: URL round trip preserves all filters 
+PASS DESIGN: first-N carries identical warning metadata 
+PASS received design and later OPEN design request compose 
+PASS invalid request filter ignored; page input bounded 
+PASS manual cross-page and first-N summaries equal 
+PASS owner counts keyed by id even when names match; inactive owner retained 
+PASS off-page open design promises and recency counted 
+PASS warning boundaries, no-owner, duplicate request content and special buckets 
+PASS 102→100 recycling normalizes to accessible first page 
+PASS page boundaries 201→200, empty list and manual out-of-range 
+PASS HTTP 201to200: page 3→2, filters preserved 
+PASS HTTP 201to200: destination renders candidates or honest empty state 
+PASS HTTP empty: page 9→1, filters preserved 
+PASS HTTP empty: destination renders candidates or honest empty state 
+PASS HTTP manual: page 999→3, filters preserved 
+PASS HTTP manual: destination renders candidates or honest empty state 
+cleanup complete; 26/26 passed; failures=0

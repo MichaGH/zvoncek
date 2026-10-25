@@ -25,6 +25,7 @@ export type Permission =
     | "contacts.deleteOwnUncalled"
     | "contacts.deleteAny"
     | "contacts.manageTeam"
+    | "contacts.recycle"
     | "deals.view"
     | "deals.work"
     | "deals.receive"
@@ -56,6 +57,8 @@ const ALL_PERMISSIONS: Permission[] = [
     "contacts.deleteOwnUncalled",
     "contacts.deleteAny",
     "contacts.manageTeam",
+    // Recyklácia kontaktov (feature 02) – len admin (Q7); manažér ho zámerne nemá.
+    "contacts.recycle",
     "deals.view",
     "deals.work",
     "deals.receive",
