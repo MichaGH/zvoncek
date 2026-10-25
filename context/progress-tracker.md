@@ -6,6 +6,31 @@ In this file progress of feature implementation is tracked. Should contain
 
 ---
 
+# Feature 02: R02 resolution (verified on development, 2026-10-25)
+
+Review `.ai/reviews/02-recycling/implementation/R02.md`; record `R02-resolution.md`; decisions in spec §16. Database
+`ep-divine-waterfall-asbkuort` / `neondb` only; production untouched; no schema change. Nothing committed.
+
+- **R02-01:** `archiveRounds` writes a whole chunk set-based (~8 statements per 100 contacts). Measured: 100 contacts
+  **460 ms** (was 14.9 s) at a 20 ms round trip. Vercel region switched to `fra1` by Michal (runbook A7a).
+- **R02-08:** queue order of a recycled batch = admin's selection order (`roundStartedAt` = request start + position).
+- **R02-03 / R02-06:** Kontakty → Na volanie shows the rank in the whole queue (`POOL_SQL` twin of `POOL_WHERE`, also
+  used by the claim); the header number links only with the scope it counts.
+- **R02-02 / R02-07:** Kontakty lock per viewer (manager / admin can edit an unclaimed NEW contact incl. recycled);
+  recycled lock label "recyklovaný".
+- **R02-04 / R02-05:** do-not-call word list hides matching candidates by default (count + "zobraziť aj tieto"),
+  Poznámka column, search in note / loss reason, dialog warning; per-active-caller warning. Backlog BL-15.
+- **R02-09 / 10 / 11 / 12 / 14:** documented number gaps; feature 02 scripts in `code-standards.md` §7 and
+  `operations.md`; spec drift fixed; runbook A7a (region + Fluid compute); UI nits.
+- **Tests added:** `rc10Budget`, `rc11Order`, `rc12DoNotCall`, `rc13Callers`, `rc14DeleteRecycled`, `rc15PoolStats`,
+  `kvQueueRank`, `kvPoolParity` (check-concurrency); new tracked `prisma/backfill/check-recycling-http.ts` (8 checks).
+- **Checks (all run):** `tsc` clean · `eslint .` only `MobileNav.tsx` · `next build` OK · business time (local +
+  UTC), client sections passed · `migrate diff` empty · `check-concurrency --iterations 100` **274/274** ·
+  `check-recycling-review` 0 failures · `second-pass` **55/55** · `resolution` **20/20** · `check-recycling-http`
+  **8/8** · browser: dialog shows the active-caller warning and the Poznámka column (cancelled, nothing recycled).
+- **Owner actions left:** R02-13 (production admin password), confirm `fra1` + Fluid compute on the next deployment,
+  decide BL-15.
+
 # Feature 02 §15: Kontakty — Pridané / Na volanie + Kolo (built on development, 2026-10-25, after R01 resolution)
 
 Design: `context/features/02-recycling/recycling-spec.md` §15 (Michal found recycled contacts buried in Kontakty during

@@ -5,7 +5,7 @@ import RecyclePanel from "@/components/admin/recycle/RecyclePanel";
 import { requireUser } from "@/lib/access/user";
 import { parseRecycleParams, recycleHref, recyclePage } from "@/lib/domain/recycling";
 import { can } from "@/lib/permissions";
-import { getRecycleCounts, getRecycleHeader, getRecycleHolders, getRecycleList } from "@/lib/queries/recycling";
+import { getRecycleCounts, getRecycleHeader, getRecycleHiddenDoNotCall, getRecycleHolders, getRecycleList } from "@/lib/queries/recycling";
 
 // Recyklácia kontaktov (feature 02, spec §8): skončené / zaseknuté kontakty späť do spoločnej fronty ako nové.
 // Proxy pustí /dashboard/admin len s admin.access; samotnú recykláciu stráži contacts.recycle (stránka aj príkaz).
@@ -21,11 +21,12 @@ export default async function RecyclePage({
     if (!can(viewer, "admin.access") || !can(viewer, "contacts.recycle")) redirect("/dashboard");
 
     const params = parseRecycleParams(await searchParams);
-    const [list, counts, holders, header] = await Promise.all([
+    const [list, counts, holders, header, hiddenDoNotCall] = await Promise.all([
         getRecycleList(params),
         getRecycleCounts(params),
         getRecycleHolders(params),
         getRecycleHeader(),
+        getRecycleHiddenDoNotCall(params),
     ]);
     const page = recyclePage(params.page, list.total);
     if (page !== params.page) redirect(recycleHref(params, { page }));
@@ -45,7 +46,7 @@ export default async function RecyclePage({
                     V spoločnej fronte: <span className="font-semibold text-foreground tabular-nums">{header.pool}</span>
                     {" · "}v dávkach volajúcich: <span className="font-semibold text-foreground tabular-nums">{header.inBatches}</span>
                 </p>
-                <RecycleFilters params={params} counts={counts} holders={holders} />
+                <RecycleFilters params={params} counts={counts} holders={holders} hiddenDoNotCall={hiddenDoNotCall} />
                 <RecyclePanel key={selectionKey} params={params} total={list.total} rows={list.rows} now={header.now} />
             </div>
         </DashboardPage>

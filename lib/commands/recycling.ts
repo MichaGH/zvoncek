@@ -1,7 +1,7 @@
 import { AccessError, FORBIDDEN, toActionError, type ActionError } from "@/lib/access/errors";
 import { lockUsers, withLockTx, type Tx } from "@/lib/access/locks";
 import type { AccessUser } from "@/lib/access/user";
-import { archiveRound } from "@/lib/domain/recycleMutations";
+import { archiveRounds, type RecycleRound } from "@/lib/domain/recycleMutations";
 import {
     recycleBlocker,
     recycleInputSchema,
@@ -25,6 +25,8 @@ async function recycleChunk(
     tx: Tx,
     user: AccessUser,
     items: Item[],
+    order: Map<string, number>,
+    base: Date,
     now: Date,
 ): Promise<{ recycled: number; skipped: RecycleSkip[] }> {
     const ids = items.map((i) => i.leadId);
@@ -45,8 +47,20 @@ async function recycleChunk(
         ),
     );
 
+    // Opakované odoslanie toho istého výberu: kolo z tejto revízie už je v archíve → úspech, nie „zmenil sa".
+    // Jeden dopyt pre celú dávku (R02-01), nie jeden na kontakt.
+    const moved = items.filter((i) => leads.has(i.leadId) && leads.get(i.leadId)!.revision !== i.expectedRevision);
+    const archived = moved.length
+        ? await tx.lead.findMany({
+              where: { archiveOfId: { in: moved.map((i) => i.leadId) } },
+              select: { archiveOfId: true, revision: true },
+          })
+        : [];
+    const done = new Set(archived.map((a) => `${a.archiveOfId}:${a.revision}`));
+
     let recycled = 0;
     const skipped: RecycleSkip[] = [];
+    const rounds: RecycleRound[] = [];
     for (const item of items) {
         const lead = leads.get(item.leadId);
         if (!lead) {
@@ -54,12 +68,7 @@ async function recycleChunk(
             continue;
         }
         if (lead.revision !== item.expectedRevision) {
-            // Opakované odoslanie toho istého výberu: kolo z tejto revízie už je v archíve → úspech, nie „zmenil sa".
-            const done = await tx.lead.findFirst({
-                where: { archiveOfId: lead.id, revision: item.expectedRevision },
-                select: { id: true },
-            });
-            if (done) recycled++;
+            if (done.has(`${lead.id}:${item.expectedRevision}`)) recycled++;
             else skipped.push({ leadId: lead.id, number: lead.number, reason: "CHANGED" });
             continue;
         }
@@ -73,10 +82,10 @@ async function recycleChunk(
             skipped.push({ leadId: lead.id, number: lead.number, reason: blocker });
             continue;
         }
-        await archiveRound(tx, actor.id, lead, now);
-        recycled++;
+        rounds.push({ lead, order: order.get(lead.id) ?? 0 });
     }
-    return { recycled, skipped };
+    await archiveRounds(tx, actor.id, rounds, now, base);
+    return { recycled: recycled + rounds.length, skipped };
 }
 
 export async function recycleLeadsAs(user: AccessUser, input: RecycleInput): Promise<RecycleResult> {
@@ -84,12 +93,16 @@ export async function recycleLeadsAs(user: AccessUser, input: RecycleInput): Pro
     const parsed = recycleInputSchema.safeParse(input);
     if (!parsed.success) return { error: "Neplatný výber kontaktov." };
 
+    // Poradie výberu admina = poradie vo fronte (R02-08); dávky sú po id kvôli zámkom, preto sa poradie nesie zvlášť
+    // a začiatok kola sa ráta od jedného spoločného času pre všetky dávky.
+    const order = new Map(parsed.data.items.map((item, i) => [item.leadId, i]));
+    const base = new Date();
     const items = [...parsed.data.items].sort((a, b) => (a.leadId < b.leadId ? -1 : a.leadId > b.leadId ? 1 : 0));
     let recycled = 0;
     const skipped: RecycleSkip[] = [];
     try {
         for (let i = 0; i < items.length; i += CHUNK) {
-            const result = await withLockTx((tx) => recycleChunk(tx, user, items.slice(i, i + CHUNK), new Date()), {
+            const result = await withLockTx((tx) => recycleChunk(tx, user, items.slice(i, i + CHUNK), order, base, new Date()), {
                 lockTimeout: "10s",
                 timeout: 30_000,
             });

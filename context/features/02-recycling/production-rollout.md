@@ -57,9 +57,12 @@ Below this prefix is written as `$PROD`.
 - [ ] **A6. Commit + PR** (only when Michal asks): branch → PR into `main`. **Do not merge yet** — Vercel production
       builds from `main`; merging is the deploy.
 - [ ] **A7. Vercel:** note the current production deployment id — the rollback target: `[deployment id]`.
-- [ ] **A7a. Request duration:** verify the deployed recycle route's function allowance honors `maxDuration = 300`
-      seconds. The command uses up to five sequential 30 s transactions (10 s lock timeout each); a 500-contact local
-      command exceeded 60 s. Rehearse a 500-contact submission and response-loss retry on a deployment connected only
+- [ ] **A7a. Request duration:** Vercel → Project → Settings → Functions: **function region = `fra1` (Frankfurt)** —
+      Michal switched it on 2026-10-25; it applies to deployments made after the change, so confirm the new deployment
+      runs there — and **Fluid compute ON** (needed for `maxDuration = 300`, R02-12). Neon runs in `eu-central-1`
+      (Frankfurt) too. Since R02-01 a chunk of 100 contacts is ~8 statements (0.5 s locally at a 20 ms round trip,
+      was 14.9 s); the 30 s transaction timeout stays as the safety brake. Verify the deployed recycle route's function
+      allowance honors `maxDuration = 300` seconds. Rehearse a 500-contact submission and response-loss retry on a deployment connected only
       to the development copy. Retry the same ids and original revisions; verify one archive per ended round. Do not
       infer the actual hosting limit from a local dev-server run or from the code setting alone.
 - [ ] **A8. Team told:** a ~10 minute pause in Zvonček at `[HH:MM]` (the deploy restarts the app; the schema change

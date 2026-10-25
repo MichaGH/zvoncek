@@ -69,10 +69,13 @@ The note written here is the first thing a caller reads: the scout's observation
 
 `[ROLLOUT]` **Kontakty has two views** (feature 02 §15), in the URL as `view`: **Pridané** (default — every contact in
 scope, newest added first) and **Na volanie** (the shared pool, new and recycled together, in the exact order the next
-"Vziať ďalších 10" takes them, with the position in the queue). Each view shows its count, computed from the same
-filters as the list; the header's "N voľných na volanie" links to Na volanie. A **Kolo** filter (Všetky · Len nové ·
+"Vziať ďalších 10" takes them, with each contact's position in the **whole** queue, also when a filter narrows the
+list). Each view shows its count, computed from the same filters as the list; the header's "N voľných na volanie" links
+to Na volanie with only the scope that number counts, so the click shows the same number. A **Kolo** filter (Všetky · Len nové ·
 Len recyklované) combines with both views and every other filter. A recycled contact shows "N. kolo" next to its status
-and "recykl. <dátum>" under its date. Scope is unchanged (a scout sees only their own, a leader their team).
+and "recykl. <dátum>" under its date. Scope is unchanged (a scout sees only their own, a leader their team). A manager
+or admin can edit / delete any unclaimed NEW contact, recycled ones included (e.g. to fix a wrong number); a scout's
+recycled contact is locked as "recyklovaný".
 
 ## 3. First calls — `/dashboard/calls`
 
@@ -458,15 +461,18 @@ nemajú záujem · zlé číslo; Obchody: aktívne · spiace · stratené · ned
 predicate as the list. Filters: who had it (also deactivated people; for closed call-stage contacts the last caller),
 last contact older than N days (default 30), at least N "nezdvihli", what the client got, an OPEN request for info /
 price / design (deals only, combinable with receipts), round, search; sort by last
-contact or creation. `NEW`, `WON` and deals with an open manager task are never recyclable.
+contact or creation. Search also covers the note and the loss reason, and a Poznámka column shows the note. Contacts
+whose note or loss reason says "nevolať" (and similar, spec §16) are **hidden by default**; the panel says how many and
+can show them. `NEW`, `WON` and deals with an open manager task are never recyclable.
 
 The admin ticks rows (or "Vybrať prvých N", up to 500) and confirms. The dialog breaks the selection down by bucket
 and warns about wrong numbers, active/sleeping deals leaving each named owner's pipeline, agreed callbacks being
-dropped, unfinished requests by content and contacts touched/added within the last 30 days. The sticky bar also shows
+dropped, unfinished requests by content, contacts touched/added within the last 30 days, contacts marked "nevolať", and
+each **active** caller whose retries / callbacks / snoozes would leave their queue. The sticky bar also shows
 the bucket breakdown. Selection survives paging, including warning context for first-N rows off the current page;
 filter changes clear it. If the list shrinks beyond the current page, the server redirects to the last valid page.
 Recycling a contact keeps its id, `#number`, company, phone, web, email, note and creator; everything else becomes a
-fresh `NEW` contact in the pool (round + 1). The whole previous round — calls, deal, what they asked for, what we
+fresh `NEW` contact in the pool (round + 1), queued in the order the admin selected them. The whole previous round — calls, deal, what they asked for, what we
 sent, tasks, owners, návrhy with tracking — is **archived, never deleted** (a hidden archive row, `database-map.md`).
 A contact someone changed after the admin opened the page is skipped and reported ("zmenil sa medzitým"); pressing the
 button twice never recycles anything twice.

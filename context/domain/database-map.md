@@ -56,7 +56,9 @@ The live row keeps id, `number`, contact data, `note`, `origin`, creator and `cr
 `NEW` contact (`round + 1`, `roundStartedAt` = now, one revision bump). An archive row is therefore a complete,
 internally consistent old round, invisible to every query through `deletedAt`, and found via `archiveOfId`. A row
 with `deletedAt` set and `archiveOfId NULL` is a contact that was really deleted. Archive rows are never recycled,
-edited or deleted.
+edited or deleted. Each archive row takes the next `number`, so the human-facing sequence jumps by one per recycled
+round (accepted, spec §4.3 / R02-09). The write is set-based per chunk of up to 100 contacts (`archiveRounds`), and
+`roundStartedAt` of a recycled batch follows the admin's selection order (start of the request + position in ms).
 
 **Invariants** (enforced in code, not by constraints): `status NEW` ⇒ no CALL activity · non-handoff call outcomes never
 write `nextAction*` (the positive call that enters the pipeline pre-fills it) · deals never use `callback*` · `closedAt`

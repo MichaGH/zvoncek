@@ -191,6 +191,15 @@ export const RECYCLE_SORT_LABEL: Record<(typeof RECYCLE_SORTS)[number], string> 
 };
 export const RECYCLE_HOLDER_NONE = "none";
 
+// „Nevolať" (R02-04): appka nemá príznak, len voľný text – poznámku kontaktu a dôvod straty obchodu. Kontakt, ktorého
+// text obsahuje niektoré z týchto slov, panel predvolene skryje (dnc=hide) a počet skrytých ukáže. Ten istý vzor
+// beží v SQL (`~*`, lib/queries/recycling) aj tu (isDoNotCall) – paritný test rc12DoNotCall.
+export const DO_NOT_CALL_PATTERN = "(nevola[tť]|nevolajte|nekontaktova|neotravova|neotravuj|do ?pi[cč]|gdpr)";
+const DO_NOT_CALL_RE = new RegExp(DO_NOT_CALL_PATTERN, "i");
+export function isDoNotCall(...texts: (string | null | undefined)[]): boolean {
+    return texts.some((t) => Boolean(t) && DO_NOT_CALL_RE.test(t!));
+}
+
 export type RecycleParams = {
     buckets: RecycleBucket[];
     holder: string | null; // id používateľa alebo RECYCLE_HOLDER_NONE
@@ -199,6 +208,7 @@ export type RecycleParams = {
     got: (typeof RECYCLE_GOT)[number] | null;
     asked: (typeof RECYCLE_ASKED)[number] | null; // otvorená požiadavka v aktuálnom obchode
     round: "1" | "2" | null; // 2 = druhé a ďalšie kolo
+    dnc: "hide" | "show"; // kontakty s „nevolať" v poznámke: predvolene skryté (R02-04)
     q: string;
     sort: (typeof RECYCLE_SORTS)[number];
     page: number;
@@ -231,6 +241,7 @@ export function parseRecycleParams(raw: RawParams): RecycleParams {
         got: oneOf(RECYCLE_GOT, one(raw.got)),
         asked: oneOf(RECYCLE_ASKED, one(raw.asked)),
         round: oneOf(["1", "2"] as const, one(raw.round)),
+        dnc: one(raw.dnc) === "show" ? "show" : "hide",
         q: (one(raw.q) ?? "").trim().slice(0, 100),
         sort: oneOf(RECYCLE_SORTS, one(raw.sort)) ?? "last_asc",
         page: Number.isInteger(page) && page >= 1 && page <= 2_147_483_647 ? page : 1,
@@ -248,6 +259,7 @@ export function recycleHref(params: RecycleParams, patch: Partial<RecycleParams>
     if (next.got) s.set("got", next.got);
     if (next.asked) s.set("asked", next.asked);
     if (next.round) s.set("round", next.round);
+    if (next.dnc === "show") s.set("dnc", "show");
     if (next.q) s.set("q", next.q);
     if (next.sort !== "last_asc") s.set("sort", next.sort);
     if (next.page > 1) s.set("page", String(next.page));
@@ -264,13 +276,16 @@ export type RecycleSelection = {
     bucket: RecycleBucket;
     holderId: string | null;
     holderName: string | null;
+    holderActive: boolean; // R02-05: aktívny volajúci príde o prácu zo svojej fronty
     lastAt: string;
     openAsks: RequestContent[];
+    doNotCall: boolean; // R02-04: poznámka / dôvod obsahuje „nevolať"
 };
 
 export function recycleSelection(row: Omit<RecycleSelection, "expectedRevision"> & { revision: number }): RecycleSelection {
     return { expectedRevision: row.revision, bucket: row.bucket, holderId: row.holderId,
-        holderName: row.holderName, lastAt: row.lastAt, openAsks: row.openAsks };
+        holderName: row.holderName, holderActive: row.holderActive, lastAt: row.lastAt, openAsks: row.openAsks,
+        doNotCall: row.doNotCall };
 }
 
 // Recent = within the default 30-day window (Q9); a warning, never an eligibility rule.
@@ -278,9 +293,18 @@ export function summarizeRecycleSelection(items: Iterable<RecycleSelection>, now
     const buckets = new Map<RecycleBucket, number>();
     const owners = new Map<string | null, { id: string | null; name: string; active: number; snoozed: number }>();
     const asks = new Map<RequestContent, number>();
+    // R02-05: práca volania, ktorú drží AKTÍVNY volajúci (recyklácia mu ju zoberie z „Opakovať" / termínov / odložených).
+    const callers = new Map<string, { id: string; name: string; count: number }>();
     let recent = 0;
+    let doNotCall = 0;
     for (const item of items) {
         buckets.set(item.bucket, (buckets.get(item.bucket) ?? 0) + 1);
+        if (item.doNotCall) doNotCall++;
+        if (item.holderId && item.holderActive && item.bucket.startsWith("call_") && item.bucket !== "call_lost" && item.bucket !== "call_unreachable") {
+            const caller = callers.get(item.holderId) ?? { id: item.holderId, name: item.holderName ?? "—", count: 0 };
+            caller.count++;
+            callers.set(item.holderId, caller);
+        }
         if (item.bucket === "deal_active" || item.bucket === "deal_snoozed") {
             const owner = owners.get(item.holderId) ?? { id: item.holderId, name: item.holderName ?? "Bez vlastníka", active: 0, snoozed: 0 };
             if (item.bucket === "deal_active") owner.active++;
@@ -294,6 +318,8 @@ export function summarizeRecycleSelection(items: Iterable<RecycleSelection>, now
         buckets: RECYCLE_BUCKETS.filter((b) => buckets.has(b)).map((bucket) => ({ bucket, n: buckets.get(bucket)! })),
         owners: [...owners.values()].sort((a, b) => a.name.localeCompare(b.name) || (a.id ?? "").localeCompare(b.id ?? "")),
         asks: [...asks.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([content, n]) => ({ content, n })),
+        callers: [...callers.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
         recent,
+        doNotCall,
     };
 }

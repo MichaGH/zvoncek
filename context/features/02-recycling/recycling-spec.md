@@ -1,8 +1,8 @@
 # Feature 02 — Recycling contacts ("Recyklácia")
 
-**Status: v1 DECIDED, implementation in progress (2026-10-25).** All questions in §13 are decided (Michal,
-2026-10-25: Q1–Q3 and Q6 chosen, the rest by accepting the recommended defaults). Implementation started 2026-10-25
-on the dev copy only. Production steps live in `production-rollout.md` in this folder.
+**Status: v1 DECIDED and built on the development copy (2026-10-25); reviewed in R01 and R02, both resolved.** All
+questions in §13 are decided (Michal, 2026-10-25: Q1–Q3 and Q6 chosen, the rest by accepting the recommended
+defaults). Changes made after R02 are in §16. Not in production; steps in `production-rollout.md`.
 
 Read first: `AGENTS.md`, `context/project-overview.md` (§1 stage rule, §5 concurrency), `context/domain/database-map.md`.
 
@@ -166,7 +166,7 @@ marked below. The live row is then reset.
 | Column | Archive row | Live row after recycling |
 |---|---|---|
 | `id` | new cuid | **kept** |
-| `number` | new autoincrement value (hidden, never shown as the contact's number) | **kept** |
+| `number` | new autoincrement value (hidden, never shown as the contact's number). Consequence (R02-09, accepted): every recycled round consumes one number, so the next contact a scout adds jumps by the number of contacts recycled | **kept** |
 | `companyName`, `phone`, `website`, `email` | copy | **kept** |
 | `note` | copy | **kept** as is (Q2, decided) |
 | `origin` | copy | **kept** |
@@ -257,7 +257,9 @@ row. The predicates live once in `lib/domain/recycling.ts` (pure, client-safe) w
 - **Pokusy (nezdvihli)** — at least N non-reverted `NO_ANSWER` calls (useful for `call_retry`).
 - **Dostali / chceli** (deals) — got info / price / návrh; has an open "Chceli" návrh / price / info.
 - **Kolo** — 1 / 2+.
-- **Hľadať** — firma, web, telefón, email.
+- **Hľadať** — firma, web, telefón, email, poznámka, dôvod straty, `#číslo`.
+- **Nevolať** (§16) — contacts whose note or loss reason contains a do-not-call word are hidden by default; the panel
+  says how many and can show them.
 
 Sort: last contact oldest first (default) / newest first, added oldest / newest, `#number`.
 
@@ -300,8 +302,8 @@ a contact can never be recycled twice by one click.
 **Result:** `{ recycled: number, skipped: { leadId, number, reason }[] }`. Reasons: `CHANGED`, `NOT_ELIGIBLE`,
 `OPEN_TASK`, `NOT_FOUND`, `ALREADY_RECYCLED` (counted as recycled).
 
-**Revision rule:** the live lead is bumped exactly once (`bumpLeadOnce`); the archive row keeps the old revision; the
-children are not bumped. A test case goes into `prisma/backfill/check-concurrency.ts` (§10).
+**Revision rule:** the live lead is bumped exactly once (`bump` in the reset + `markLeadBumped`); the archive row keeps
+the old revision; the children are not bumped. Since §16 the write is set-based per chunk (`archiveRounds`). A test case goes into `prisma/backfill/check-concurrency.ts` (§10).
 
 ## 7. Effects on the rest of the app
 
@@ -365,11 +367,11 @@ New cases in `prisma/backfill/check-concurrency.ts` (they create and remove thei
 | `rc1Snapshot` | every `Lead` scalar column is copied or explicitly excepted (enumerates `Prisma.LeadScalarFieldEnum`) |
 | `rc2Reset` | after recycling a deal with sends, requests, a closed task, ownership rows and a `Design`: live row equals the fresh-contact shape; it has 0 children; the archive has all of them with unchanged ids; `recomputeOffers` on the archive is a no-op |
 | `rc3Pool` | the recycled contact is in `POOL_WHERE`, is claimable by `claimBatchAs`, ordered by `roundStartedAt` |
-| `rc4Invisible` | the archive row appears in none of: pool, caller board, pipeline list and counts, "Pre mňa", História, contacts list, deactivation counts, contacts-added stats |
+| `rc4Invisible` | the archive row appears in none of: pool, caller board, pipeline list, contacts list, deactivation counts, the recycle panel. ("Pre mňa", História, pipeline counts and contacts-added statistics are covered in `check-recycling-second-pass.ts` / `check-recycling-review.ts`.) |
 | `rc5Stale` | wrong `expectedRevision` → `CHANGED`; open task → `OPEN_TASK`; `WON` / `NEW` → `NOT_ELIGIBLE`; repeat of the same request → `ALREADY_RECYCLED`, round still 2 |
 | `rc6Race` | recycle vs `logCallAs` on the same lead, both orders: exactly one wins, the other gets `STALE` / `CHANGED`; recycle vs `deactivateUserAs` of the caller; recycling contacts of an **already deactivated** caller succeeds |
 | `rc7Scout` | a scout cannot edit or delete a recycled contact |
-| `rc8Revision` | exactly one bump on the live row; archive keeps the old revision |
+| `rc8Revision` | exactly one bump on the live row; archive keeps the old revision (asserted inside `rc2Reset` as "RC-8") |
 
 Then the full `code-standards.md` §7 pass, with `--expect-endpoint ep-divine-waterfall-asbkuort` for the database
 checks. Browser click-through of the page and of claiming a recycled contact as `timea`'s role is a human check.
@@ -476,7 +478,8 @@ Všetky kolá · Len nové (1. kolo) · Len recyklované (2. kolo a ďalšie).
 
 **Marking** (desktop table and phone cards): status badge unchanged plus a small **"2. kolo"** badge when
 `round > 1` (same wording as the call board); under the date "recykl. 25. 10." (`roundStartedAt`); in Na volanie the
-first column is the **position in the queue**.
+first column is the **position in the queue** — the rank in the *whole* pool, also when a filter, the round or a scout
+scope narrows the list (§16, R02-03).
 
 **Counts:** each view on the switch shows a count computed with the same scope, filters and predicate as its list
 (`ui-context.md` §5). The header's "N voľných na volanie" links to Na volanie.
@@ -508,3 +511,25 @@ contacts show "2. kolo" and stay locked for edit / delete (§7).
 Sorting Kontakty by "entered the pool" (breaks the scouts' view) · resetting `createdAt` on recycle (corrupts scout
 statistics) · a new status "Recyklovaný" (`NEW` is a business state the whole app relies on) · only a link from the
 recycle page (Michal looks for contacts in Kontakty).
+
+---
+
+## 16. Changes after review R02 (2026-10-25)
+
+Review: `.ai/reviews/02-recycling/implementation/R02.md`; resolution record `R02-resolution.md` next to it. Michal's
+inputs: the Vercel function region was switched to Frankfurt (`fra1`), the same AWS region as Neon (`eu-central-1`);
+everything else was left to the resolver ("resolve all the problems").
+
+| Finding | Decision / change |
+|---|---|
+| R02-01 latency | The write is **set-based per chunk** (`archiveRounds`): one insert for all archive rows, one FK-only update per child table, one reset, one start-time update — ~8 statements per 100 contacts instead of ~700. Measured 0.5 s instead of 14.9 s at a 20 ms round trip. Chunk size and the 30 s transaction timeout unchanged (the timeout is a lock-time safety brake, not a duration target) |
+| R02-08 order | The queue order of a recycled batch is **the admin's selection order** (`roundStartedAt = start of the request + position in the selection, in ms`), across all chunks |
+| R02-03 rank | Kontakty → Na volanie shows each contact's rank in the **whole** queue (SQL `row_number()` over `POOL_SQL`, the SQL twin of `POOL_WHERE`), not its row number in the filtered list |
+| R02-06 header link | "N voľných na volanie" links to Na volanie with only the scope its number counts (`createdBy` / `team`), so the click shows the same number |
+| R02-02 edit | The Kontakty lock depends on the viewer, as on the server: managers and admins (`contacts.deleteAny`) can edit an unclaimed NEW contact again, including a recycled one (e.g. fix a wrong number); a scout only their own untouched round-1 contact |
+| R02-07 label | A recycled contact in the pool is locked as **"recyklovaný"** (tooltip: only a manager / admin may edit it), not "obvolaný" |
+| R02-04 do-not-call | Panel search covers the note and the loss reason; a **Poznámka** column shows the note; contacts whose note or loss reason matches `DO_NOT_CALL_PATTERN` (nevolať, nevolajte, nekontaktovať, neotravovať / neotravujte, „do p…", GDPR) are **hidden by default** with a visible count and a "zobraziť aj tieto" link; if shown and selected, the dialog warns. Limit (measured 2026-10-25): only 39 of 2 481 closed call-stage contacts have any note — the first call records a refusal only as "Nemajú záujem". A real "nevolať" call outcome is a later feature (backlog) and Michal's decision |
+| R02-05 callers | The dialog warns per **active** caller whose retries / callbacks / snoozes would leave their queue; a deactivated caller (timea) and closed contacts do not warn |
+| R02-09 numbers | Accepted and documented (§4.3) |
+| R02-12 hosting | Runbook A7a: confirm `fra1` and Fluid compute on the new deployment |
+| R02-14 UI | "Vybrať prvých N" is disabled at 0 and says it replaces the selection; pagination arrows are real disabled buttons at the edges |

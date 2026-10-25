@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
-import { Search } from "lucide-react";
+import { Search, ShieldAlert } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -86,10 +86,12 @@ export default function RecycleFilters({
     params,
     counts,
     holders,
+    hiddenDoNotCall,
 }: {
     params: RecycleParams;
     counts: Record<RecycleBucket, number>;
     holders: Holder[];
+    hiddenDoNotCall: number;
 }) {
     const router = useRouter();
     const [q, setQ] = useState(params.q);
@@ -174,11 +176,32 @@ export default function RecycleFilters({
                     <Input
                         value={q}
                         onChange={(e) => setQ(e.target.value)}
-                        placeholder="Hľadať firmu, web, telefón, email, #číslo"
+                        placeholder="Hľadať firmu, web, telefón, email, poznámku, #číslo"
                         className="h-9 pl-8"
                     />
                 </form>
             </div>
+            {/* R02-04: kontakty s „nevolať“ v poznámke / dôvode sú predvolene vynechané; zobraziť sa dajú vedome. */}
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <ShieldAlert className="h-3.5 w-3.5" />
+                {params.dnc === "hide" ? (
+                    <>
+                        Skryté – v poznámke „nevolať“: <span className="font-medium tabular-nums text-foreground">{hiddenDoNotCall}</span>
+                        {hiddenDoNotCall > 0 && (
+                            <Link href={recycleHref(params, { dnc: "show" })} className="underline underline-offset-2 hover:text-foreground">
+                                zobraziť aj tieto
+                            </Link>
+                        )}
+                    </>
+                ) : (
+                    <>
+                        Zobrazené aj kontakty s „nevolať“ v poznámke.
+                        <Link href={recycleHref(params, { dnc: "hide" })} className="underline underline-offset-2 hover:text-foreground">
+                            skryť ich
+                        </Link>
+                    </>
+                )}
+            </p>
         </div>
     );
 }

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Recycle, TriangleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight, Recycle, ShieldAlert, TriangleAlert } from "lucide-react";
 import ResponsiveSheet from "@/components/shared/ResponsiveSheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -81,9 +81,12 @@ export default function RecyclePanel({ params, total, rows, now }: { params: Rec
         });
     }
 
+    const pickCount = Math.min(Math.floor(Number(pickN)) || 0, RECYCLE_MAX_ITEMS);
+
+    // „Vybrať prvých N" NAHRADÍ doterajší výber (R02-14) – povie to tlačidlo aj toast.
     function pickFirst() {
-        const n = Math.floor(Number(pickN));
-        if (!Number.isFinite(n) || n < 1) return;
+        const n = pickCount;
+        if (n < 1) return;
         const query = Object.fromEntries(new URL(recycleHref(params), "http://local").searchParams);
         startBusy(async () => {
             const r = await pickRecycleFirst(query, Math.min(n, RECYCLE_MAX_ITEMS));
@@ -91,7 +94,9 @@ export default function RecyclePanel({ params, total, rows, now }: { params: Rec
                 toast.error(r.error);
                 return;
             }
+            const replaced = selected.size > 0;
             setSelected(new Map(r.items.map((i) => [i.leadId, i])));
+            toast.success(`Vybraných ${r.items.length}${replaced ? " – predchádzajúci výber nahradený" : ""}`);
         });
     }
 
@@ -140,8 +145,14 @@ export default function RecyclePanel({ params, total, rows, now }: { params: Rec
                         className="h-8 w-20"
                         aria-label="Počet"
                     />
-                    <Button size="sm" variant="outline" onClick={pickFirst} disabled={busy || total === 0}>
-                        Vybrať prvých {Math.min(Number(pickN) || 0, RECYCLE_MAX_ITEMS)}
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={pickFirst}
+                        disabled={busy || total === 0 || pickCount < 1}
+                        title={selected.size > 0 ? "Nahradí doterajší výber" : undefined}
+                    >
+                        Vybrať prvých {pickCount}
                     </Button>
                 </div>
                 {selected.size > 0 && (
@@ -190,13 +201,14 @@ export default function RecyclePanel({ params, total, rows, now }: { params: Rec
                             <TableHead>Posledný kontakt</TableHead>
                             <TableHead className="text-right">Nezdvihli</TableHead>
                             <TableHead>Dostali / chceli</TableHead>
+                            <TableHead>Poznámka</TableHead>
                             <TableHead>Kolo</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {rows.length === 0 && (
                             <TableRow>
-                                <TableCell colSpan={11} className="py-8 text-center text-muted-foreground">
+                                <TableCell colSpan={12} className="py-8 text-center text-muted-foreground">
                                     Nič nezodpovedá filtrom.
                                 </TableCell>
                             </TableRow>
@@ -241,6 +253,12 @@ export default function RecyclePanel({ params, total, rows, now }: { params: Rec
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums">{row.tries || ""}</TableCell>
                                 <TableCell className="max-w-48 truncate text-xs text-muted-foreground">{gotText(row)}</TableCell>
+                                <TableCell className="max-w-56 text-xs text-muted-foreground" title={row.note ?? undefined}>
+                                    <span className="flex items-center gap-1">
+                                        {row.doNotCall && <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-destructive" aria-label="nevolať" />}
+                                        <span className="truncate">{row.note || "—"}</span>
+                                    </span>
+                                </TableCell>
                                 <TableCell>
                                     {row.round > 1 ? <Badge variant="secondary">{row.round}. kolo</Badge> : <span className="text-muted-foreground">1</span>}
                                 </TableCell>
@@ -252,19 +270,32 @@ export default function RecyclePanel({ params, total, rows, now }: { params: Rec
 
             {pages > 1 && (
                 <div className="flex items-center justify-end gap-2 text-sm">
-                    <Button asChild size="sm" variant="outline" disabled={params.page <= 1}>
-                        <Link href={recycleHref(params, { page: Math.max(1, params.page - 1) })} aria-disabled={params.page <= 1}>
+                    {/* Na okraji je tlačidlo naozaj vypnuté – Button asChild s Link sa vypnúť nedá (R02-14). */}
+                    {params.page <= 1 ? (
+                        <Button size="sm" variant="outline" disabled aria-label="Predchádzajúca strana">
                             <ChevronLeft className="h-4 w-4" />
-                        </Link>
-                    </Button>
+                        </Button>
+                    ) : (
+                        <Button asChild size="sm" variant="outline">
+                            <Link href={recycleHref(params, { page: params.page - 1 })} aria-label="Predchádzajúca strana">
+                                <ChevronLeft className="h-4 w-4" />
+                            </Link>
+                        </Button>
+                    )}
                     <span className="tabular-nums text-muted-foreground">
                         {params.page} / {pages}
                     </span>
-                    <Button asChild size="sm" variant="outline" disabled={params.page >= pages}>
-                        <Link href={recycleHref(params, { page: Math.min(pages, params.page + 1) })} aria-disabled={params.page >= pages}>
+                    {params.page >= pages ? (
+                        <Button size="sm" variant="outline" disabled aria-label="Ďalšia strana">
                             <ChevronRight className="h-4 w-4" />
-                        </Link>
-                    </Button>
+                        </Button>
+                    ) : (
+                        <Button asChild size="sm" variant="outline">
+                            <Link href={recycleHref(params, { page: params.page + 1 })} aria-label="Ďalšia strana">
+                                <ChevronRight className="h-4 w-4" />
+                            </Link>
+                        </Button>
+                    )}
                 </div>
             )}
 
@@ -288,8 +319,14 @@ export default function RecyclePanel({ params, total, rows, now }: { params: Rec
                             ))}
                         </ul>
                     </div>
-                    {(countOf("call_unreachable") > 0 || summary.owners.length > 0 || summary.asks.length > 0 || summary.recent > 0 || countOf("call_scheduled") > 0) && (
+                    {(countOf("call_unreachable") > 0 || summary.owners.length > 0 || summary.callers.length > 0 || summary.asks.length > 0 || summary.recent > 0 || summary.doNotCall > 0 || countOf("call_scheduled") > 0) && (
                         <ul className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+                            {summary.doNotCall > 0 && (
+                                <li className="font-medium text-destructive">⚠ {summary.doNotCall}× v poznámke „nevolať“ – naozaj ich chcete znova volať?</li>
+                            )}
+                            {summary.callers.map((caller) => (
+                                <li key={caller.id}>⚠ {caller.name}: {caller.count} z fronty volaní (nezdvihli / termíny / odložené) – zmiznú volajúcemu.</li>
+                            ))}
                             {countOf("call_unreachable") > 0 && <li>⚠ {countOf("call_unreachable")} so zlým číslom – volajúci dostane to isté číslo.</li>}
                             {summary.owners.map((owner) => (
                                 <li key={owner.id ?? "none"}>⚠ {owner.name}: aktívne {owner.active}, spiace {owner.snoozed} – zmiznú z pipeline vlastníka.</li>

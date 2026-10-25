@@ -103,7 +103,15 @@ npx tsx prisma/backfill/check-business-time.ts          # also with TZ=UTC
 npx tsx prisma/backfill/check-client-sections.ts
 npx tsx prisma/backfill/check-concurrency.ts --expect-endpoint <test endpoint> --iterations 100
 npx tsx prisma/backfill/check-backfill-delta.ts --expect-endpoint <ep> --expect-db <db> --owner-username <admin>
+# feature 02 (recycling) – own fixtures, dev copy only:
+npx tsx prisma/backfill/check-recycling-review.ts --expect-endpoint <ep>
+npx tsx prisma/backfill/check-recycling-second-pass.ts --expect-endpoint <ep>
+npx tsx prisma/backfill/check-recycling-resolution.ts --expect-endpoint <ep>
+npx tsx prisma/backfill/check-recycling-http.ts --expect-endpoint <ep> --base http://localhost:3100   # needs next dev
 ```
+
+Run the feature 02 scripts one after another, not in parallel with `check-concurrency.ts`: they share the pool and would
+claim each other's fixtures.
 
 Never claim a check passed if it did not run. If something cannot be verified (a drawer, a form, anything needing a
 browser session), say so explicitly and leave it to a human click-through.

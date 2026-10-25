@@ -2,7 +2,7 @@ import prisma from "@/lib/db";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { businessTodayStart } from "@/lib/domain/businessTime";
 import type { ContactRound, ContactView } from "@/lib/domain/contactFilters";
-import { POOL_ORDER_SQL, POOL_WHERE } from "@/lib/queries/calls";
+import { POOL_ORDER_SQL, POOL_SQL, POOL_WHERE } from "@/lib/queries/calls";
 import type { LeadStatus } from "@/app/generated/prisma/enums";
 
 export const CONTACTS_PAGE_SIZE = 50;
@@ -41,7 +41,7 @@ type ContactLead = {
     owner: { firstName: string } | null;
 };
 
-function toContactRow(lead: ContactLead) {
+function toContactRow(lead: ContactLead, queueRank: number | null = null) {
     return {
         id: lead.id,
         number: lead.number,
@@ -57,6 +57,8 @@ function toContactRow(lead: ContactLead) {
         editable: lead.round === 1 && lead.status === "NEW" && lead.assignedCallerId === null && lead._count.activities === 0,
         round: lead.round,
         recycledAt: lead.roundStartedAt?.toISOString() ?? null,
+        // Na volanie: skutočné poradie v CELEJ fronte (R02-03), nie poradie v prefiltrovanom zozname.
+        queueRank,
         createdAt: lead.createdAt.toISOString(),
         addedBy: lead.creator ? `${lead.creator.firstName} ${lead.creator.lastName}`.trim() : null,
         owner: lead.owner?.firstName ?? null,
@@ -111,22 +113,29 @@ export async function getContactsList({
             orderBy: { createdAt: "desc" },
             take: take + 1,
         });
-        return { rows: leads.slice(0, take).map(toContactRow), hasMore: leads.length > take };
+        return { rows: leads.slice(0, take).map((l) => toContactRow(l)), hasMore: leads.length > take };
     }
 
-    // Na volanie: poradie fronty sa v Prisma orderBy vyjadriť nedá → id v SQL (to isté POOL_ORDER_SQL ako claim),
-    // riadky cez Prisma v tom istom poradí.
+    // Na volanie: poradie fronty sa v Prisma orderBy vyjadriť nedá → v SQL. Poradie sa ráta nad CELOU frontou
+    // (POOL_SQL, to isté POOL_ORDER_SQL ako claim) a až potom sa zúži na rozsah a filtre (R02-03), takže „12." znamená
+    // dvanásty, koho dostane volajúci – aj keď je zapnutý filter kola, tímu alebo hľadanie.
     const candidates = await prisma.lead.findMany({ where, select: { id: true } });
     if (candidates.length === 0) return { rows: [], hasMore: false };
-    const ordered = await prisma.$queryRaw<{ id: string }[]>`
-        SELECT id FROM "Lead" WHERE id = ANY(${candidates.map((c) => c.id)})
-         ORDER BY ${POOL_ORDER_SQL}
+    const ordered = await prisma.$queryRaw<{ id: string; rank: number }[]>`
+        SELECT q.id, q.rank::int AS rank FROM (
+            SELECT id, row_number() OVER (ORDER BY ${POOL_ORDER_SQL}) AS rank FROM "Lead" WHERE ${POOL_SQL}
+        ) q
+         WHERE q.id = ANY(${candidates.map((c) => c.id)})
+         ORDER BY q.rank
          LIMIT ${take + 1}`;
-    const page = ordered.slice(0, take).map((o) => o.id);
-    const leads = await prisma.lead.findMany({ where: { id: { in: page } }, select: CONTACT_SELECT });
+    const page = ordered.slice(0, take);
+    const leads = await prisma.lead.findMany({ where: { id: { in: page.map((o) => o.id) } }, select: CONTACT_SELECT });
     const byId = new Map(leads.map((l) => [l.id, l]));
     return {
-        rows: page.map((id) => byId.get(id)).filter((l): l is ContactLead => Boolean(l)).map(toContactRow),
+        rows: page.flatMap((o) => {
+            const lead = byId.get(o.id);
+            return lead ? [toContactRow(lead, o.rank)] : [];
+        }),
         hasMore: ordered.length > take,
     };
 }

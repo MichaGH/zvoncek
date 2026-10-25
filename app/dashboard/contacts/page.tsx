@@ -158,6 +158,19 @@ export default async function ContactsPage({
         return `/dashboard/contacts${qs ? `?${qs}` : ""}`;
     }
     const isPool = view === "pool";
+    // R02-06: číslo v hlavičke („N voľných na volanie") počíta len rozsah (scout / tím / „Od koho"), preto aj jeho
+    // odkaz nesie len rozsah – inak by klik ukázal iné číslo než to, na ktoré sa kliklo.
+    const poolHrefParams = new URLSearchParams({ view: "pool" });
+    if (createdBy) poolHrefParams.set("createdBy", createdBy);
+    if (team) poolHrefParams.set("team", team);
+    const poolHref = `/dashboard/contacts?${poolHrefParams.toString()}`;
+    // R02-02: zámok podľa toho, KTO sa pozerá – tak ako server (lockContactForManage). Manažér / admin
+    // (contacts.deleteAny) môže upraviť aj recyklovaný kontakt vo fronte (napr. opraviť zlé číslo); scout len svoj
+    // nedotknutý kontakt v 1. kole.
+    const canManageAll = can(viewer, "contacts.deleteAny");
+    const lockOf = (row: (typeof rows)[number]) => !(row.editable || (canManageAll && row.callable));
+    // R02-07: recyklovaný kontakt vo fronte je zamknutý preto, že už nie je scoutov – nie preto, že je obvolaný.
+    const lockReasonOf = (row: (typeof rows)[number]) => (row.round > 1 && row.callable ? "recycled" : "called");
 
     return (
         <DashboardPage>
@@ -165,7 +178,7 @@ export default async function ContactsPage({
                 title="Kontakty"
                 description={
                     <>
-                        <Link href={contactsHref({ view: "pool" })} className="underline-offset-2 hover:underline">
+                        <Link href={poolHref} className="underline-offset-2 hover:underline">
                             {overview.callable} voľných na volanie
                         </Link>
                         {` · ${overview.total} v databáze · dnes pridaných ${overview.addedToday}`}
@@ -235,7 +248,7 @@ export default async function ContactsPage({
 
                     {/* MOBILE: karty */}
                     <div className="flex flex-col gap-3 md:hidden">
-                        {rows.map((row, index) => (
+                        {rows.map((row) => (
                             <div
                                 key={row.id}
                                 className={cn(
@@ -287,12 +300,15 @@ export default async function ContactsPage({
                                                 phone: row.phone,
                                                 note: row.note,
                                             }}
-                                            locked={!row.editable}
+                                            locked={lockOf(row)}
+                                            lockReason={lockReasonOf(row)}
                                         />
                                     </div>
                                 </div>
                                 <div className="mt-3 border-t pt-2 text-xs text-muted-foreground tabular-nums">
-                                    {isPool && <span className="font-medium text-foreground">{index + 1}. v poradí · </span>}
+                                    {isPool && row.queueRank !== null && (
+                                        <span className="font-medium text-foreground">{row.queueRank}. v poradí · </span>
+                                    )}
                                     #{row.number} · {row.addedBy ?? "—"} · {formatDate(row.createdAt)}
                                     {row.recycledAt && ` · recykl. ${formatDate(row.recycledAt)}`}
                                 </div>
@@ -316,10 +332,10 @@ export default async function ContactsPage({
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {rows.map((row, index) => (
+                                {rows.map((row) => (
                                     <TableRow key={row.id} className={row.callable ? "" : "opacity-60"}>
                                         {isPool && (
-                                            <TableCell className="text-right font-medium tabular-nums">{index + 1}.</TableCell>
+                                            <TableCell className="text-right font-medium tabular-nums">{row.queueRank}.</TableCell>
                                         )}
                                         <TableCell className="text-muted-foreground tabular-nums">
                                             {row.number}
@@ -374,7 +390,8 @@ export default async function ContactsPage({
                                                     phone: row.phone,
                                                     note: row.note,
                                                 }}
-                                                locked={!row.editable}
+                                                locked={lockOf(row)}
+                                                lockReason={lockReasonOf(row)}
                                             />
                                         </TableCell>
                                     </TableRow>

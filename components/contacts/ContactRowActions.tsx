@@ -29,9 +29,12 @@ export type EditableContact = {
 export default function ContactRowActions({
     contact,
     locked,
+    lockReason = "called",
 }: {
     contact: EditableContact;
     locked?: boolean;
+    // R02-07: prečo je zamknutý – obvolaný, alebo recyklovaný (patrí do spoločnej fronty, nie pridávačovi).
+    lockReason?: "called" | "recycled";
 }) {
     const router = useRouter();
     const [open, setOpen] = useState(false);
@@ -71,14 +74,19 @@ export default function ContactRowActions({
         });
     }
 
-    // Obvolaný kontakt (alebo nie tvoj) → zámok, žiadne úpravy.
+    // Obvolaný alebo recyklovaný kontakt (alebo nie tvoj) → zámok, žiadne úpravy.
     if (locked) {
+        const recycled = lockReason === "recycled";
         return (
             <span
                 className="flex items-center justify-center gap-1 text-xs text-muted-foreground"
-                title="Kontakt je už obvolaný – nedá sa upraviť ani vymazať"
+                title={
+                    recycled
+                        ? "Recyklovaný kontakt je v spoločnej fronte – upraviť ho môže len manažér alebo admin"
+                        : "Kontakt je už obvolaný – nedá sa upraviť ani vymazať"
+                }
             >
-                <Lock className="h-3.5 w-3.5" /> obvolaný
+                <Lock className="h-3.5 w-3.5" /> {recycled ? "recyklovaný" : "obvolaný"}
             </span>
         );
     }

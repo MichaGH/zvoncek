@@ -5871,6 +5871,165 @@ tests.kvCountsScope = async () => {
         bad.length === 0, bad.map(([k]) => `${k}: count=${results[k].count} listed=${results[k].listed.length}`).join("; "));
 };
 
+// ── R02 resolution (.ai/reviews/02-recycling/implementation/R02-resolution.md) ─────────────────────────────
+
+// RC-10 (R02-01): zápis dávky je množinový – 100 kontaktov stojí konštantný počet príkazov, nie 7 na kontakt. Meria sa
+// voči skutočnej latencii spojenia: rozpočet 60 ciest + 2,5 s (pôvodná verzia potrebovala ~700 ciest = 14,9 s).
+tests.rc10Budget = async () => {
+    const { recycle } = await rc();
+    const caller = await makeUser("TELESALES");
+    const ids: string[] = [];
+    for (let i = 0; i < 100; i++) ids.push(await makeAssignedLead(caller.id, "CALLING"));
+    await prisma.activity.createMany({
+        data: ids.map((leadId) => ({ leadId, userId: caller.id, type: "CALL" as const, category: "BUSINESS" as const, source: "CALL_QUEUE" as const, outcome: "NO_ANSWER" as const })),
+    });
+    const rtts: number[] = [];
+    for (let i = 0; i < 15; i++) {
+        const t = performance.now();
+        await prisma.$queryRaw`SELECT 1`;
+        rtts.push(performance.now() - t);
+    }
+    const rtt = rtts.sort((a, b) => a - b)[7];
+    const t = performance.now();
+    const r = await recycle(ids);
+    const ms = performance.now() - t;
+    const budget = 60 * rtt + 2_500;
+    const moved = await prisma.activity.count({ where: { leadId: { in: ids } } });
+    check(`RC-10 (R02-01): 100 contacts recycle in ${Math.round(ms)} ms – within ${Math.round(budget)} ms (60 round trips at ${rtt.toFixed(1)} ms + 2.5 s)`,
+        !("error" in r) && r.recycled === 100 && ms < budget && moved === 0, JSON.stringify("error" in r ? r : { recycled: r.recycled, moved }));
+};
+
+// RC-11 (R02-08): poradie vo fronte = poradie výberu admina, aj keď sú dávky po id a výber ide cez viac dávok.
+tests.rc11Order = async () => {
+    const { recycling, admin } = await rc();
+    const caller = await makeUser("TELESALES");
+    const ids: string[] = [];
+    for (let i = 0; i < 120; i++) ids.push(await makeAssignedLead(caller.id, "CALLING"));
+    const chosen = [...ids].sort(() => Math.random() - 0.5); // admin vybral v inom poradí, než sú id
+    const items = await Promise.all(chosen.map(async (leadId) => ({ leadId, expectedRevision: await leadRev(leadId) })));
+    const r = await recycling.recycleLeadsAs(admin, { items });
+    const queued = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "Lead" WHERE id = ANY(${ids}) ORDER BY COALESCE("roundStartedAt", "createdAt"), id`;
+    check("RC-11 (R02-08): 120 recycled contacts (2 chunks) queue exactly in the admin's selection order",
+        !("error" in r) && r.recycled === 120 && sameJson(queued.map((q) => q.id), chosen), "error" in r ? r.error : `first=${queued[0]?.id === chosen[0]}`);
+};
+
+// RC-12 (R02-04): „nevolať" – TS a SQL vzor sa zhodujú, panel ich predvolene skryje a počet skrytých sedí, dajú sa
+// zobraziť a nájsť hľadaním v poznámke, výber ich ráta vo varovaní.
+tests.rc12DoNotCall = async () => {
+    const d = await import("../../lib/domain/recycling");
+    const { DO_NOT_CALL_SQL, getRecycleList, getRecycleHiddenDoNotCall, getRecycleFirst } = await import("../../lib/queries/recycling");
+    const { Prisma } = await import("../../app/generated/prisma/client");
+    const samples = ["Prosím NEVOLAŤ!", "nevolat uz", "Nevolajte nám", "nekontaktovať – GDPR", "neotravovať", "neotravujte nás", "poslal ma dopici", "volať po 15:00", "nevolali sme sa dovolať", null];
+    const want = [true, true, true, true, true, true, true, false, false, false];
+    check("RC-12: isDoNotCall word list (incl. no false hit on 'nevolali')", sameJson(samples.map((s) => d.isDoNotCall(s)), want), JSON.stringify(samples.map((s) => d.isDoNotCall(s))));
+    const rows = await prisma.$queryRaw<{ note: string | null; lostReason: string | null; dnc: boolean }[]>(
+        Prisma.sql`SELECT l.note, l."lostReason", ${DO_NOT_CALL_SQL} AS dnc FROM "Lead" l`);
+    const diff = rows.filter((r) => d.isDoNotCall(r.note, r.lostReason) !== r.dnc);
+    check(`RC-12: TS isDoNotCall = SQL DO_NOT_CALL_SQL over ${rows.length} leads`, diff.length === 0, diff.slice(0, 3).map((x) => x.note).join(" | "));
+
+    const caller = await makeUser("TELESALES");
+    const tag = `DNC-${RUN}`;
+    const [quiet, loud] = [await makeAssignedLead(caller.id, "CALLING"), await makeAssignedLead(caller.id, "CALLING")];
+    await prisma.lead.update({ where: { id: quiet }, data: { companyName: `${tag} a`, note: "volať po obede" } });
+    await prisma.lead.update({ where: { id: loud }, data: { companyName: `${tag} b`, note: "Pán povedal: NEVOLAŤ viac!" } });
+    const base = { b: "call_retry", older: "0", q: tag };
+    const hidden = await getRecycleList(d.parseRecycleParams(base));
+    const hiddenCount = await getRecycleHiddenDoNotCall(d.parseRecycleParams(base));
+    const shown = await getRecycleList(d.parseRecycleParams({ ...base, dnc: "show" }));
+    const byNote = await getRecycleList(d.parseRecycleParams({ b: "call_retry", older: "0", q: "povedal: NEVOLAŤ", dnc: "show" }));
+    const first = await getRecycleFirst(d.parseRecycleParams({ ...base, dnc: "show" }), 10);
+    const summary = d.summarizeRecycleSelection(first.map(d.recycleSelection), Date.now());
+    check("RC-12: hidden by default with a matching hidden count, visible with dnc=show, findable by note, counted in the dialog summary",
+        sameJson(hidden.rows.map((r) => r.id), [quiet]) && hiddenCount === 1 && shown.total === 2 &&
+            byNote.rows.some((r) => r.id === loud && r.doNotCall) && summary.doNotCall === 1,
+        JSON.stringify({ hidden: hidden.total, hiddenCount, shown: shown.total, byNote: byNote.total, summary: summary.doNotCall }));
+};
+
+// RC-13 (R02-05): varovanie, keď recyklácia berie prácu AKTÍVNEMU volajúcemu; deaktivovaný volajúci a uzavreté
+// kontakty (nemajú záujem / zlé číslo – nie sú v nikoho fronte) varovanie nespustia.
+tests.rc13Callers = async () => {
+    const { summarizeRecycleSelection } = await import("../../lib/domain/recycling");
+    const base = { expectedRevision: 0, holderName: "X", lastAt: new Date(0).toISOString(), openAsks: [], doNotCall: false };
+    const summary = summarizeRecycleSelection([
+        { ...base, bucket: "call_retry", holderId: "a", holderName: "Anna", holderActive: true },
+        { ...base, bucket: "call_scheduled", holderId: "a", holderName: "Anna", holderActive: true },
+        { ...base, bucket: "call_snoozed", holderId: "b", holderName: "Timea", holderActive: false },
+        { ...base, bucket: "call_lost", holderId: "a", holderName: "Anna", holderActive: true },
+        { ...base, bucket: "call_unreachable", holderId: "c", holderName: "Cyril", holderActive: true },
+    ], Date.now());
+    check("RC-13 (R02-05): active caller warned with her 2 queue contacts; deactivated holder and closed contacts are not",
+        sameJson(summary.callers, [{ id: "a", name: "Anna", count: 2 }]), JSON.stringify(summary.callers));
+};
+
+// RC-14: manažér zmaže recyklovaný kontakt (akcia nastaví deletedAt) – archívy ostanú nedotknuté a nič ich neukáže.
+tests.rc14DeleteRecycled = async () => {
+    const { recycle, archiveOf } = await rc();
+    const { POOL_WHERE } = await import("../../lib/queries/calls");
+    const { getContactsList } = await import("../../lib/queries/contacts");
+    const caller = await makeUser("TELESALES");
+    const id = await makeAssignedLead(caller.id, "CALLING");
+    await logCallAs(caller, { leadId: id, outcome: "NOT_INTERESTED", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    await recycle([id]);
+    const archive = await archiveOf(id);
+    const before = await prisma.activity.count({ where: { leadId: archive!.id } });
+    await prisma.lead.update({ where: { id }, data: { deletedAt: new Date(), revision: { increment: 1 } } }); // = deleteContact
+    const live = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { companyName: true } });
+    const after = await prisma.activity.count({ where: { leadId: archive!.id } });
+    const visible = (await getContactsList({ query: live.companyName ?? "", take: 50 })).rows.length;
+    const inPool = await prisma.lead.count({ where: { ...POOL_WHERE, id } });
+    check("RC-14: deleting a recycled contact keeps its archive (link + history) and hides both",
+        archive?.archiveOfId === id && before === after && before > 0 && visible === 0 && inPool === 0,
+        JSON.stringify({ before, after, visible, inPool }));
+};
+
+// RC-15: štatistika databázy kontaktov počíta recyklovaný kontakt raz (ako NEW) a archív nikdy.
+tests.rc15PoolStats = async () => {
+    const { recycle } = await rc();
+    const { getContactPoolStats } = await import("../../lib/queries/stats");
+    const caller = await makeUser("TELESALES");
+    const id = await makeAssignedLead(caller.id, "CALLING");
+    await logCallAs(caller, { leadId: id, outcome: "NOT_INTERESTED", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const before = await getContactPoolStats();
+    await recycle([id]);
+    const after = await getContactPoolStats();
+    check("RC-15: contact pool stats – total unchanged, LOST −1, NEW +1, uncalled +1",
+        after.total === before.total && after.byStatus.LOST === before.byStatus.LOST - 1 &&
+            after.byStatus.NEW === before.byStatus.NEW + 1 && after.uncalled === before.uncalled + 1,
+        JSON.stringify({ total: [before.total, after.total], lost: [before.byStatus.LOST, after.byStatus.LOST], new: [before.byStatus.NEW, after.byStatus.NEW] }));
+};
+
+// KV-3 (R02-03): poradie v „Na volanie" je poradie v CELEJ fronte – aj s filtrom kola a v rozsahu scouta.
+tests.kvQueueRank = async () => {
+    const { recycle } = await rc();
+    const { getContactsList } = await import("../../lib/queries/contacts");
+    const { POOL_ORDER_SQL, POOL_SQL } = await import("../../lib/queries/calls");
+    const scout = await makeUser("SCOUT");
+    const caller = await makeUser("TELESALES");
+    const fresh = await makePoolLeads(3); // 2001 – na čele fronty
+    const rec = await makeAssignedLead(caller.id, "CALLING");
+    await prisma.lead.update({ where: { id: rec }, data: { createdById: scout.id } });
+    await recycle([rec]);
+    const all = await prisma.$queryRaw<{ id: string }[]>`SELECT id FROM "Lead" WHERE ${POOL_SQL} ORDER BY ${POOL_ORDER_SQL}`;
+    const truth = new Map(all.map((r, i) => [r.id, i + 1]));
+    const round2 = (await getContactsList({ view: "pool", round: "2", take: 500 })).rows;
+    const scoutView = (await getContactsList({ view: "pool", createdById: scout.id, take: 50 })).rows;
+    const allView = (await getContactsList({ view: "pool", take: 5 })).rows;
+    check("KV-3 (R02-03): every Na volanie row carries its rank in the whole queue (round filter, scout scope, no filter)",
+        round2.every((r) => r.queueRank === truth.get(r.id)) && scoutView.length === 1 && scoutView[0].queueRank === truth.get(rec) &&
+            truth.get(rec)! > fresh.length && allView.every((r, i) => r.queueRank === i + 1),
+        JSON.stringify({ rec: truth.get(rec), scout: scoutView[0]?.queueRank, firstRound2: round2[0]?.queueRank }));
+};
+
+// KV-4 (R02-03): POOL_SQL (claim + poradie) a POOL_WHERE (zoznamy, počty) sú to isté pravidlo.
+tests.kvPoolParity = async () => {
+    const { POOL_SQL, POOL_WHERE } = await import("../../lib/queries/calls");
+    await makePoolLeads(2);
+    const sql = (await prisma.$queryRaw<{ id: string }[]>`SELECT id FROM "Lead" WHERE ${POOL_SQL}`).map((r) => r.id).sort();
+    const orm = (await prisma.lead.findMany({ where: POOL_WHERE, select: { id: true } })).map((r) => r.id).sort();
+    check(`KV-4: POOL_SQL = POOL_WHERE (${orm.length} contacts in the pool)`, sameJson(sql, orm), `sql=${sql.length} orm=${orm.length}`);
+};
+
 async function main() {
     passwordHash = await bcrypt.hash(`cc-${RUN}-unused`, 4);
     console.log(`endpoint=${endpoint} run=${RUN}`);
