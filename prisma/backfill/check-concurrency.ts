@@ -91,6 +91,17 @@ async function makeAssignedLead(userId: string, status: "NEW" | "CALLING" = "NEW
 }
 
 async function cleanup() {
+    // Recyklácia (feature 02): archívne riadky fixture leadov nesú ich históriu a FK RESTRICT na živý lead → najprv ony.
+    if (createdLeads.length) {
+        const archives = (await prisma.lead.findMany({ where: { archiveOfId: { in: createdLeads } }, select: { id: true } })).map((a) => a.id);
+        if (archives.length) {
+            await prisma.leadRequest.deleteMany({ where: { leadId: { in: archives } } });
+            await prisma.activity.deleteMany({ where: { leadId: { in: archives } } });
+            await prisma.dealOwnership.deleteMany({ where: { leadId: { in: archives } } });
+            await prisma.dealTask.deleteMany({ where: { leadId: { in: archives } } });
+            await prisma.lead.deleteMany({ where: { id: { in: archives } } });
+        }
+    }
     if (createdLeads.length) {
         await prisma.leadRequest.deleteMany({ where: { leadId: { in: createdLeads } } });
         await prisma.activity.deleteMany({ where: { leadId: { in: createdLeads } } });
@@ -5485,6 +5496,321 @@ tests.w4Conversion = async () => {
         beforeDelivery.length === 0 && afterDelivery.length === 1,
         `beforeDelivery=${beforeDelivery.length} afterDelivery=${afterDelivery.length}`,
     );
+};
+
+// ── Recyklácia (feature 02, context/features/02-recycling/recycling-spec.md §10) ─────────────────────────────
+
+async function rc() {
+    const recycling = await import("../../lib/commands/recycling");
+    const domain = await import("../../lib/domain/recycling");
+    const offers = await import("../../lib/commands/offers");
+    const bt = await import("../../lib/domain/businessTime");
+    const admin = await makeUser("ADMIN");
+    const recycle = async (ids: string[], actor: AccessUser = admin) =>
+        recycling.recycleLeadsAs(actor, {
+            items: await Promise.all(ids.map(async (leadId) => ({ leadId, expectedRevision: await leadRev(leadId) }))),
+        });
+    // Uzavretý obchod so všetkým, čo sa môže presunúť: hovor + „Chceli", vlastníctvo, odoslanie s cenou, návrh
+    // s trackerom, uzavretá úloha s časťou. Stav sa nastaví priamo (fixture), história vznikla cez príkazy.
+    const fullDeal = async (status: "LOST" | "ACTIVE" = "LOST") => {
+        const rep = await makeUser("SALES_REP");
+        const id = await makeAssignedLead(rep.id);
+        const call = await logCallAs(rep, { leadId: id, outcome: "INTERESTED", asked: ["PRICE", "DESIGN"], expectedRevision: await leadRev(id), idempotencyKey: key() });
+        if ("error" in call) throw new Error(`fixture call: ${call.error}`);
+        const sent = await offers.recordOfferSentAs(rep, {
+            leadId: id, expectedRevision: await leadRev(id), idempotencyKey: key(), contents: ["ABOUT_US", "PRICE"],
+            price: { amount: 500, note: "stránka" }, sentOn: bt.businessDate(new Date()), followUp: false,
+        });
+        if ("error" in sent) throw new Error(`fixture send: ${sent.error}`);
+        await prisma.design.create({ data: { leadId: id, label: "CC", tracker: { create: { token: `cc-${RUN}-${leadSeq}` } } } });
+        await prisma.dealTask.create({
+            data: {
+                leadId: id, type: "HELP", status: "DONE", text: "cc", requestedById: rep.id, assigneeId: admin.id, closedAt: new Date(),
+                parts: { create: [{ kind: "PRICE", status: "DELIVERED", addedById: rep.id, resolvedById: admin.id, resolvedAt: new Date(), result: { price: { amount: "500.00", note: null } } }] },
+            },
+        });
+        if (status === "LOST") {
+            await prisma.lead.update({
+                where: { id },
+                data: { status: "LOST", closedAt: new Date(), lostReason: "drahé", nextActionKind: null, nextActionAt: null, revision: { increment: 1 } },
+            });
+        }
+        return { id, rep };
+    };
+    const childIds = async (leadId: string) => ({
+        activity: (await prisma.activity.findMany({ where: { leadId }, select: { id: true }, orderBy: { id: "asc" } })).map((x) => x.id),
+        request: (await prisma.leadRequest.findMany({ where: { leadId }, select: { id: true }, orderBy: { id: "asc" } })).map((x) => x.id),
+        task: (await prisma.dealTask.findMany({ where: { leadId }, select: { id: true }, orderBy: { id: "asc" } })).map((x) => x.id),
+        ownership: (await prisma.dealOwnership.findMany({ where: { leadId }, select: { id: true }, orderBy: { id: "asc" } })).map((x) => x.id),
+        design: (await prisma.design.findMany({ where: { leadId }, select: { id: true }, orderBy: { id: "asc" } })).map((x) => x.id),
+    });
+    const archiveOf = (id: string) => prisma.lead.findFirst({ where: { archiveOfId: id }, orderBy: { round: "desc" } });
+    const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    return { recycling, domain, admin, recycle, fullDeal, childIds, archiveOf, same };
+}
+
+function sameJson(a: unknown, b: unknown) {
+    return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// RC-1: každý stĺpec Lead je v práve jednom zozname (ponechaný / resetovaný / počítaný) a archív kopíruje všetko
+// okrem vymenovaných výnimiek – nový stĺpec sa nedá zabudnúť.
+tests.rc1Snapshot = async () => {
+    const { Prisma } = await import("../../app/generated/prisma/client");
+    const { archiveCopy, RECYCLE_RESET } = await import("../../lib/domain/recycleMutations");
+    const d = await import("../../lib/domain/recycling");
+    const fields = Object.values(Prisma.LeadScalarFieldEnum) as string[];
+    const lists = [...d.RECYCLE_KEPT_FIELDS, ...d.RECYCLE_RESET_FIELDS, ...d.RECYCLE_COUNTED_FIELDS] as string[];
+    const missing = fields.filter((f) => !lists.includes(f));
+    const twice = lists.filter((f, i) => lists.indexOf(f) !== i);
+    const unknown = lists.filter((f) => !fields.includes(f));
+    check("RC-1: every Lead column is kept, reset or counted – exactly once", !missing.length && !twice.length && !unknown.length,
+        `missing=${missing} twice=${twice} unknown=${unknown}`);
+    const resetKeys = Object.keys(RECYCLE_RESET).sort();
+    check("RC-1: RECYCLE_RESET writes exactly RECYCLE_RESET_FIELDS", sameJson(resetKeys, [...d.RECYCLE_RESET_FIELDS].sort()), `${resetKeys}`);
+    const [id] = await makePoolLeads(1);
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id } });
+    const copied = Object.keys(archiveCopy(lead, "x", new Date()));
+    const notCopied = fields.filter((f) => !copied.includes(f) && !(d.ARCHIVE_COPY_EXCEPTIONS as readonly string[]).includes(f));
+    check("RC-1: the archive copies every column except the listed exceptions", notCopied.length === 0, `notCopied=${notCopied}`);
+};
+
+// RC-2 + RC-8: recyklácia obchodu – živý kontakt = nový kontakt s rovnakým id/číslom/údajmi, revízia +1 raz,
+// kolo 2; archív = presná kópia starého stavu so VŠETKÝMI podriadenými riadkami; prepočet archívu nič nemení.
+tests.rc2Reset = async () => {
+    const { domain, admin, recycle, fullDeal, childIds, archiveOf, same } = await rc();
+    const { RECYCLE_RESET } = await import("../../lib/domain/recycleMutations");
+    const { recomputeOffers } = await import("../../lib/domain/offerMutations");
+    const { id } = await fullDeal("LOST");
+    const before = await prisma.lead.findUniqueOrThrow({ where: { id } });
+    const kids = await childIds(id);
+    const parts = await prisma.dealTaskPart.count({ where: { taskId: { in: kids.task } } });
+    const r = await recycle([id]);
+    check("RC-2: recycling one lost deal succeeds", !("error" in r) && r.recycled === 1 && r.skipped.length === 0, JSON.stringify(r));
+
+    const after = await prisma.lead.findUniqueOrThrow({ where: { id } });
+    const keptOk = domain.RECYCLE_KEPT_FIELDS.every((f) => same(after[f], before[f]));
+    const resetOk = Object.entries(RECYCLE_RESET).every(([f, v]) => same(after[f as keyof typeof after], v));
+    check("RC-2: live row keeps id, number, contact data, note, creator; everything else is a fresh NEW contact",
+        keptOk && resetOk && after.status === "NEW", `kept=${keptOk} reset=${resetOk}`);
+    check("RC-8: exactly one revision bump on the live row; round 1 → 2; roundStartedAt set",
+        after.revision === before.revision + 1 && after.round === 2 && after.roundStartedAt !== null,
+        `rev ${before.revision}→${after.revision} round=${after.round}`);
+    const liveKids = await childIds(id);
+    check("RC-2: the live contact has no child rows left", Object.values(liveKids).every((x) => x.length === 0), JSON.stringify(liveKids));
+
+    const archive = await archiveOf(id);
+    const archKids = archive ? await childIds(archive.id) : null;
+    const copyOk = archive !== null && (Object.keys(before) as (keyof typeof before)[])
+        .filter((f) => !(domain.ARCHIVE_COPY_EXCEPTIONS as readonly string[]).includes(f))
+        .every((f) => same(archive[f], before[f]));
+    check("RC-2: archive row = exact copy of the old state, hidden, linked, by the admin",
+        copyOk && archive?.deletedAt !== null && archive?.archivedById === admin.id && archive?.round === 1 && archive?.number !== before.number,
+        `copy=${copyOk} deleted=${archive?.deletedAt} by=${archive?.archivedById === admin.id}`);
+    check("RC-2: every child row moved to the archive with its id unchanged", same(archKids, kids),
+        `before=${JSON.stringify(kids)} archive=${JSON.stringify(archKids)}`);
+    const partsAfter = await prisma.dealTaskPart.count({ where: { taskId: { in: kids.task } } });
+    const tracker = await prisma.tracker.count({ where: { designId: { in: kids.design } } });
+    check("RC-2: rows below the children (task parts, tracker) came along", partsAfter === parts && parts > 0 && tracker === kids.design.length, `parts=${parts}/${partsAfter} tracker=${tracker}`);
+
+    const offerCols = (l: typeof before) => [l.offerAboutUsAt, l.offerPriceAt, l.designSentAt, l.price?.toString()];
+    await prisma.$transaction((tx) => recomputeOffers(tx, archive!.id));
+    const archAfter = await prisma.lead.findUniqueOrThrow({ where: { id: archive!.id } });
+    check("RC-2: the archive is internally consistent – recomputing its send summary changes nothing",
+        same(offerCols(archAfter), offerCols(before)), `${JSON.stringify(offerCols(before))} vs ${JSON.stringify(offerCols(archAfter))}`);
+};
+
+// RC-3: recyklovaný kontakt je v spoločnej fronte a dá sa nárokovať; poradie fronty je FIFO podľa vstupu (Q3).
+tests.rc3Pool = async () => {
+    const { recycle } = await rc();
+    const { POOL_WHERE } = await import("../../lib/queries/calls");
+    const caller = await makeUser("TELESALES");
+    const id = await makeAssignedLead(caller.id, "CALLING");
+    await logCallAs(caller, { leadId: id, outcome: "NOT_INTERESTED", expectedRevision: await leadRev(id), idempotencyKey: key() });
+    const r = await recycle([id]);
+    const inPool = await prisma.lead.count({ where: { ...POOL_WHERE, id } });
+    check("RC-3: a recycled call-stage contact is in the shared pool", !("error" in r) && r.recycled === 1 && inPool === 1, JSON.stringify(r));
+
+    // FIFO: starší createdAt, ale vstup do fronty TERAZ → ide po kontakte, ktorý čakal dlhšie.
+    const [waiting] = await makePoolLeads(1);
+    const recycledAt = (await prisma.lead.findUniqueOrThrow({ where: { id }, select: { roundStartedAt: true } })).roundStartedAt!;
+    await prisma.lead.update({ where: { id: waiting }, data: { createdAt: new Date(recycledAt.getTime() - 60_000) } });
+    const order = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "Lead" WHERE id = ANY(${[id, waiting]}) ORDER BY COALESCE("roundStartedAt", "createdAt"), id`;
+    check("RC-3: pool order is FIFO by entering the pool (roundStartedAt), not by the original createdAt",
+        order[0]?.id === waiting && order[1]?.id === id, order.map((o) => o.id).join(","));
+
+    // Na čele fronty ho claimBatchAs naozaj zoberie (9 fixture kontaktov za ním, nech claim nesiahne na dáta vetvy).
+    await makePoolLeads(10);
+    await prisma.lead.update({ where: { id }, data: { roundStartedAt: new Date("2000-12-31T00:00:00Z") } });
+    const claimer = await makeUser("TELESALES");
+    const c = await claimBatchAs(claimer);
+    const held = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { assignedCallerId: true, status: true } });
+    check("RC-3: claimBatchAs takes the recycled contact like any new contact", "claimed" in c && held.assignedCallerId === claimer.id && held.status === "NEW",
+        `${JSON.stringify(c)} ${JSON.stringify(held)}`);
+};
+
+// RC-4: archívny riadok nevidno nikde – fronta, tabuľa volajúceho, pipeline, deaktivácia, kontakty, panel recyklácie;
+// história hovorov ukazuje číslo živého kontaktu a kolo.
+tests.rc4Invisible = async () => {
+    const { admin, recycle, fullDeal, archiveOf } = await rc();
+    const { POOL_WHERE, getCallsBoard } = await import("../../lib/queries/calls");
+    const { DEAL_WHERE } = await import("../../lib/queries/pipeline");
+    const { getRemainingWork } = await import("../../lib/commands/admin");
+    const { getContactsList } = await import("../../lib/queries/contacts");
+    const { getRecycleFirst } = await import("../../lib/queries/recycling");
+    const { getCallHistory } = await import("../../lib/queries/calls/history");
+    const { parseRecycleParams, RECYCLE_BUCKETS } = await import("../../lib/domain/recycling");
+    const { id, rep } = await fullDeal("ACTIVE");
+    const live = await prisma.lead.findUniqueOrThrow({ where: { id } });
+    const r = await recycle([id]);
+    const archive = await archiveOf(id);
+    if ("error" in r || !archive) throw new Error(`recycle failed ${JSON.stringify(r)}`);
+    const aid = archive.id;
+    const board = await getCallsBoard(rep);
+    const boardIds = [board.scheduled, board.retry, board.snoozed, board.fresh].flat().map((l) => l.id);
+    const contacts = await getContactsList({ query: live.companyName ?? "" });
+    const recyclable = await getRecycleFirst(parseRecycleParams({ b: RECYCLE_BUCKETS.join(","), older: "0", q: live.companyName ?? "" }), 500);
+    const counts = {
+        pool: await prisma.lead.count({ where: { ...POOL_WHERE, id: aid } }),
+        deals: await prisma.lead.count({ where: { ...DEAL_WHERE, id: aid } }),
+        board: boardIds.includes(aid) ? 1 : 0,
+        repOpenDeals: (await getRemainingWork(rep.id)).deals,
+        contacts: contacts.rows.some((c) => c.id === aid) ? 1 : 0,
+        recyclePanel: recyclable.some((x) => x.id === aid || x.id === id) ? 1 : 0,
+    };
+    check("RC-4: the archive row (an ACTIVE deal owned by the rep) is in no list, count or guard",
+        Object.values(counts).every((n) => n === 0), JSON.stringify(counts));
+    const history = await getCallHistory(admin, rep.id);
+    const row = history.find((h) => h.lead.id === aid);
+    check("RC-4: call history shows the archived call under the live #number with its round, no revert / edit",
+        row !== undefined && row.lead.number === live.number && row.lead.archivedRound === 1 && !row.canRevert && !row.canEdit,
+        JSON.stringify(row?.lead ?? null));
+};
+
+// RC-5: odmietnutia pod zámkom a opakované odoslanie.
+tests.rc5Stale = async () => {
+    const { recycling, admin, recycle, fullDeal, archiveOf } = await rc();
+    const caller = await makeUser("TELESALES");
+    const id = await makeAssignedLead(caller.id, "CALLING");
+    const rev = await leadRev(id);
+    const wrong = await recycling.recycleLeadsAs(admin, { items: [{ leadId: id, expectedRevision: rev + 5 }] });
+    check("RC-5: wrong expectedRevision → skipped CHANGED, nothing written",
+        !("error" in wrong) && wrong.recycled === 0 && wrong.skipped[0]?.reason === "CHANGED" && (await leadRev(id)) === rev, JSON.stringify(wrong));
+
+    const first = await recycling.recycleLeadsAs(admin, { items: [{ leadId: id, expectedRevision: rev }] });
+    const again = await recycling.recycleLeadsAs(admin, { items: [{ leadId: id, expectedRevision: rev }] });
+    const after = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { round: true } });
+    const archives = await prisma.lead.count({ where: { archiveOfId: id } });
+    check("RC-5: the same request again = already recycled (success), never a second round",
+        !("error" in first) && first.recycled === 1 && !("error" in again) && again.recycled === 1 && again.skipped.length === 0 && after.round === 2 && archives === 1,
+        `first=${JSON.stringify(first)} again=${JSON.stringify(again)} round=${after.round} archives=${archives}`);
+
+    const fresh = await recycle([id]);
+    check("RC-5: a recycled (NEW) contact is not recyclable again", !("error" in fresh) && fresh.skipped[0]?.reason === "NOT_ELIGIBLE", JSON.stringify(fresh));
+
+    const { id: open } = await fullDeal("ACTIVE");
+    const rep2 = await makeUser("SALES_REP");
+    await prisma.dealTask.create({ data: { leadId: open, type: "HELP", status: "OPEN", text: "cc", requestedById: rep2.id, assigneeId: admin.id } });
+    const won = (await fullDeal("ACTIVE")).id;
+    await prisma.lead.update({ where: { id: won }, data: { status: "WON", closedAt: new Date() } });
+    const blocked = await recycle([open, won]);
+    const reasons = "error" in blocked ? [] : blocked.skipped.map((s) => s.reason).sort();
+    check("RC-5: an open manager task → OPEN_TASK; WON → NOT_ELIGIBLE", sameJson(reasons, ["NOT_ELIGIBLE", "OPEN_TASK"]), JSON.stringify(blocked));
+
+    const archive = await archiveOf(id);
+    const arch = await recycling.recycleLeadsAs(admin, { items: [{ leadId: archive!.id, expectedRevision: archive!.revision }] });
+    check("RC-5: an archive row cannot be recycled", !("error" in arch) && arch.skipped[0]?.reason === "NOT_FOUND", JSON.stringify(arch));
+
+    const manager = await makeUser("MANAGER");
+    const other = await makeAssignedLead(caller.id, "CALLING");
+    const denied = await recycle([other], manager);
+    check("RC-5: MANAGER has no contacts.recycle (Q7) → FORBIDDEN", codeOf(denied) === "ERR:FORBIDDEN", codeOf(denied));
+    const bad = await recycling.recycleLeadsAs(admin, { items: [{ leadId: other, expectedRevision: 0 }, { leadId: other, expectedRevision: 0 }] });
+    check("RC-5: duplicate ids in one request are refused", "error" in bad, JSON.stringify(bad));
+};
+
+// RC-6: súbeh s hovorom volajúceho (obe poradia) – vyhrá práve jeden; recyklácia kontaktov deaktivovaného volajúceho.
+tests.rc6Race = async () => {
+    const { recycling, admin } = await rc();
+    const caller = await makeUser("TELESALES");
+    const rounds = Math.min(ITER, 20);
+    let bad = 0;
+    const seen: Record<string, number> = {};
+    for (let i = 0; i < rounds; i++) {
+        const id = await makeAssignedLead(caller.id, "CALLING");
+        const rev = await leadRev(id);
+        const call = () => logCallAs(caller, { leadId: id, outcome: "NO_ANSWER", expectedRevision: rev, idempotencyKey: key() });
+        const rec = () => recycling.recycleLeadsAs(admin, { items: [{ leadId: id, expectedRevision: rev }] });
+        const [c, r] = i % 2 === 0 ? await Promise.all([call(), rec()]) : await Promise.all([rec(), call()]).then(([a, b]) => [b, a] as const);
+        const recycled = !("error" in r) && r.recycled === 1;
+        const called = codeOf(c) === "OK";
+        const lead = await prisma.lead.findUniqueOrThrow({ where: { id }, select: { status: true, round: true } });
+        const liveCalls = await prisma.activity.count({ where: { leadId: id, type: "CALL" } });
+        const k = `${recycled ? "recycled" : "skipped"}/${codeOf(c)}`;
+        seen[k] = (seen[k] ?? 0) + 1;
+        const consistent = recycled
+            ? !called && lead.status === "NEW" && lead.round === 2 && liveCalls === 0
+            : called && lead.status === "CALLING" && lead.round === 1 && liveCalls === 1;
+        if (recycled === called || !consistent) bad++;
+    }
+    check(`RC-6: recycle vs logCall on the same lead ×${rounds} (both orders) – exactly one wins, state consistent`, bad === 0, JSON.stringify(seen));
+
+    const leaver = await makeUser("TELESALES");
+    const ids = [await makeAssignedLead(leaver.id, "CALLING"), await makeAssignedLead(leaver.id, "CALLING")];
+    const { deactivateUserAs } = await import("../../lib/commands/admin");
+    const admin2 = await makeUser("ADMIN");
+    const [d, r] = await Promise.all([
+        deactivateUserAs(admin2, leaver.id),
+        recycling.recycleLeadsAs(admin, { items: await Promise.all(ids.map(async (leadId) => ({ leadId, expectedRevision: await leadRev(leadId) }))) }),
+    ]);
+    const left = await prisma.lead.count({ where: { assignedCallerId: leaver.id, deletedAt: null } });
+    check("RC-6: recycling races deactivation of the holder – both succeed, the caller keeps nothing",
+        "ok" in d && d.ok && !("error" in r) && r.recycled === 2 && left === 0, `deact=${JSON.stringify(d)} rec=${JSON.stringify(r)} left=${left}`);
+
+    const gone = await makeUser("TELESALES");
+    const id = await makeAssignedLead(gone.id, "CALLING");
+    await prisma.user.update({ where: { id: gone.id }, data: { deletedAt: new Date() } });
+    const r2 = await recycling.recycleLeadsAs(admin, { items: [{ leadId: id, expectedRevision: await leadRev(id) }] });
+    check("RC-6: contacts of an already deactivated caller can be recycled (timea, spec §2.3)", !("error" in r2) && r2.recycled === 1, JSON.stringify(r2));
+};
+
+// RC-7: scout vidí recyklovaný kontakt ako svoj, ale nesmie ho upraviť / zmazať (Q8).
+tests.rc7Scout = async () => {
+    const { recycle } = await rc();
+    const { getContactsList } = await import("../../lib/queries/contacts");
+    const scout = await makeUser("SCOUT");
+    const caller = await makeUser("TELESALES");
+    const id = await makeAssignedLead(caller.id, "CALLING");
+    await prisma.lead.update({ where: { id }, data: { createdById: scout.id } });
+    const untouched = (await makePoolLeads(1))[0];
+    await prisma.lead.update({ where: { id: untouched }, data: { createdById: scout.id } });
+    await recycle([id]);
+    const rows = (await getContactsList({ createdById: scout.id })).rows;
+    const rec = rows.find((x) => x.id === id);
+    const fresh = rows.find((x) => x.id === untouched);
+    check("RC-7: the scout sees the recycled contact as callable but not editable; an untouched one stays editable",
+        rec?.callable === true && rec.editable === false && fresh?.editable === true, JSON.stringify({ rec, fresh }));
+};
+
+// RC-9: kôš a oprávnenosť – TypeScript (recycleBucketOf / recycleBlocker) a SQL (RECYCLE_BUCKET_SQL /
+// RECYCLE_ELIGIBLE_SQL) dávajú rovnakú odpoveď nad všetkými leadmi vetvy (code-standards §5).
+tests.rc9Parity = async () => {
+    const { recycleBucketOf, recycleBlocker } = await import("../../lib/domain/recycling");
+    const { RECYCLE_BUCKET_SQL, RECYCLE_ELIGIBLE_SQL } = await import("../../lib/queries/recycling");
+    const { Prisma } = await import("../../app/generated/prisma/client");
+    const rows = await prisma.$queryRaw<
+        { id: string; status: never; callbackKind: never; pipelineEnteredAt: Date | null; deletedAt: Date | null; archiveOfId: string | null; bucket: string | null; eligible: boolean; openTask: boolean }[]
+    >(Prisma.sql`SELECT l.id, l.status, l."callbackKind", l."pipelineEnteredAt", l."deletedAt", l."archiveOfId",
+                        ${RECYCLE_BUCKET_SQL} AS bucket, ${RECYCLE_ELIGIBLE_SQL} AS eligible,
+                        EXISTS (SELECT 1 FROM "DealTask" t WHERE t."leadId" = l.id AND t.status = 'OPEN') AS "openTask"
+                   FROM "Lead" l`);
+    const diff = rows.filter((r) => {
+        const ts = recycleBucketOf(r);
+        const ok = recycleBlocker({ ...r, hasOpenTask: r.openTask }) === null;
+        return ts !== r.bucket || ok !== r.eligible;
+    });
+    check(`RC-9: bucket + eligibility agree in TS and SQL over ${rows.length} leads`, diff.length === 0, diff.slice(0, 3).map((d) => d.id).join(","));
 };
 
 async function main() {

@@ -14,6 +14,7 @@ type ContactLead = {
     note: string | null;
     status: LeadStatus;
     assignedCallerId: string | null;
+    round: number;
     _count: { activities: number };
     createdAt: Date;
     creator: { firstName: string; lastName: string } | null;
@@ -32,6 +33,8 @@ function toContactRow(lead: ContactLead) {
         status: lead.status,
         // Nedotknutý = NEW, nikto si ho nezobral na volanie a nemá hovor. Len vtedy ho smie meniť pridávač.
         callable: lead.status === "NEW" && lead.assignedCallerId === null && lead._count.activities === 0,
+        // Upravovať / mazať smie pridávač len kontakt v 1. kole – recyklovaný (feature 02) už nie je jeho.
+        editable: lead.round === 1 && lead.status === "NEW" && lead.assignedCallerId === null && lead._count.activities === 0,
         createdAt: lead.createdAt.toISOString(),
         addedBy: lead.creator ? `${lead.creator.firstName} ${lead.creator.lastName}`.trim() : null,
         owner: lead.owner?.firstName ?? null,
@@ -84,6 +87,7 @@ export async function getContactsList({
             note: true,
             status: true,
             assignedCallerId: true,
+            round: true,
             _count: { select: { activities: { where: { type: "CALL" } } } },
             createdAt: true,
             creator: { select: { firstName: true, lastName: true } },

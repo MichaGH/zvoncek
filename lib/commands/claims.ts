@@ -28,7 +28,7 @@ export async function claimBatchAs(user: AccessUser): Promise<ClaimResult> {
                      WHERE "deletedAt" IS NULL AND status = 'NEW'
                        AND "pipelineEnteredAt" IS NULL AND "assignedCallerId" IS NULL
                        AND NOT EXISTS (SELECT 1 FROM "Activity" a WHERE a."leadId" = "Lead".id AND a.type = 'CALL')
-                     ORDER BY "createdAt", id
+                     ORDER BY COALESCE("roundStartedAt", "createdAt"), id -- FIFO podľa vstupu do fronty (recyklácia, Q3)
                      LIMIT ${CLAIM_BATCH_SIZE}
                      FOR UPDATE SKIP LOCKED
                 )

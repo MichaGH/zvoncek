@@ -12,6 +12,7 @@ const SELECT = {
     email: true,
     note: true,
     revision: true,
+    round: true,
     callbackKind: true,
     callbackAt: true,
     callbackHasTime: true,
@@ -29,7 +30,7 @@ const SELECT = {
 
 function map(l: {
     id: string; number: number; companyName: string | null; website: string | null;
-    phone: string | null; email: string | null; note: string | null; revision: number;
+    phone: string | null; email: string | null; note: string | null; revision: number; round: number;
     callbackAt: Date | null; callbackHasTime: boolean; callbackNote: string | null;
     activities: { id: string; createdAt: Date }[];
 }) {
@@ -42,6 +43,7 @@ function map(l: {
         email: l.email,
         note: l.note,
         revision: l.revision,
+        round: l.round,
         callbackAt: l.callbackAt?.toISOString() ?? null,
         callbackHasTime: l.callbackHasTime,
         callbackNote: l.callbackNote,

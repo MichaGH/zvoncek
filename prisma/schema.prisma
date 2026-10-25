@@ -44,6 +44,7 @@ model User {
   ownershipBy        DealOwnership[] @relation("DealOwnershipBy")
   requestsRecorded   LeadRequest[]   @relation("LeadRequestRequestedBy")
   requestsResolved   LeadRequest[]   @relation("LeadRequestResolvedBy")
+  archivedLeads      Lead[]          @relation("LeadArchivedBy")
 
   // Tímy: user je členom max. jedného tímu (teamId) a zároveň môže viesť max. jeden tím (leadsTeam).
   team      Team?   @relation("TeamMembers", fields: [teamId], references: [id])
@@ -137,6 +138,16 @@ model Lead {
 
   revision Int @default(0) // optimistická verzia; +1 presne raz za biznis transakciu
 
+  // Recyklácia (feature 02): koľké kolo je to (1 = pridaný, 2 = raz recyklovaný…).
+  round          Int       @default(1)
+  roundStartedAt DateTime? // kedy kontakt vstúpil do súčasného kola (recyklácia); NULL = kolo 1 = createdAt
+  // Archívny riadok = celý stav jedného skončeného kola (skrytý cez deletedAt). Živý kontakt ho má v `archives`.
+  archiveOf      Lead?     @relation("LeadArchive", fields: [archiveOfId], references: [id], onDelete: Restrict)
+  archiveOfId    String?
+  archives       Lead[]    @relation("LeadArchive")
+  archivedBy     User?     @relation("LeadArchivedBy", fields: [archivedById], references: [id])
+  archivedById   String? // kto kolo uzavrel recykláciou; čas = deletedAt archívneho riadku
+
   activities Activity[]
   designs    Design[]
   tasks      DealTask[]
@@ -153,6 +164,7 @@ model Lead {
   @@index([assignedCallerId, status, callbackKind])
   @@index([ownerId, status])
   @@index([pipelineEnteredAt, status])
+  @@index([archiveOfId])
 }
 
 enum LeadStatus {

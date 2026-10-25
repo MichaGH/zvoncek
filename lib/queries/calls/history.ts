@@ -32,6 +32,8 @@ export async function getCallHistory(viewer: AccessUser, userId: string | null) 
                     status: true,
                     revision: true,
                     deletedAt: true,
+                    round: true,
+                    archiveOf: { select: { number: true } },
                     ownerId: true,
                     assignedCallerId: true,
                     pipelineEnteredAt: true,
@@ -88,7 +90,9 @@ export async function getCallHistory(viewer: AccessUser, userId: string | null) 
             canEdit,
             lead: {
                 id: l.id,
-                number: l.number,
+                // Hovor z uzavretého kola (feature 02): ukáž číslo živého kontaktu, nie skrytého archívu.
+                number: l.archiveOf?.number ?? l.number,
+                archivedRound: l.archiveOf ? l.round : null,
                 companyName: l.companyName,
                 website: l.website,
                 phone: l.phone,

@@ -218,7 +218,7 @@ export default async function ContactsPage({
                                                 phone: row.phone,
                                                 note: row.note,
                                             }}
-                                            locked={!row.callable}
+                                            locked={!row.editable}
                                         />
                                     </div>
                                 </div>
@@ -293,7 +293,7 @@ export default async function ContactsPage({
                                                     phone: row.phone,
                                                     note: row.note,
                                                 }}
-                                                locked={!row.callable}
+                                                locked={!row.editable}
                                             />
                                         </TableCell>
                                     </TableRow>

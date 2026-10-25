@@ -6,6 +6,45 @@ In this file progress of feature implementation is tracked. Should contain
 
 ---
 
+# Feature 02: recycling contacts (built on the development copy 2026-10-25, NOT in production)
+
+Design: `context/features/02-recycling/recycling-spec.md` (all questions decided 2026-10-25). Rollout:
+`context/features/02-recycling/production-rollout.md`. Database: development copy `ep-divine-waterfall-asbkuort` /
+`neondb` (copy of production 2026-10-24); production `…m0xyun` untouched. Nothing committed.
+
+- **Schema S-R1** (additive): `Lead.round` (NOT NULL DEFAULT 1), `roundStartedAt`, `archiveOfId` (FK → Lead, RESTRICT,
+  indexed), `archivedById` (FK → User, SET NULL). Pre-check: `migrate diff` dev copy → schema was empty. Reviewed SQL
+  (4 × ADD COLUMN, 1 index, 2 FKs) applied with `db execute`; second `migrate diff` empty; `prisma generate`.
+  Production script `context/features/02-recycling/sql/01-recycling-schema.sql`. `db-changes.md` cleared of the
+  2026-09-22 rollout (Q11) and now lists only S-R1.
+- **Code.** `lib/domain/recycling.ts` (buckets, `recycleBucketOf`, `recycleBlocker`, strict input, field lists, URL
+  model), `lib/domain/recycleMutations.ts` (`archiveCopy`, `RECYCLE_RESET`, `archiveRound`),
+  `lib/commands/recycling.ts` (`recycleLeadsAs`), `lib/actions/recycling` (`recycleLeads`, `pickRecycleFirst`),
+  `lib/queries/recycling` (list / counts / holders / first N / header, SQL twins), permission `contacts.recycle`
+  (ADMIN), page `/dashboard/admin/recycle` + `components/admin/recycle/{RecycleFilters,RecyclePanel}.tsx`, card on
+  `/dashboard/admin`. Side effects: claim order `COALESCE(roundStartedAt, createdAt)`; scout edit/delete only in
+  round 1 (`lockContactForManage`, contacts list `editable`); "N. kolo" in `CallRow` / `CallDrawer`; call history
+  shows archived calls under the live `#number` with "(N. kolo)".
+- **Found while checking:** "Nemajú záujem" / "Zlé číslo" clear `assignedCallerId`, so "Kto to mal" was empty for
+  closed call-stage contacts. The holder is now the assigned caller or the author of the last call (spec §5.2).
+- **Checks (all actually run, 2026-10-25):**
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | clean |
+| `npx eslint .` | only the known `components/layout/MobileNav.tsx` error |
+| `npx next build` | OK, 21 routes incl. `/dashboard/admin/recycle` |
+| `check-business-time.ts` (local and `TZ=UTC`) | passed |
+| `check-client-sections.ts` | passed |
+| `check-concurrency.ts --expect-endpoint ep-divine-waterfall-asbkuort --iterations 100` | **261/261** (incl. rc1Snapshot, rc2Reset, rc3Pool, rc4Invisible, rc5Stale, rc6Race ×20, rc7Scout, rc9Parity over all leads); fixtures cleaned, dev data unchanged |
+| HTTP render check (`.claude/recycle-ui-check.ts`, throwaway admin / manager / caller, signed local sessions, `next dev` on :3100) | **10/10**: page renders with buckets, counts, holder, header; manager redirected; admin card; after one recycle the list shrinks and caller history shows "(1. kolo)" |
+| `check-backfill-delta.ts` | not run — it checks the one-time round-1 backfill against seed users that the dev copy does not have; not touched by this feature |
+
+- **Not verified / still owed:** Michal's click-through in a browser (selection, "Vybrať prvých N", confirm dialog,
+  skipped list, paging) — runbook A3; commit + PR; the production rollout.
+
+---
+
 # Feature: caller assignment, SALES_REP, /dashboard/clients, manager oversight
 
 Source of truth: `context/features/01-salesrep/planning.md` (rev. 4). Phases = plan §13.

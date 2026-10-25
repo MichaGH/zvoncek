@@ -1,8 +1,8 @@
 # Feature 02 — Recycling contacts ("Recyklácia")
 
-**Status: DRAFT v1 for discussion (2026-10-25).** Nothing is built and nothing in the schema or the database has
-changed. Michal decided Q1, Q2, Q3 and Q6 on 2026-10-25 (§13); the other questions still carry a recommended default
-and wait for his answer. Production steps live in `production-rollout.md` in this folder.
+**Status: v1 DECIDED, implementation in progress (2026-10-25).** All questions in §13 are decided (Michal,
+2026-10-25: Q1–Q3 and Q6 chosen, the rest by accepting the recommended defaults). Implementation started 2026-10-25
+on the dev copy only. Production steps live in `production-rollout.md` in this folder.
 
 Read first: `AGENTS.md`, `context/project-overview.md` (§1 stage rule, §5 concurrency), `context/domain/database-map.md`.
 
@@ -34,7 +34,7 @@ run 2026-10-25. The oldest activity in the data is from **2026-06-15**, so "enou
 
 | Michal's case | What the app really stores | Count | Correction |
 |---|---|---|---|
-| 1. "they never pick up" | **not an end state.** "Nezdvihli" = `CALLING` + `callbackKind RETRY`, and the contact **stays in the caller's queue forever** — nothing closes it automatically | 1 432 (all with timea) — 1 271 have exactly **one** no-answer, 150 two, 10 three or more | These are not dead, they are timea's retry backlog, already callable without recycling. Recycling them only moves them from "Opakovať" back into the pool with a clean attempt counter |
+| 1. "they never pick up" | **not an end state.** "Nezdvihli" = `CALLING` + `callbackKind RETRY`, and the contact **stays in the caller's queue forever** — nothing closes it automatically | 1 432: **timea 1 379**, jurcovam 52, michal 1. 1 271 were called exactly **once** | Not dead — an untouched retry backlog. Verified (§2.3): the attempts are real `CALL` rows, not a migration artefact. The caller called each new contact once and then took the next batch instead of retrying |
 | 2. "wrong number or unavailable" | `UNREACHABLE`, last call `BAD_NUMBER` | 420 | Recycling gives the caller the same wrong number again unless someone fixed it. Allowed, but the panel warns |
 | 3. "they pick up and say no" | `LOST`, last call `NOT_INTERESTED` | 2 061 | — |
 | (not in your list) "call me in X months" | call-stage `SNOOZED` (wakes on its date by itself, stays with the caller) | 16 | Recycling is possible but usually unnecessary — they come back on their own |
@@ -54,6 +54,38 @@ Deal owners today: `michal` (ADMIN) 53 active + 60 lost + 7 unreachable, `jurcov
 Recycling an active deal removes it from its owner's pipeline — the panel must show the owner.
 
 Open manager tasks: 2 (5 tasks in total). A deal with an open task is **not** recyclable (§5.3).
+
+**Michal (2026-10-25):** he will review and close the forgotten active deals himself later; once closed they are
+ordinary `deal_lost` / `deal_unreachable` candidates. `deal_active` stays recyclable but is not the v1 focus.
+
+### 2.3 Timea has left — her call work is the first thing to recycle
+
+Michal, 2026-10-25: timea no longer works for the company, and her contacts must be recyclable. Her account is still
+active in the copy. She holds **1 453 call-stage contacts** and no deals or tasks:
+
+| Her work | Count | What it is |
+|---|---|---|
+| `CALLING` + `RETRY` ("Nezdvihli") | 1 379 | last call 2026-06: 43 · 07: 173 · 08: 404 · 09: 580 · 10: ~180. Almost all called once |
+| `CALLING` + `SCHEDULED` (agreed callback) | 59 | the client gave a time — promised work |
+| call-stage `SNOOZED` | 15 | "ozvať sa o X mesiacov" |
+| `NEW` in her batch | 0 | |
+
+Her first-call record (June–October): about 1 640 no-answers, 1 820 "nemajú záujem", 350 wrong numbers, 120
+interested. That is why the `call_lost` bucket is the second big source (2 061 contacts).
+
+What the app can already do **today, without this feature** (`/dashboard/calls/assignments`, `transferCallWorkAs`):
+
+- move her `RETRY` / `SCHEDULED` / `SNOOZED` work, in any amount, to **another active caller** — they stay retries
+  with their history ("1. pokus") and land in that caller's "Opakovať" list;
+- it **cannot** return retries to the shared pool ("Do fronty sa vracajú len nové kontakty") — that is exactly what
+  recycling adds;
+- deactivating her (`deactivateUserAs`) is allowed now (she holds no deals or tasks); it only releases `NEW`
+  contacts, so her retries, callbacks and snoozes stay assigned to the deactivated account until they are moved or
+  recycled.
+
+Consequences for this feature: the panel's *Kto to mal* filter lists **deactivated** users too (marked
+"deaktivovaný"), and the command recycles contacts held by a deactivated caller (it locks that user row like any
+other and never requires the holder to be active). Q12 decides what happens to her 59 callbacks and 15 snoozes.
 
 ## 3. What "recycle" means (definition)
 
@@ -202,7 +234,7 @@ Two places read `Activity` without looking at the lead, and both are fine:
 
 | Bucket key | UI label | Predicate (all also `deletedAt IS NULL`, `archiveOfId IS NULL`) | Default selected in the panel |
 |---|---|---|---|
-| `call_retry` | Volania – nezdvihli | call stage, `CALLING` + `RETRY` | no |
+| `call_retry` | Volania – nezdvihli | call stage, `CALLING` + `RETRY` | **yes** (timea's backlog, §2.3) |
 | `call_scheduled` | Volania – dohodnuté volanie | call stage, `CALLING` + `SCHEDULED` | no |
 | `call_snoozed` | Volania – odložené | call stage, `SNOOZED` | no |
 | `call_lost` | Volania – nemajú záujem | call stage, `LOST` | **yes** |
@@ -218,8 +250,8 @@ row. The predicates live once in `lib/domain/recycling.ts` (pure, client-safe) w
 
 ### 5.2 Filters on top of a bucket
 
-- **Kto to mal** — the caller (`assignedCallerId`) for call-stage buckets, the owner (`ownerId`) for deals; plus
-  "nikto".
+- **Kto to mal** — for deals the owner (`ownerId`); for call-stage contacts the assigned caller, or — because
+  "Nemajú záujem" / "Zlé číslo" clear `assignedCallerId` — the author of the last call; plus "nikto". Deactivated users are listed too, marked "deaktivovaný" (§2.3).
 - **Posledný kontakt staršie ako** — 7 / 30 / 60 / 90 days / any. *Last contact* = the newest non-reverted `CALL`,
   `CLIENT_REPLIED`, `SMS_SENT` or `OFFER_SENT` activity; a contact with none uses `createdAt`.
 - **Pokusy (nezdvihli)** — at least N non-reverted `NO_ANSWER` calls (useful for `call_retry`).
@@ -251,7 +283,8 @@ the lock.
 
 1. Read `assignedCallerId` / `ownerId` of the batch without a lock.
 2. Lock the actor + those users `FOR SHARE`, ascending id (lock order `Team → User → Lead`; no team is touched).
-   Serializes with deactivation / role change, which take the user row `FOR UPDATE`.
+   Serializes with deactivation / role change, which take the user row `FOR UPDATE`. Only the **actor** must be
+   active; a holder may be deactivated (timea, §2.3) — that is not a reason to skip.
 3. Lock the leads `FOR UPDATE`, ascending id. **No `SKIP LOCKED`** (`project-overview.md` §5 rule 4): a lead busy in
    a caller's save waits up to the lock timeout; a timeout makes the batch `RETRYABLE`.
 4. Re-validate each lead (§5.3), including that `assignedCallerId` / `ownerId` did not change since step 1.
@@ -274,7 +307,7 @@ children are not bumped. A test case goes into `prisma/backfill/check-concurrenc
 
 | Area | Change needed | Note |
 |---|---|---|
-| Pool and claim order | **yes, small** — order by `COALESCE("roundStartedAt", "createdAt"), id` in the claim SQL and the board's NEW list | FIFO by the time a contact entered the pool (Q3, decided). Otherwise recycled contacts (old `createdAt`) would always jump ahead of newly scouted ones |
+| Pool and claim order | **yes, small** — order by `COALESCE("roundStartedAt", "createdAt"), id` in the claim SQL (the board's own NEW list is a batch of ≤ 10 and keeps its `createdAt` order) | FIFO by the time a contact entered the pool (Q3, decided). Otherwise recycled contacts (old `createdAt`) would always jump ahead of newly scouted ones |
 | Call board / call sheet | **yes, small** — a "2. kolo" badge when `round > 1`; nothing about the previous round (Q6, decided) | `round` is added to the board's `SELECT` / `map`; no query of the archive |
 | Contacts page (scouts) | **yes** — "untouched" (`NEW`, unclaimed, 0 calls) must also require `round = 1` | Otherwise a scout could edit or **delete** a recycled contact. Same rule for the scout leader's team check |
 | Call history | small display fix (§4.5) | |
@@ -334,7 +367,7 @@ New cases in `prisma/backfill/check-concurrency.ts` (they create and remove thei
 | `rc3Pool` | the recycled contact is in `POOL_WHERE`, is claimable by `claimBatchAs`, ordered by `roundStartedAt` |
 | `rc4Invisible` | the archive row appears in none of: pool, caller board, pipeline list and counts, "Pre mňa", História, contacts list, deactivation counts, contacts-added stats |
 | `rc5Stale` | wrong `expectedRevision` → `CHANGED`; open task → `OPEN_TASK`; `WON` / `NEW` → `NOT_ELIGIBLE`; repeat of the same request → `ALREADY_RECYCLED`, round still 2 |
-| `rc6Race` | recycle vs `logCallAs` on the same lead, both orders: exactly one wins, the other gets `STALE` / `CHANGED`; recycle vs `deactivateUserAs` of the caller |
+| `rc6Race` | recycle vs `logCallAs` on the same lead, both orders: exactly one wins, the other gets `STALE` / `CHANGED`; recycle vs `deactivateUserAs` of the caller; recycling contacts of an **already deactivated** caller succeeds |
 | `rc7Scout` | a scout cannot edit or delete a recycled contact |
 | `rc8Revision` | exactly one bump on the live row; archive keeps the old revision |
 
@@ -356,7 +389,8 @@ The core is the command; the page is a view on it. Contract between agents = §5
 
 **Fallback if the page is late:** the first batch can be recycled from the same page with only the table and
 selection (no filters), or — last resort, separately approved — by a dry-run-first script that calls the same command.
-Also note: timea already has 1 432 retry contacts that are callable today without any recycling.
+Same-day option that needs **no deploy at all**: if the new caller already has an account, "Priradenia" can move
+timea's retries to them today (§2.3); they would then be retries instead of round-2 contacts.
 
 ## 12. Out of scope (later)
 
@@ -376,14 +410,15 @@ Also note: timea already has 1 432 retry contacts that are callable today withou
 | Q1 | Approach: live contact keeps id + `#number`, old history moves to a hidden archive row (§4) | **DECIDED 2026-10-25: archive row** |
 | Q2 | `Lead.note` on the recycled contact: keep / clear / keep with a "[1. kolo]" prefix? The note is often the scout's observation, but a first call may have overwritten it with the caller's note | **DECIDED 2026-10-25: keep as is** (the archive has the same text) |
 | Q3 | Pool order: recycled contacts by the time they were recycled (FIFO with new contacts), always first, or always after new ones? | **DECIDED 2026-10-25: by recycle time (FIFO)** |
-| Q4 | Destination: shared pool only, or also "assign to a caller" in the dialog? Direct assignment would break the "max 10 unworked NEW per caller" rule | **Pool only** |
-| Q5 | Which buckets are allowed at all? (§5.1) — especially `call_retry` (mostly 1 attempt), `call_scheduled`, `deal_active` | **All of §5.1**, nothing pre-selected except lost / unreachable deals and call `LOST` |
+| Q4 | Destination: shared pool only, or also "assign to a caller" in the dialog? Direct assignment would break the "max 10 unworked NEW per caller" rule | DECIDED 2026-10-25 (default accepted): **Pool only** |
+| Q5 | Which buckets are allowed at all? (§5.1) — especially `call_retry` (mostly 1 attempt), `call_scheduled`, `deal_active` | DECIDED 2026-10-25 (default accepted): **All of §5.1**, pre-selected as in §5.1 (call retries, call `LOST`, lost / unreachable deals) |
 | Q6 | What does the caller see? Nothing / "2. kolo" badge / badge + one line of the previous ending ("Predtým: obchod stratený · chceli návrh · 7/2026") / + a note you type for the whole batch ("ospravedlniť sa za neposlaný návrh") | **DECIDED 2026-10-25: badge only** ("2. kolo"). The previous ending and a batch note are later (§12) |
-| Q7 | Who may recycle: ADMIN only, or MANAGER too (nicolas)? | **ADMIN only** |
-| Q8 | Scouts still see their recycled contacts in "Kontakty" (as NEW again) but can no longer edit/delete them. OK? | **Yes** |
-| Q9 | Hard guard against recycling recently touched contacts (e.g. activity in the last 7 days)? | **No hard rule**; default filter "staršie ako 30 dní", warning in the dialog |
-| Q10 | Undo in v1? | **No** (§12) |
-| Q11 | Housekeeping before we start: `db-changes.md` still lists the pre-rollout delta of 2026-09-22 and the old test endpoint; `.env.migration` still contains the production URL | **Clear the ledger to "nothing owed"**, point docs at the new dev copy, **remove the production URL from `.env.migration` now** and add it back only in the rollout window |
+| Q7 | Who may recycle: ADMIN only, or MANAGER too (nicolas)? | DECIDED 2026-10-25 (default accepted): **ADMIN only** |
+| Q8 | Scouts still see their recycled contacts in "Kontakty" (as NEW again) but can no longer edit/delete them. OK? | DECIDED 2026-10-25 (default accepted): **Yes** |
+| Q9 | Hard guard against recycling recently touched contacts (e.g. activity in the last 7 days)? | DECIDED 2026-10-25 (default accepted): **No hard rule**; default filter "staršie ako 30 dní", warning in the dialog |
+| Q10 | Undo in v1? | DECIDED 2026-10-25 (default accepted): **No** (§12) |
+| Q11 | Housekeeping before we start: `db-changes.md` still lists the pre-rollout delta of 2026-09-22 and the old test endpoint | DECIDED 2026-10-25 (default accepted): **Clear the ledger to "nothing owed"** and point docs at the new dev copy. (`.env.migration` with the production URL: **deleted by Michal 2026-10-25**; it is recreated only in the rollout window) |
+| Q12 | timea's 59 agreed callbacks and 15 snoozes (§2.3): recycle them with the retries, or move them to the new caller with "Priradenia" so the promised times are kept? | DECIDED 2026-10-25 (default accepted): **Move them to the new caller**; recycle only the 1 379 retries |
 
 ## 14. Risks
 

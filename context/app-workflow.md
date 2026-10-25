@@ -23,6 +23,8 @@ permissions, `context/architecture.md` for layers, `context/code-standards.md` f
 - `[ROLLOUT]` = exists in code, still missing in production (production is on the pre-round-1 schema; see
   `context/domain/db-changes.md`)
 - `[FUTURE ROUTING]` = desired operating arrangement; its complete team/recipient policy is not yet decided
+- feature 02 (recycling — `context/features/02-recycling/recycling-spec.md`) is **built on the development copy**
+  (2026-10-25); production still lacks its schema and code (`[ROLLOUT]`, §12)
 
 ---
 
@@ -76,7 +78,9 @@ that assignment. There is no time-based expiry, and nobody else sees assigned co
 `Lead.lockedById` / `lockedAt` are dead legacy columns.
 
 The board shows: the batch (NEW), retries (`callbackKind = RETRY`), scheduled callbacks (`SCHEDULED`, due first) and
-snoozed contacts that woke up.
+snoozed contacts that woke up. `[ROLLOUT]` A recycled contact (§12) shows "2. kolo" in its row and in the call sheet
+title, nothing else about its previous round. The pool is FIFO by the moment a contact entered it — its creation, or
+for a recycled contact its recycling.
 
 **One call = one outcome.** Picking up is implicit — if they answered, you click what they want.
 
@@ -436,3 +440,26 @@ Rows with `origin <> LIVE` are excluded. The V1 → V2 migration creates none: o
 
 Business calendar, locking, revision and retry rules: `context/project-overview.md` §5. What a user notices: a stale
 tab refuses to save and refreshes itself; a busy row offers "Skúsiť znova".
+
+## 12. Recycling contacts — `/dashboard/admin/recycle` `[ROLLOUT]`
+
+Design: `context/features/02-recycling/recycling-spec.md`. Admin only (`contacts.recycle`).
+
+Contacts that ended or got stuck are sent back to the shared pool as **new contacts**, instead of scouts adding new
+ones. The panel lists every recyclable contact by **bucket** — Volania: nezdvihli · dohodnuté volanie · odložené ·
+nemajú záujem · zlé číslo; Obchody: aktívne · spiace · stratené · nedostupné — with a count per bucket from the same
+predicate as the list. Filters: who had it (also deactivated people; for closed call-stage contacts the last caller),
+last contact older than N days (default 30), at least N "nezdvihli", what the client got, round, search; sort by last
+contact or creation. `NEW`, `WON` and deals with an open manager task are never recyclable.
+
+The admin ticks rows (or "Vybrať prvých N", up to 500) and confirms. The dialog breaks the selection down by bucket
+and warns about wrong numbers, open deals leaving their owner's pipeline and agreed callbacks being dropped.
+Recycling a contact keeps its id, `#number`, company, phone, web, email, note and creator; everything else becomes a
+fresh `NEW` contact in the pool (round + 1). The whole previous round — calls, deal, what they asked for, what we
+sent, tasks, owners, návrhy with tracking — is **archived, never deleted** (a hidden archive row, `database-map.md`).
+A contact someone changed after the admin opened the page is skipped and reported ("zmenil sa medzitým"); pressing the
+button twice never recycles anything twice.
+
+Elsewhere: the caller sees "2. kolo"; a scout still sees a recycled contact they added, but can no longer edit or
+delete it; call history lists archived calls under the live `#number` with "(1. kolo)". Viewing previous rounds and
+undo are not built.

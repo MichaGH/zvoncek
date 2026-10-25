@@ -35,14 +35,14 @@ Below this prefix is written as `$PROD`.
 
 ## A. Before the window (no production access)
 
-- [ ] **A1. Housekeeping:** remove `MIGRATION_PRODUCTION_URL` from `.env.migration` until step B2 (it is still there
-      from the 2026-09-22 migration).
+- [x] **A1. Housekeeping:** `.env.migration` (which still held the production URL from 2026-09-22) was deleted by
+      Michal on 2026-10-25. It is recreated only in step B2.
 - [ ] **A2. Code done:** all checks of `context/code-standards.md` §7 passed against the dev copy
       (`--expect-endpoint ep-divine-waterfall-asbkuort`), including the new `rc*` cases. Results recorded in
       `context/progress-tracker.md`.
 - [ ] **A3. Click-through:** Michal recycled a few contacts on localhost against the dev copy, saw them in the pool,
       claimed them as a caller, checked a recycled deal disappeared from the pipeline.
-- [ ] **A4. Reviewed schema SQL** saved as `context/features/02-recycling/sql/01-recycling-schema.sql`, generated
+- [x] **A4. Reviewed schema SQL** (done 2026-10-25: exactly the 7 statements below) saved as `context/features/02-recycling/sql/01-recycling-schema.sql`, generated
       offline from the production schema (= `origin/main`) to the new schema:
       ```bash
       git show origin/main:prisma/schema.prisma > <scratch>/schema-main.prisma
@@ -51,7 +51,7 @@ Below this prefix is written as `$PROD`.
       **Expect exactly:** 4 × `ADD COLUMN` on `Lead` (`round` NOT NULL DEFAULT 1, `roundStartedAt`, `archiveOfId`,
       `archivedById`), 1 × `CREATE INDEX "Lead_archiveOfId_idx"`, 2 × `ADD CONSTRAINT … FOREIGN KEY`. Anything else
       (`DROP`, `ALTER COLUMN … TYPE`, another table) = STOP.
-- [ ] **A5. The same SQL was applied to the dev copy** with `npx prisma db execute --file …` and a following
+- [x] **A5. (done 2026-10-25) The same SQL was applied to the dev copy** with `npx prisma db execute --file …` and a following
       `migrate diff --from-config-datasource --to-schema prisma/schema.prisma` came back empty. Recorded in
       `context/domain/db-changes.md`.
 - [ ] **A6. Commit + PR** (only when Michal asks): branch → PR into `main`. **Do not merge yet** — Vercel production
@@ -65,7 +65,8 @@ Below this prefix is written as `$PROD`.
 - [ ] **B1. Backup = restore point.** Neon → project → Branches → *Create branch* from `Production`, current point in
       time, name `pre-recycling-restore-[YYYY-MM-DD]`. Leave it untouched. Time: `[HH:MM:SS]`.
 - [ ] **B2. Production access.** Neon → Production → *Connect* → connection pooling **OFF** → copy the direct string
-      into `.env.migration` as `MIGRATION_PRODUCTION_URL`. Tell Claude only the endpoint id.
+      into a new `.env.migration` file in the repo root (gitignored) as `MIGRATION_PRODUCTION_URL="…"`. Tell Claude
+      only the endpoint id.
 - [ ] **B3. Identity + pre-state check (read-only):** production must equal `origin/main` before we touch it.
       ```bash
       $PROD npx prisma migrate diff --from-config-datasource --to-schema <scratch>/schema-main.prisma --script
@@ -108,12 +109,14 @@ Below this prefix is written as `$PROD`.
          **Expect:** `NEW`, round 2, unassigned, 0 live activities, an archive with the old status, hidden, and all
          the old activities.
 - [ ] **B8. GO / NO-GO.** GO → the team may work; NO-GO → section C.
-- [ ] **B9. First real batch.** Michal selects and recycles the first batch (size decided by him, e.g. 100–200,
-      oldest first). The caller presses "Vziať ďalších 10" and gets recycled contacts.
+- [ ] **B9. First real batch.** Michal selects and recycles the first batch — expected: *Volania – nezdvihli*,
+      *Kto to mal: timea*, oldest first (size decided by him, e.g. 100–200; up to 500 per click). The new caller
+      presses "Vziať ďalších 10" and gets recycled contacts. If Q12 is "move": her callbacks and snoozes go to the new
+      caller through "Priradenia" (existing tool), not through recycling.
 
 ## After the window
 
-- [ ] Remove `MIGRATION_PRODUCTION_URL` from `.env.migration` again.
+- [ ] Delete `.env.migration` again.
 - [ ] Keep `pre-recycling-restore-[date]` for at least 7 days, then delete it in Neon.
 - [ ] Clear the applied rows in `context/domain/db-changes.md`; record the rollout in `context/progress-tracker.md`
       and in the log below.

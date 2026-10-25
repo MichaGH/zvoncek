@@ -38,11 +38,24 @@ One row per contact, and the same row later as a deal. **Never renamed.** Soft-d
 | `designSentAt?` | latest sent date among the lead's designs; recomputed with the above, also when a design is deleted. A lead without any `Design` row keeps its old value, and the screens show that value as "návrh sent" — until a send with `untrackedDesign` is recorded for it; from then on the column is the **latest valid date across the non-deleted tracked designs and the untracked sends** (a deleted or later-created `Design` never suppresses a valid untracked send; crossing out the last one clears it). The "Dostali návrh" filter reads the same column |
 | `price?` (`Decimal(10,2)`), `priceNote?` | the **current** quoted total and its hand-written breakdown; what the client actually received is the snapshot in `OFFER_SENT` |
 | `lostReason?` | why it ended |
+| `round` | recycling round, default `1`; `+1` each time the contact is recycled ("2. kolo") |
+| `roundStartedAt?` | when the current round started (the recycle time); `NULL` in round 1. The pool / claim order is `COALESCE(roundStartedAt, createdAt)` |
+| `archiveOfId?`, `archivedById?` | set **only on an archive row**: the live contact it belongs to (FK `RESTRICT`) and the admin who recycled it |
 | `createdAt`, `updatedAt` | |
 
 Indexes: `status` · `(status, callbackKind)` · `deletedAt` · `(createdById, createdAt)` ·
 `(status, assignedCallerId, createdAt)` · `(assignedCallerId, status, callbackKind)` · `(ownerId, status)` ·
-`(pipelineEnteredAt, status)`.
+`(pipelineEnteredAt, status)` · `archiveOfId`.
+
+**Archive rows (recycling, feature 02).** Recycling a contact (`recycleLeadsAs`) inserts a hidden `Lead` row that is
+an exact copy of the contact before recycling (every column except `id`, `number`, `deletedAt`, `archiveOfId`,
+`archivedById`, `updatedAt`), with `deletedAt` = the recycle time, and **moves every child row** (`Activity`,
+`LeadRequest`, `DealTask`, `DealOwnership`, `Design` — and with them task parts, design versions, trackers, events) to
+it. The live row keeps id, `number`, contact data, `note`, `origin`, creator and `createdAt`, and is reset to a fresh
+`NEW` contact (`round + 1`, `roundStartedAt` = now, one revision bump). An archive row is therefore a complete,
+internally consistent old round, invisible to every query through `deletedAt`, and found via `archiveOfId`. A row
+with `deletedAt` set and `archiveOfId NULL` is a contact that was really deleted. Archive rows are never recycled,
+edited or deleted.
 
 **Invariants** (enforced in code, not by constraints): `status NEW` ⇒ no CALL activity · non-handoff call outcomes never
 write `nextAction*` (the positive call that enters the pipeline pre-fills it) · deals never use `callback*` · `closedAt`
@@ -339,7 +352,8 @@ These live in code and must be preserved by every new mutation:
 - the step stays "Poslať…" while a returned price / návrh is pending (I10)
 - a `DealOwnership` row for every real owner change, in the same transaction
 - exactly one `revision` bump per business transaction
-- `status NEW` ⇒ no CALL activity
+- `status NEW` ⇒ no CALL activity (recycling keeps it true by moving the old calls to the archive row)
+- an archive row (`archiveOfId` set) always has `deletedAt` set; the live contact of a recycled round has `round ≥ 2`
 - `closedAt` consistency with closed statuses
 - scope (who may see which lead) — always in the query, never in a constraint
 - `Lead.offer*`, `Lead.designSentAt` and `Design.sentAt` equal the recompute of the valid `OFFER_SENT` rows (+ legacy

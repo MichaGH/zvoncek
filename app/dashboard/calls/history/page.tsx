@@ -181,7 +181,9 @@ type HistoryRow = Awaited<ReturnType<typeof getCallHistory>>[number];
 // Názov firmy – odkaz na detail obchodu (/dashboard/pipeline/[id]) podľa práv, inak text. Zdieľané
 // medzi mobilnou kartou a desktop tabuľkou.
 function LeadName({ row }: { row: HistoryRow }) {
-    const label = `#${row.lead.number} ${row.lead.companyName ?? row.lead.website ?? "Bez mena"}`;
+    const label = `#${row.lead.number} ${row.lead.companyName ?? row.lead.website ?? "Bez mena"}${
+        row.lead.archivedRound ? ` (${row.lead.archivedRound}. kolo)` : ""
+    }`;
     return row.lead.href ? (
         <Link href={row.lead.href} className="min-w-0 font-medium hover:underline">
             {label}

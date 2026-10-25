@@ -7,15 +7,21 @@ import { can } from "@/lib/permissions";
 import { requireUser } from "@/lib/access/user";
 import { getAdminUserStats } from "@/lib/queries/users";
 import { getTeamOptions } from "@/lib/queries/teams";
+import { getPoolCount } from "@/lib/queries/calls";
 import { ROLE_LABEL } from "@/lib/dictionaries";
-import { Users, UsersRound, ArrowRight } from "lucide-react";
+import { Users, UsersRound, ArrowRight, Recycle } from "lucide-react";
 
 export default async function AdminPage() {
     const viewer = await requireUser();
     if (!viewer) redirect("/login?deactivated=1");
     if (!can(viewer, "admin.access")) redirect("/dashboard");
 
-    const [stats, teams] = await Promise.all([getAdminUserStats(), getTeamOptions()]);
+    const canRecycle = can(viewer, "contacts.recycle");
+    const [stats, teams, poolCount] = await Promise.all([
+        getAdminUserStats(),
+        getTeamOptions(),
+        canRecycle ? getPoolCount() : Promise.resolve(0),
+    ]);
 
     return (
         <DashboardPage>
@@ -95,6 +101,36 @@ export default async function AdminPage() {
                         </Button>
                     </CardContent>
                 </Card>
+
+                {/* Recyklácia kontaktov (feature 02) */}
+                {canRecycle && (
+                    <Card className="flex flex-col">
+                        <CardHeader className="flex items-center justify-between pb-3">
+                            <div className="flex items-center gap-2">
+                                <Recycle className="h-4 w-4 text-muted-foreground" />
+                                <CardTitle className="text-base">Recyklácia kontaktov</CardTitle>
+                            </div>
+                            <Button asChild size="sm" variant="ghost" className="h-8 px-2">
+                                <Link href="/dashboard/admin/recycle">
+                                    Otvoriť
+                                    <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                                </Link>
+                            </Button>
+                        </CardHeader>
+                        <CardContent className="flex-1 space-y-3">
+                            <div>
+                                <span className="text-3xl font-semibold tabular-nums">{poolCount}</span>
+                                <span className="ml-2 text-sm text-muted-foreground">v spoločnej fronte</span>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                                Skončené a zaseknuté kontakty späť do fronty ako nové; história sa archivuje.
+                            </p>
+                            <Button asChild size="sm" variant="outline" className="w-full">
+                                <Link href="/dashboard/admin/recycle">Vybrať kontakty</Link>
+                            </Button>
+                        </CardContent>
+                    </Card>
+                )}
 
                 {/* Pozvánky – future */}
                 <Card className="flex flex-col opacity-50">
