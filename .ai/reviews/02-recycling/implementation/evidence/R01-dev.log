@@ -1,0 +1,313 @@
+▲ Next.js 16.2.9 (Turbopack)
+- Local:         http://localhost:3100
+- Network:       http://192.168.100.8:3100
+- Environments: .env
+✓ Ready in 832ms
+
+ GET /login 200 in 1566ms (next.js: 435ms, proxy.ts: 407ms, application-code: 724ms)
+(node:24860) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ GET /dashboard 200 in 884ms (next.js: 55ms, proxy.ts: 19ms, application-code: 810ms)
+ POST /login 303 in 1356ms (next.js: 10ms, proxy.ts: 11ms, application-code: 1335ms)
+  └─ ƒ authenticate(undefined, {}) in 416ms lib/actions/index.ts
+ GET /dashboard/admin 200 in 545ms (next.js: 55ms, proxy.ts: 20ms, application-code: 469ms)
+ GET /dashboard/admin/recycle 200 in 335ms (next.js: 59ms, proxy.ts: 13ms, application-code: 263ms)
+ GET /dashboard/admin/recycle?b=call_retry%2Ccall_lost%2Cdeal_lost%2Cdeal_unreachable&q=R02UImvo7tkou 200 in 444ms (next.js: 7ms, proxy.ts: 11ms, application-code: 425ms)
+ GET /dashboard/admin/recycle?b=call_retry%2Ccall_lost%2Cdeal_lost%2Cdeal_unreachable&q=R02UImvo7tkou&page=2 200 in 274ms (next.js: 8ms, proxy.ts: 16ms, application-code: 250ms)
+ POST /dashboard/admin/recycle?b=call_retry%2Ccall_lost%2Cdeal_lost%2Cdeal_unreachable&q=R02UImvo7tkou&page=2 200 in 185ms (next.js: 11ms, proxy.ts: 15ms, application-code: 160ms)
+  └─ ƒ pickRecycleFirst({"b":"call_retry,call_lost,deal_lost,deal_unreachable","q":"R02UImvo7tkou"}, 2) in 142ms lib/actions/recycling/index.ts
+ POST /dashboard/admin/recycle?b=call_retry%2Ccall_lost%2Cdeal_lost%2Cdeal_unreachable&q=R02UImvo7tkou&page=2 200 in 1095ms (next.js: 10ms, proxy.ts: 13ms, application-code: 1072ms)
+  └─ ƒ recycleLeads({"items":["[Object]","[Object]"]}) in 536ms lib/actions/recycling/index.ts
+ GET /dashboard/admin/recycle?b=call_retry%2Ccall_lost%2Cdeal_lost%2Cdeal_unreachable&q=R02UImvo7tkou&page=2 200 in 504ms (next.js: 13ms, proxy.ts: 12ms, application-code: 478ms)
+ GET /manifest.webmanifest 200 in 107ms (next.js: 75ms, proxy.ts: 16ms, application-code: 17ms)
+ GET /dashboard/admin/recycle?b=call_retry 200 in 1336ms (next.js: 10ms, proxy.ts: 22ms, application-code: 1304ms)
+ GET /dashboard/admin/recycle?b=call_retry%2Ccall_lost%2Cdeal_lost%2Cdeal_unreachable&q=R02UImvo7tkou+Active 200 in 135ms (next.js: 7ms, proxy.ts: 11ms, application-code: 118ms)
+ GET /dashboard/admin/recycle?b=call_retry%2Ccall_lost%2Cdeal_lost%2Cdeal_unreachable%2Cdeal_active&q=R02UImvo7tkou 200 in 304ms (next.js: 8ms, proxy.ts: 14ms, application-code: 281ms)
+ GET /dashboard/admin/recycle?b=call_retry%2Ccall_lost%2Cdeal_active%2Cdeal_lost%2Cdeal_unreachable&q=R02UImvo7tkou+Active 200 in 450ms (next.js: 9ms, proxy.ts: 13ms, application-code: 429ms)
+ POST /dashboard/admin/recycle?b=call_retry%2Ccall_lost%2Cdeal_active%2Cdeal_lost%2Cdeal_unreachable&q=R02UImvo7tkou+Active 200 in 568ms (next.js: 9ms, proxy.ts: 12ms, application-code: 547ms)
+  └─ ƒ recycleLeads({"items":["[Object]"]}) in 343ms lib/actions/recycling/index.ts
+ GET /dashboard/admin/recycle?b=call_retry%2Ccall_lost%2Cdeal_active%2Cdeal_lost%2Cdeal_unreachable&q=R02UImvo7tkou+Active 200 in 234ms (next.js: 13ms, proxy.ts: 15ms, application-code: 206ms)
+ GET /dashboard/calls 200 in 1680ms (next.js: 1228ms, proxy.ts: 16ms, application-code: 436ms)
+[browser] Encountered two children with the same key, `closed`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+ GET /dashboard/calls/history 200 in 1179ms (next.js: 58ms, proxy.ts: 13ms, application-code: 1109ms)
+ GET /dashboard/calls/history?userId=cmvo7tkrs0000d8vmrfa6z4nz 200 in 493ms (next.js: 9ms, proxy.ts: 17ms, application-code: 467ms)
+ GET /dashboard/pipeline/cmvo7w6jg00016kvmgx92d5zg 200 in 2.5s (next.js: 2.2s, proxy.ts: 16ms, application-code: 316ms)
+ GET /dashboard/admin/recycle?b=call_lost,call_unreachable&older=0&q=UI-TEST%20mvo7yknh 200 in 488ms (next.js: 6ms, proxy.ts: 9ms, application-code: 472ms)
+ GET /dashboard/admin 200 in 326ms (next.js: 6ms, proxy.ts: 7ms, application-code: 313ms)
+ GET /dashboard/admin/recycle?b=call_lost,call_unreachable&older=0&q=UI-TEST%20mvo7yknh 200 in 229ms (next.js: 6ms, proxy.ts: 7ms, application-code: 216ms)
+ GET /dashboard/calls/history 200 in 257ms (next.js: 5ms, proxy.ts: 7ms, application-code: 244ms)
+ GET / 200 in 120ms (next.js: 44ms, proxy.ts: 6ms, application-code: 70ms)
+ POST /dashboard/pipeline/cmvo7w6jg00016kvmgx92d5zg 303 in 299ms (next.js: 31ms, proxy.ts: 19ms, application-code: 249ms)
+  └─ ƒ logout() in 26ms lib/actions/index.ts
+ GET /login 200 in 104ms (next.js: 10ms, proxy.ts: 8ms, application-code: 86ms)
+ GET /login 200 in 54ms (next.js: 8ms, proxy.ts: 9ms, application-code: 38ms)
+ GET /dashboard 200 in 390ms (next.js: 5ms, proxy.ts: 8ms, application-code: 377ms)
+ POST /login 303 in 629ms (next.js: 14ms, proxy.ts: 9ms, application-code: 607ms)
+  └─ ƒ authenticate(undefined, {}) in 196ms lib/actions/index.ts
+ GET /dashboard 200 in 499ms (next.js: 8ms, proxy.ts: 8ms, application-code: 483ms)
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <SegmentViewNode type="layout" pagePath="layout.tsx">
+      <SegmentTrieNode>
+      <link>
+      <script>
+      <script>
+      <script>
+      <RootLayout>
+        <html lang="sk" suppressHydrationWarning={true} className="geist_a715...">
+          <body className="flex min-h...">
+            <ThemeProvider>
+              <J attribute="class" defaultTheme="system" enableSystem={true}>
+                <V attribute="class" defaultTheme="system" enableSystem={true}>
+                  <script>
+                  <Header>
+                    <header className="sticky top...">
+                      <div className="mx-auto fl...">
+                        <div>
+                        <div className="flex items...">
+                          <span>
+                          <span>
+                          <DarkModeToggle>
+                            <Button variant="outline" size="icon" className="h-8 w-8 sh..." aria-label="Prepnúť na..." ...>
+                              <button
+                                data-slot="button"
+                                data-variant="outline"
+                                data-size="icon"
+                                className={"group/button inline-flex items-center justify-center rounded-lg border bg..."}
++                               aria-label="Prepnúť na svetlý režim"
+-                               aria-label="Prepnúť na tmavý režim"
+                                onClick={function onClick}
+                              >
+                          ...
+                  ...
+ 
+ GET /dashboard/contacts 200 in 1927ms (next.js: 566ms, proxy.ts: 9ms, application-code: 1351ms)
+ POST /dashboard/contacts 200 in 221ms (next.js: 7ms, proxy.ts: 9ms, application-code: 204ms)
+  └─ ƒ updateContact("cmvo82xtt0005g0vmvpc0fv1m", {"companyName":"forged edit","phone":"+000 456"}) in 193ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 209ms (next.js: 6ms, proxy.ts: 7ms, application-code: 197ms)
+  └─ ƒ deleteContact("cmvo82xtt0005g0vmvpc0fv1m") in 187ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 273ms (next.js: 7ms, proxy.ts: 8ms, application-code: 258ms)
+  └─ ƒ updateContact("cmvo82xtt0005g0vmvpc0fv1m", {"companyName":"forged edit","phone":"+000 456"}) in 249ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 264ms (next.js: 5ms, proxy.ts: 7ms, application-code: 252ms)
+  └─ ƒ deleteContact("cmvo82xtt0005g0vmvpc0fv1m") in 244ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 383ms (next.js: 5ms, proxy.ts: 7ms, application-code: 371ms)
+  └─ ƒ updateContact("cmvo830fx0007g0vmuqzhonb1", {"companyName":"rvact_mvo82xit edited","phone":"+000 789"}) in 230ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 37ms (next.js: 6ms, proxy.ts: 9ms, application-code: 22ms)
+ POST /dashboard/contacts 200 in 31ms (next.js: 6ms, proxy.ts: 7ms, application-code: 18ms)
+ GET /dashboard/contacts 200 in 1068ms (next.js: 6ms, proxy.ts: 7ms, application-code: 1055ms)
+ POST /dashboard/contacts 200 in 234ms (next.js: 8ms, proxy.ts: 13ms, application-code: 213ms)
+  └─ ƒ updateContact("cmvo83nxs0005x4vmj8tie3ck", {"companyName":"forged edit","phone":"+000 456"}) in 203ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 209ms (next.js: 5ms, proxy.ts: 7ms, application-code: 197ms)
+  └─ ƒ deleteContact("cmvo83nxs0005x4vmj8tie3ck") in 189ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 268ms (next.js: 6ms, proxy.ts: 8ms, application-code: 254ms)
+  └─ ƒ updateContact("cmvo83nxs0005x4vmj8tie3ck", {"companyName":"forged edit","phone":"+000 456"}) in 245ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 273ms (next.js: 6ms, proxy.ts: 7ms, application-code: 259ms)
+  └─ ƒ deleteContact("cmvo83nxs0005x4vmj8tie3ck") in 251ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 401ms (next.js: 5ms, proxy.ts: 9ms, application-code: 387ms)
+  └─ ƒ updateContact("cmvo83pv70007x4vmwyuc461k", {"companyName":"rvact_mvo83nlv edited","phone":"+000 789"}) in 240ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 39ms (next.js: 7ms, proxy.ts: 9ms, application-code: 24ms)
+ POST /dashboard/contacts 200 in 41ms (next.js: 8ms, proxy.ts: 11ms, application-code: 23ms)
+ GET /dashboard/calls 200 in 278ms (next.js: 8ms, proxy.ts: 13ms, application-code: 257ms)
+[browser] Encountered two children with the same key, `closed`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Encountered two children with the same key, `closed`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+ POST /dashboard/calls 200 in 406ms (next.js: 10ms, proxy.ts: 29ms, application-code: 367ms)
+  └─ ƒ claimBatch() in 161ms lib/actions/calls/claims.ts
+ GET /dashboard/calls 200 in 222ms (next.js: 28ms, proxy.ts: 10ms, application-code: 184ms)
+[browser] Encountered two children with the same key, `closed`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+[browser] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+[browser] Encountered two children with the same key, `closed`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+ POST /dashboard/calls 200 in 867ms (next.js: 10ms, proxy.ts: 31ms, application-code: 826ms)
+  └─ ƒ logCall({"expectedRevision":2,"idempotencyKey":"bf6e971e-fb1e-4507-b92f-467e711ea63a","leadId":"R02UImvo7tkou_001","...":"2 items not stringified"}) in 387ms lib/actions/calls/index.ts
+[browser] Encountered two children with the same key, `closed`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+ GET /dashboard/calls 200 in 408ms (next.js: 6ms, proxy.ts: 7ms, application-code: 395ms)
+[browser] Encountered two children with the same key, `closed`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+ GET /dashboard/contacts 200 in 561ms (next.js: 6ms, proxy.ts: 7ms, application-code: 548ms)
+ POST /dashboard/contacts 200 in 216ms (next.js: 5ms, proxy.ts: 7ms, application-code: 203ms)
+  └─ ƒ updateContact("cmvo85e440005ngvm49ajlfnr", {"companyName":"forged edit","phone":"+000 456"}) in 195ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 214ms (next.js: 5ms, proxy.ts: 10ms, application-code: 199ms)
+  └─ ƒ deleteContact("cmvo85e440005ngvm49ajlfnr") in 191ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 277ms (next.js: 5ms, proxy.ts: 7ms, application-code: 265ms)
+  └─ ƒ updateContact("cmvo85e440005ngvm49ajlfnr", {"companyName":"forged edit","phone":"+000 456"}) in 258ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 263ms (next.js: 5ms, proxy.ts: 7ms, application-code: 251ms)
+  └─ ƒ deleteContact("cmvo85e440005ngvm49ajlfnr") in 243ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 380ms (next.js: 5ms, proxy.ts: 7ms, application-code: 368ms)
+  └─ ƒ updateContact("cmvo85fmt0007ngvmmw3rhkfu", {"companyName":"rvact_mvo85dt5 edited","phone":"+000 789"}) in 230ms lib/actions/contacts/index.ts
+ POST /dashboard/admin/recycle 200 in 122ms (next.js: 5ms, proxy.ts: 8ms, application-code: 109ms)
+  └─ ƒ recycleLeads({"items":["[Object]"]}) in 28ms lib/actions/recycling/index.ts
+ POST /dashboard/admin/recycle 200 in 115ms (next.js: 5ms, proxy.ts: 7ms, application-code: 102ms)
+  └─ ƒ recycleLeads({"items":["[Object]"]}) in 31ms lib/actions/recycling/index.ts
+ GET /dashboard/calls 200 in 408ms (next.js: 6ms, proxy.ts: 7ms, application-code: 395ms)
+[browser] Encountered two children with the same key, `closed`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+ GET / 200 in 88ms (next.js: 12ms, proxy.ts: 8ms, application-code: 67ms)
+ POST /dashboard/calls 303 in 166ms (next.js: 11ms, proxy.ts: 14ms, application-code: 141ms)
+  └─ ƒ logout() in 28ms lib/actions/index.ts
+ GET /login 200 in 150ms (next.js: 9ms, proxy.ts: 6ms, application-code: 135ms)
+ GET /login 200 in 99ms (next.js: 11ms, proxy.ts: 8ms, application-code: 80ms)
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <SegmentViewNode type="layout" pagePath="layout.tsx">
+      <SegmentTrieNode>
+      <link>
+      <script>
+      <script>
+      <script>
+      <RootLayout>
+        <html lang="sk" suppressHydrationWarning={true} className="geist_a715...">
+          <body className="flex min-h...">
+            <ThemeProvider>
+              <J attribute="class" defaultTheme="system" enableSystem={true}>
+                <V attribute="class" defaultTheme="system" enableSystem={true}>
+                  <script>
+                  <Header>
+                    <header className="sticky top...">
+                      <div className="mx-auto fl...">
+                        <div>
+                        <div className="flex items...">
+                          <span>
+                          <span>
+                          <DarkModeToggle>
+                            <Button variant="outline" size="icon" className="h-8 w-8 sh..." aria-label="Prepnúť na..." ...>
+                              <button
+                                data-slot="button"
+                                data-variant="outline"
+                                data-size="icon"
+                                className={"group/button inline-flex items-center justify-center rounded-lg border bg..."}
++                               aria-label="Prepnúť na svetlý režim"
+-                               aria-label="Prepnúť na tmavý režim"
+                                onClick={function onClick}
+                              >
+                          ...
+                  ...
+ 
+ GET /dashboard 200 in 823ms (next.js: 8ms, proxy.ts: 12ms, application-code: 804ms)
+ POST /login 303 in 1110ms (next.js: 13ms, proxy.ts: 9ms, application-code: 1088ms)
+  └─ ƒ authenticate(undefined, {}) in 237ms lib/actions/index.ts
+ GET /dashboard/admin/recycle?b=call_lost&older=0&q=R02UImvo7tkou&page=2 200 in 345ms (next.js: 9ms, proxy.ts: 11ms, application-code: 326ms)
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <SegmentViewNode type="layout" pagePath="layout.tsx">
+      <SegmentTrieNode>
+      <link>
+      <script>
+      <script>
+      <script>
+      <RootLayout>
+        <html lang="sk" suppressHydrationWarning={true} className="geist_a715...">
+          <body className="flex min-h...">
+            <ThemeProvider>
+              <J attribute="class" defaultTheme="system" enableSystem={true}>
+                <V attribute="class" defaultTheme="system" enableSystem={true}>
+                  <script>
+                  <Header>
+                    <header className="sticky top...">
+                      <div className="mx-auto fl...">
+                        <div>
+                        <div className="flex items...">
+                          <span>
+                          <span>
+                          <DarkModeToggle>
+                            <Button variant="outline" size="icon" className="h-8 w-8 sh..." aria-label="Prepnúť na..." ...>
+                              <button
+                                data-slot="button"
+                                data-variant="outline"
+                                data-size="icon"
+                                className={"group/button inline-flex items-center justify-center rounded-lg border bg..."}
++                               aria-label="Prepnúť na svetlý režim"
+-                               aria-label="Prepnúť na tmavý režim"
+                                onClick={function onClick}
+                              >
+                          ...
+                  ...
+ 
+ POST /dashboard/admin/recycle?b=call_lost&older=0&q=R02UImvo7tkou&page=2 200 in 813ms (next.js: 11ms, proxy.ts: 13ms, application-code: 789ms)
+  └─ ƒ recycleLeads({"items":["[Object]","[Object]"]}) in 499ms lib/actions/recycling/index.ts
+ GET /dashboard/admin/recycle?b=call_lost&older=0&q=R02UImvo7tkou&page=2 200 in 265ms (next.js: 8ms, proxy.ts: 13ms, application-code: 244ms)
+ GET /dashboard/admin/recycle 200 in 962ms (next.js: 7ms, proxy.ts: 11ms, application-code: 944ms)
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <SegmentViewNode type="layout" pagePath="layout.tsx">
+      <SegmentTrieNode>
+      <link>
+      <script>
+      <script>
+      <script>
+      <RootLayout>
+        <html lang="sk" suppressHydrationWarning={true} className="geist_a715...">
+          <body className="flex min-h...">
+            <ThemeProvider>
+              <J attribute="class" defaultTheme="system" enableSystem={true}>
+                <V attribute="class" defaultTheme="system" enableSystem={true}>
+                  <script>
+                  <Header>
+                    <header className="sticky top...">
+                      <div className="mx-auto fl...">
+                        <div>
+                        <div className="flex items...">
+                          <span>
+                          <span>
+                          <DarkModeToggle>
+                            <Button variant="outline" size="icon" className="h-8 w-8 sh..." aria-label="Prepnúť na..." ...>
+                              <button
+                                data-slot="button"
+                                data-variant="outline"
+                                data-size="icon"
+                                className={"group/button inline-flex items-center justify-center rounded-lg border bg..."}
++                               aria-label="Prepnúť na svetlý režim"
+-                               aria-label="Prepnúť na tmavý režim"
+                                onClick={function onClick}
+                              >
+                          ...
+                  ...
+ 

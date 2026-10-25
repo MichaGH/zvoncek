@@ -43,6 +43,29 @@ Design: `context/features/02-recycling/recycling-spec.md` (all questions decided
 - **Not verified / still owed:** Michal's click-through in a browser (selection, "Vybrať prvých N", confirm dialog,
   skipped list, paging) — runbook A3; commit + PR; the production rollout.
 
+- **Implementation review R01 (2026-10-25): CHANGES REQUIRED.** Review:
+  `.ai/reviews/02-recycling/implementation/R01.md`. Five confirmed issues: child `updatedAt` timestamps overwritten
+  during archival; incomplete bulk warnings; missing open-client-request filters; archived-deal history links open
+  404; recycling the last page can leave a blank list with no paging controls. No application fixes in this review.
+  Original concurrency suite **261/261**, existing HTTP render check **10/10**, additional actual server-action
+  checks **6/6**. Added `prisma/backfill/check-recycling-review.ts`: **26 passed / 3 failed** (two timestamp assertions
+  and the dead history link), including forced races in both lock orders, transaction rollback, partial-batch retry,
+  repeated rounds, tracking ingest, and a 500-contact batch (68.448 s). Type checking/build passed; full lint still
+  has the known MobileNav error and an existing check-script warning; new review scripts lint clean. Schema diff
+  empty on `ep-divine-waterfall-asbkuort` / `neondb`; no schema/backfill/production changes. Automated browser
+  click-through completed on desktop and at 390 × 844 as admin and an isolated TELESALES caller, including selection,
+  first-N, skips, recycling, claim, round badge and a fresh call; it reproduced the warning, history and paging bugs.
+  This does not mark Michal's separate rollout approval complete. Review fixtures cleaned and invariants audited.
+- **R01 second pass (2026-10-25).** `.ai/reviews/02-recycling/implementation/R01-follow-up.md`; original R01 unchanged.
+  Added `check-recycling-second-pass.ts`: **52/54 passed**. Both failures reproduce one inherited pipeline bug:
+  `got_design` overwrites the search OR, so its list/count ignore text search (same code in `origin/main`, not
+  introduced by recycling). No additional recycling-specific defect confirmed. New passing coverage: actual pipeline,
+  dashboards, ownership history and daily attribution readers; 20 filter combinations, literal searches; seven
+  archive mutation refusals; forced races against task creation, owner change and caller transfer, both orders;
+  complete recycle → claim → interested call → clean new deal projection; actual FK inventory. Type check and targeted
+  lint passed. Review fixtures cleaned, invariant audit clean on the same development endpoint. No application fixes
+  or production/schema changes; the original five findings remain open.
+
 ---
 
 # Feature: caller assignment, SALES_REP, /dashboard/clients, manager oversight
