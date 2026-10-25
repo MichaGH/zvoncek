@@ -1,0 +1,24 @@
+OK   closed recent: {"section":"CLOSED_RECENT"}
+OK   closed old: {"section":"ARCHIVED"}
+OK   closed without closedAt: {"section":"ARCHIVED"}
+OK   closed stays closed even if a lock were reported: {"section":"CLOSED_RECENT"}
+OK   locked step wins over overdue (wave 3): {"section":"WAITING_ON_MANAGER"}
+OK   locked step without date is not 'bez termínu': {"section":"WAITING_ON_MANAGER"}
+OK   locked snoozed deal is not 'zobudený': {"section":"WAITING_ON_MANAGER"}
+OK   locked deal without any step: {"section":"WAITING_ON_MANAGER"}
+OK   snoozed without date: {"section":"TODAY","badge":"chýba dátum"}
+OK   snoozed due: {"section":"TODAY","badge":"zobudený"}
+OK   snoozed future: {"section":"SNOOZED"}
+OK   no next action: {"section":"TODAY","badge":"bez ďalšieho kroku"}
+OK   in progress: {"section":"IN_PROGRESS"}
+OK   waiting, check due: {"section":"TODAY","badge":"skontrolovať"}
+OK   waiting, no date: {"section":"WAITING_ON_CLIENT"}
+OK   waiting, future check: {"section":"WAITING_ON_CLIENT"}
+OK   scheduled without date: {"section":"TODAY","badge":"bez termínu"}
+OK   overdue day-only: {"section":"TODAY"}
+OK   exact later today counts as today: {"section":"TODAY"}
+OK   exact tomorrow 00:30 is planned: {"section":"PLANNED"}
+OK   future planned: {"section":"PLANNED"}
+OK   totality over 4200 combinations: 0
+
+all client-section checks passed

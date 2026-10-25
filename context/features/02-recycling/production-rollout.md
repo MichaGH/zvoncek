@@ -42,7 +42,7 @@ Below this prefix is written as `$PROD`.
       `context/progress-tracker.md`.
 - [ ] **A3. Click-through:** Michal recycled a few contacts on localhost against the dev copy, saw them in the pool,
       claimed them as a caller, checked a recycled deal disappeared from the pipeline.
-- [x] **A4. Reviewed schema SQL** (done 2026-10-25: exactly the 7 statements below) saved as `context/features/02-recycling/sql/01-recycling-schema.sql`, generated
+- [x] **A4. Reviewed schema SQL** (done 2026-10-25: four SQL statements implementing seven schema operations below) saved as `context/features/02-recycling/sql/01-recycling-schema.sql`, generated
       offline from the production schema (= `origin/main`) to the new schema:
       ```bash
       git show origin/main:prisma/schema.prisma > <scratch>/schema-main.prisma
@@ -57,6 +57,11 @@ Below this prefix is written as `$PROD`.
 - [ ] **A6. Commit + PR** (only when Michal asks): branch → PR into `main`. **Do not merge yet** — Vercel production
       builds from `main`; merging is the deploy.
 - [ ] **A7. Vercel:** note the current production deployment id — the rollback target: `[deployment id]`.
+- [ ] **A7a. Request duration:** verify the deployed recycle route's function allowance honors `maxDuration = 300`
+      seconds. The command uses up to five sequential 30 s transactions (10 s lock timeout each); a 500-contact local
+      command exceeded 60 s. Rehearse a 500-contact submission and response-loss retry on a deployment connected only
+      to the development copy. Retry the same ids and original revisions; verify one archive per ended round. Do not
+      infer the actual hosting limit from a local dev-server run or from the code setting alone.
 - [ ] **A8. Team told:** a ~10 minute pause in Zvonček at `[HH:MM]` (the deploy restarts the app; the schema change
       itself takes a lock for well under a second).
 
@@ -96,7 +101,8 @@ Below this prefix is written as `$PROD`.
          UNREACHABLE 420, call RETRY 1 432, deal LOST 61, deal UNREACHABLE 7 — slightly more by now).
       3. Recycle **one** harmless contact Michal picks (e.g. a call-stage "Nemajú záujem" from June). Note its `#number`:
          `[#…]`.
-      4. The pool count in the page header went up by 1; the contact shows as new ("2. kolo") in Kontakty.
+      4. The pool count in the page header went up by 1; the contact shows as NEW in Kontakty. After claiming it,
+         the call queue and call drawer show "2. kolo" (Kontakty does not display a round badge).
       5. Read-only SQL check for that contact (replace the number):
          ```sql
          SELECT l.number, l.status, l.round, l."assignedCallerId" IS NULL AS unassigned,

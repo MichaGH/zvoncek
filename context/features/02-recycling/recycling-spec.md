@@ -431,3 +431,80 @@ timea's retries to them today (§2.3); they would then be retries instead of rou
 | Bad numbers come back | warning icon + dialog warning; not pre-selected |
 | An active deal disappears from a rep's pipeline unexpectedly | owner column, owner filter, explicit dialog warning |
 | Production write mistake | additive schema only; restore branch before; no data migration at rollout; recycling happens through the reviewed command, contact by contact |
+
+---
+
+## 15. Addition after review R01 and its resolution — Kontakty shows what is available to call
+
+**Added 2026-10-25, after implementation review R01 (`.ai/reviews/02-recycling/implementation/R01.md`) and its
+resolution (`R01-resolution.md`, all six findings resolved).** Michal found this while clicking through the resolved
+build. Decisions K1–K5 below were left to Claude by Michal ("you decide"); the recommended defaults were taken.
+
+### 15.1 The problem
+
+After recycling on the dev copy, Michal opened **Kontakty** and could not find the recycled contacts. Measured on
+`ep-divine-waterfall-asbkuort` the same day:
+
+- They **are** in Kontakty: 200 contacts in round 2, all `NEW`, all in the shared pool.
+- Kontakty has one order only — when the contact was first added, newest first, 50 per page. Recycling deliberately
+  keeps `createdAt` (§4.3: scout attribution and "contacts added" statistics), so the 200 sit at **positions
+  3 274–4 204 of 4 207**, about 65 clicks on "Načítať ďalších 50".
+- Even when found they show only "Nový", exactly like a contact added today.
+- The header already counts them ("N voľných na volanie" uses `POOL_WHERE`), but there is no list behind the number.
+
+Michal needs today's view kept (scouts use it to see what they added) **and** a view of everything available to call
+right now, new and recycled together, with recycled ones marked.
+
+### 15.2 Decided design
+
+**View switch** at the top of Kontakty (`view` in the URL):
+
+| View | Label | Shows | Order |
+|---|---|---|---|
+| `added` (default) | **Pridané** | every contact in scope — today's list, unchanged | added, newest first |
+| `pool` | **Na volanie** | what a caller gets with "Vziať ďalších 10" now: `POOL_WHERE` (NEW, nobody holds it, never called in this round), new **and** recycled | **queue order** — the same `COALESCE(roundStartedAt, createdAt), id` as `claimBatchAs`, so row 1 is what the next caller gets |
+
+**Kolo filter** (`round` in the URL), combinable with both views and with the existing filters:
+Všetky kolá · Len nové (1. kolo) · Len recyklované (2. kolo a ďalšie).
+
+| Question | How |
+|---|---|
+| What did scouts add? | Pridané |
+| What can be called right now? | Na volanie |
+| Only recycled / only fresh waiting to be called? | Na volanie + Kolo |
+| What did I recycle and what happened to it since? | Pridané + Len recyklované |
+
+**Marking** (desktop table and phone cards): status badge unchanged plus a small **"2. kolo"** badge when
+`round > 1` (same wording as the call board); under the date "recykl. 25. 10." (`roundStartedAt`); in Na volanie the
+first column is the **position in the queue**.
+
+**Counts:** each view on the switch shows a count computed with the same scope, filters and predicate as its list
+(`ui-context.md` §5). The header's "N voľných na volanie" links to Na volanie.
+
+**Scope is unchanged** and server-side: admin / manager see all (existing filters), a scout leader their team, a
+scout their own. Na volanie inside a scope = the part of the pool that belongs to it. A scout's own recycled
+contacts show "2. kolo" and stay locked for edit / delete (§7).
+
+| # | Decision |
+|---|---|
+| K1 | Two views + the Kolo filter (no separate "Recyklované" tab) |
+| K2 | Na volanie = shared pool only; a caller's claimed batch stays under the existing "Volá" filter |
+| K3 | Badge text "2. kolo" |
+| K4 | Scouts and scout leaders may use Na volanie within their own scope |
+| K5 | The header number links to Na volanie |
+
+### 15.3 Implementation notes
+
+- No schema change.
+- The queue order exists in two places (claim SQL and the Kontakty pool list) → **one shared SQL fragment**
+  `POOL_ORDER_SQL` next to `POOL_WHERE`, plus a test that the first 10 rows of Na volanie are exactly what
+  `claimBatchAs` claims next (`code-standards.md` §5).
+- `ContactsFilterBar` rebuilds the query string from scratch; it must carry `view` and `round`, or any filter change
+  jumps back to Pridané.
+- Not changed: recycling itself, the call queue, the claim's behaviour, today's default list.
+
+### 15.4 Alternatives rejected
+
+Sorting Kontakty by "entered the pool" (breaks the scouts' view) · resetting `createdAt` on recycle (corrupts scout
+statistics) · a new status "Recyklovaný" (`NEW` is a business state the whole app relies on) · only a link from the
+recycle page (Michal looks for contacts in Kontakty).

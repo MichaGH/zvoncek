@@ -74,7 +74,7 @@ export async function getCallHistory(viewer: AccessUser, userId: string | null) 
                     !isDeal &&
                     ["NEW", "CALLING", "SNOOZED"].includes(l.status)));
         const leadHref =
-            isDeal && (can(viewer, "deals.viewAll") || (can(viewer, "deals.view") && l.ownerId === viewer.id))
+            l.deletedAt === null && isDeal && (can(viewer, "deals.viewAll") || (can(viewer, "deals.view") && l.ownerId === viewer.id))
                 ? `/dashboard/pipeline/${l.id}`
                 : null;
         // Wave 5, Q2: výsledok hovoru hovorí len „majú záujem" – ČO chceli, je v riadku histórie.

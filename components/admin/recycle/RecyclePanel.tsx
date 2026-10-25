@@ -16,19 +16,19 @@ import type { RecycleSkip } from "@/lib/commands/recycling";
 import { formatBusinessDateTime } from "@/lib/domain/businessTime";
 import { REQUEST_SHORT_LABEL } from "@/lib/domain/clientRequests";
 import {
-    RECYCLE_BUCKETS,
     RECYCLE_BUCKET_LABEL,
     RECYCLE_MAX_ITEMS,
     RECYCLE_PAGE_SIZE,
     RECYCLE_SKIP_LABEL,
     recycleHref,
+    recycleSelection,
+    summarizeRecycleSelection,
     type RecycleBucket,
     type RecycleParams,
+    type RecycleSelection,
 } from "@/lib/domain/recycling";
 import { OUTCOME_LABEL, STATUS_LABEL } from "@/lib/dictionaries";
 import type { RecycleRow } from "@/lib/queries/recycling";
-
-type Picked = { expectedRevision: number; bucket: RecycleBucket };
 
 function phaseLabel(bucket: RecycleBucket) {
     return bucket.startsWith("deal_") ? "Obchod" : "Volanie";
@@ -45,9 +45,9 @@ function gotText(row: RecycleRow) {
     return [got && `dostali ${got}`, asked].filter(Boolean).join(" · ") || "—";
 }
 
-export default function RecyclePanel({ params, total, rows }: { params: RecycleParams; total: number; rows: RecycleRow[] }) {
+export default function RecyclePanel({ params, total, rows, now }: { params: RecycleParams; total: number; rows: RecycleRow[]; now: number }) {
     const router = useRouter();
-    const [selected, setSelected] = useState<Map<string, Picked>>(new Map());
+    const [selected, setSelected] = useState<Map<string, RecycleSelection>>(new Map());
     const [pickN, setPickN] = useState("100");
     const [confirmOpen, setConfirmOpen] = useState(false);
     const [skipped, setSkipped] = useState<RecycleSkip[]>([]);
@@ -57,17 +57,14 @@ export default function RecyclePanel({ params, total, rows }: { params: RecycleP
     const allOnPage = rows.length > 0 && pageIds.every((id) => selected.has(id));
     const pages = Math.max(1, Math.ceil(total / RECYCLE_PAGE_SIZE));
 
-    const byBucket = useMemo(() => {
-        const counts = new Map<RecycleBucket, number>();
-        for (const p of selected.values()) counts.set(p.bucket, (counts.get(p.bucket) ?? 0) + 1);
-        return RECYCLE_BUCKETS.filter((b) => counts.has(b)).map((b) => ({ bucket: b, n: counts.get(b)! }));
-    }, [selected]);
+    const summary = useMemo(() => summarizeRecycleSelection(selected.values(), now), [selected, now]);
+    const byBucket = summary.buckets;
     const countOf = (b: RecycleBucket) => byBucket.find((x) => x.bucket === b)?.n ?? 0;
 
     function toggle(row: RecycleRow, on: boolean) {
         setSelected((prev) => {
             const next = new Map(prev);
-            if (on) next.set(row.id, { expectedRevision: row.revision, bucket: row.bucket });
+            if (on) next.set(row.id, recycleSelection(row));
             else next.delete(row.id);
             return next;
         });
@@ -77,7 +74,7 @@ export default function RecyclePanel({ params, total, rows }: { params: RecycleP
         setSelected((prev) => {
             const next = new Map(prev);
             for (const row of rows) {
-                if (on) next.set(row.id, { expectedRevision: row.revision, bucket: row.bucket });
+                if (on) next.set(row.id, recycleSelection(row));
                 else next.delete(row.id);
             }
             return next;
@@ -94,7 +91,7 @@ export default function RecyclePanel({ params, total, rows }: { params: RecycleP
                 toast.error(r.error);
                 return;
             }
-            setSelected(new Map(r.items.map((i) => [i.leadId, { expectedRevision: i.expectedRevision, bucket: i.bucket as RecycleBucket }])));
+            setSelected(new Map(r.items.map((i) => [i.leadId, i])));
         });
     }
 
@@ -162,6 +159,11 @@ export default function RecyclePanel({ params, total, rows }: { params: RecycleP
                         Recyklovať…
                     </Button>
                 </div>
+                {byBucket.length > 0 && (
+                    <p className="w-full px-1 text-xs text-muted-foreground">
+                        {byBucket.map(({ bucket, n }) => `${phaseLabel(bucket)} – ${RECYCLE_BUCKET_LABEL[bucket]}: ${n}`).join(" · ")}
+                    </p>
+                )}
                 {selected.size > RECYCLE_MAX_ITEMS && (
                     <p className="w-full px-1 text-xs text-destructive">Naraz najviac {RECYCLE_MAX_ITEMS} kontaktov.</p>
                 )}
@@ -176,7 +178,7 @@ export default function RecyclePanel({ params, total, rows }: { params: RecycleP
                                     checked={allOnPage}
                                     onCheckedChange={(v) => togglePage(v === true)}
                                     aria-label="Vybrať celú stranu"
-                                    disabled={rows.length === 0}
+                                    disabled={busy || rows.length === 0}
                                 />
                             </TableHead>
                             <TableHead>#</TableHead>
@@ -204,6 +206,7 @@ export default function RecyclePanel({ params, total, rows }: { params: RecycleP
                                 <TableCell>
                                     <Checkbox
                                         checked={selected.has(row.id)}
+                                        disabled={busy}
                                         onCheckedChange={(v) => toggle(row, v === true)}
                                         aria-label={`Vybrať #${row.number}`}
                                     />
@@ -285,11 +288,16 @@ export default function RecyclePanel({ params, total, rows }: { params: RecycleP
                             ))}
                         </ul>
                     </div>
-                    {(countOf("call_unreachable") > 0 || countOf("deal_active") > 0 || countOf("deal_snoozed") > 0 || countOf("call_scheduled") > 0) && (
+                    {(countOf("call_unreachable") > 0 || summary.owners.length > 0 || summary.asks.length > 0 || summary.recent > 0 || countOf("call_scheduled") > 0) && (
                         <ul className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
                             {countOf("call_unreachable") > 0 && <li>⚠ {countOf("call_unreachable")} so zlým číslom – volajúci dostane to isté číslo.</li>}
-                            {countOf("deal_active") > 0 && <li>⚠ {countOf("deal_active")} aktívnych obchodov – zmiznú z pipeline vlastníka.</li>}
-                            {countOf("deal_snoozed") > 0 && <li>⚠ {countOf("deal_snoozed")} spiacich obchodov – zmiznú z pipeline vlastníka.</li>}
+                            {summary.owners.map((owner) => (
+                                <li key={owner.id ?? "none"}>⚠ {owner.name}: aktívne {owner.active}, spiace {owner.snoozed} – zmiznú z pipeline vlastníka.</li>
+                            ))}
+                            {summary.asks.map(({ content, n }) => (
+                                <li key={content}>⚠ Chceli {REQUEST_SHORT_LABEL[content]}: {n}×. Otvorené požiadavky sa presunú do archívu.</li>
+                            ))}
+                            {summary.recent > 0 && <li>⚠ Nedávny kontakt alebo pridanie (posledných 30 dní): {summary.recent}×.</li>}
                             {countOf("call_scheduled") > 0 && <li>⚠ {countOf("call_scheduled")} dohodnutých volaní – termín sa stratí.</li>}
                         </ul>
                     )}

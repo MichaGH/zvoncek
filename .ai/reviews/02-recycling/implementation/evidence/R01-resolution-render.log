@@ -1,0 +1,21 @@
+(node:29012) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS  admin: page renders – status=200
+PASS  admin: header shows pool and batches
+PASS  admin: the 3 fixture contacts are listed with the right buckets – Nájdené: 3
+PASS  admin: holder shown (the caller)
+PASS  admin: bucket chips with counts (Volania / Obchody rows)
+PASS  manager (no contacts.recycle): redirected away – status=302 → /dashboard
+PASS  admin landing shows the recycle card
+PASS  recycle one via the command – {"recycled":1,"skipped":[]}
+PASS  after recycling the panel shows 2 – Nájdené: 2
+PASS  caller history: archived call shows the live #number + '(1. kolo)'
+
+10/10 checks passed

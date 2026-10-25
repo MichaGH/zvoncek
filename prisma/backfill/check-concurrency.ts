@@ -5813,6 +5813,64 @@ tests.rc9Parity = async () => {
     check(`RC-9: bucket + eligibility agree in TS and SQL over ${rows.length} leads`, diff.length === 0, diff.slice(0, 3).map((d) => d.id).join(","));
 };
 
+// ── Kontakty: Pridané / Na volanie + Kolo (feature 02 §15) ──────────────────────────────────────────────────
+
+// KV-1: prvých 10 v „Na volanie" je presne to, čo zoberie ďalší claimBatchAs (jedno POOL_ORDER_SQL), recyklovaný
+// kontakt stojí vo fronte podľa času recyklácie.
+tests.kvClaimOrder = async () => {
+    const { recycle } = await rc();
+    const { getContactsList } = await import("../../lib/queries/contacts");
+    const caller = await makeUser("TELESALES");
+    const recycled = await makeAssignedLead(caller.id, "CALLING");
+    await logCallAs(caller, { leadId: recycled, outcome: "NOT_INTERESTED", expectedRevision: await leadRev(recycled), idempotencyKey: key() });
+    await recycle([recycled]);
+    // Fixture kontakty (2001) sú na čele fronty pred dátami vetvy; recyklovaný kontakt dáme úplne dopredu.
+    await makePoolLeads(12);
+    await prisma.lead.update({ where: { id: recycled }, data: { roundStartedAt: new Date("2000-12-31T00:00:00Z") } });
+    const listed = (await getContactsList({ view: "pool", take: 10 })).rows;
+    const claimer = await makeUser("TELESALES");
+    await claimBatchAs(claimer);
+    const claimed = (await prisma.lead.findMany({ where: { assignedCallerId: claimer.id, status: "NEW" }, select: { id: true } })).map((l) => l.id).sort();
+    const listedIds = listed.map((r) => r.id);
+    check("KV-1: the first 10 of Kontakty → Na volanie are exactly what the next claim takes",
+        sameJson([...listedIds].sort(), claimed), `listed=${listedIds.length} claimed=${claimed.length}`);
+    check("KV-1: the recycled contact is in Na volanie in its queue place, marked round 2",
+        listed[0]?.id === recycled && listed[0]?.round === 2 && listed[0]?.recycledAt !== null, JSON.stringify(listed[0] ?? null));
+};
+
+// KV-2: počty na prepínači = dĺžka zoznamu, rozsah scouta drží, filter kola funguje v oboch pohľadoch.
+tests.kvCountsScope = async () => {
+    const { recycle } = await rc();
+    const { getContactsList, getContactsViewCounts } = await import("../../lib/queries/contacts");
+    const scout = await makeUser("SCOUT");
+    const other = await makeUser("SCOUT");
+    const caller = await makeUser("TELESALES");
+    const [a, b] = await makePoolLeads(2);
+    const c = await makeAssignedLead(caller.id, "CALLING");
+    const d = await makeAssignedLead(caller.id, "CALLING");
+    const [foreign] = await makePoolLeads(1);
+    await prisma.lead.updateMany({ where: { id: { in: [a, b, c, d] } }, data: { createdById: scout.id } });
+    await prisma.lead.update({ where: { id: foreign }, data: { createdById: other.id } });
+    await recycle([c]); // c: 2. kolo vo fronte; d ostáva u volajúceho
+    const scope = { createdById: scout.id };
+    const results: Record<string, { count: number; listed: string[] }> = {};
+    for (const round of ["all", "1", "2"] as const) {
+        const counts = await getContactsViewCounts({ ...scope, round });
+        for (const view of ["added", "pool"] as const) {
+            const rows = (await getContactsList({ ...scope, round, view, take: 500 })).rows;
+            results[`${view}/${round}`] = { count: counts[view], listed: rows.map((r) => r.id).sort() };
+        }
+    }
+    const want: Record<string, string[]> = {
+        "added/all": [a, b, c, d], "pool/all": [a, b, c],
+        "added/1": [a, b, d], "pool/1": [a, b],
+        "added/2": [c], "pool/2": [c],
+    };
+    const bad = Object.entries(want).filter(([k, ids]) => !sameJson(results[k].listed, [...ids].sort()) || results[k].count !== ids.length);
+    check("KV-2: Pridané / Na volanie × Kolo return exactly the scout's contacts, and every count equals its list",
+        bad.length === 0, bad.map(([k]) => `${k}: count=${results[k].count} listed=${results[k].listed.length}`).join("; "));
+};
+
 async function main() {
     passwordHash = await bcrypt.hash(`cc-${RUN}-unused`, 4);
     console.log(`endpoint=${endpoint} run=${RUN}`);

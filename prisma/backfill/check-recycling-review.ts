@@ -24,7 +24,7 @@ function check(name: string, ok: boolean, detail: unknown = "") {
     if (!ok) failures++;
     console.log(`${ok ? "PASS" : "FAIL"} ${name} ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
 }
-async function makeUser(role: "ADMIN" | "TELESALES" | "SCOUT"): Promise<AccessUser> {
+async function makeUser(role: "ADMIN" | "TELESALES" | "SALES_REP" | "SCOUT"): Promise<AccessUser> {
     const u = await prisma.user.create({ data: { username: `${run}_${users.length}`.slice(-20), firstName: run, lastName: role, role, password: "unused-review-account" } });
     users.push(u.id);
     return u;
@@ -50,11 +50,33 @@ async function main() {
         versions: { create: { version: 1, url: "https://example.invalid/review" } },
         tracker: { create: { token: run, events: { create: { type: "PAGE_VIEW", versionAtView: 1 } } } } } });
     const request = await prisma.leadRequest.create({ data: { leadId: l.id, content: "DESIGN", requestedAt: oldTime, updatedAt: oldTime } });
+    await prisma.design.create({ data: { leadId: l.id, label: "another timestamp", sentAt: oldTime,
+        deletedAt: oldTime, createdAt: oldTime, updatedAt: new Date("2021-03-04T05:06:07Z"), repoUrl: "https://example.invalid/repo", isLive: false } });
+    await prisma.leadRequest.create({ data: { leadId: l.id, content: "INFO", state: "WITHDRAWN", requestedAt: oldTime,
+        updatedAt: new Date("2022-04-05T06:07:08Z"), resolvedAt: oldTime, requestedById: caller.id, migrationKey: run } });
+    await prisma.activity.create({ data: { leadId: l.id, userId: caller.id, type: "CALL", category: "BUSINESS", source: "CALL_QUEUE",
+        outcome: "NO_ANSWER", createdAt: oldTime, note: "preserve me", leadRevision: 0, meta: { fixture: run } } });
+    await prisma.dealOwnership.create({ data: { leadId: l.id, fromUserId: caller.id, toUserId: admin.id, byUserId: admin.id, reason: "CHANGE", createdAt: oldTime } });
+    await prisma.dealTask.create({ data: { leadId: l.id, type: "HELP", status: "DONE", text: run, requestedById: caller.id,
+        assigneeId: admin.id, createdAt: oldTime, closedAt: oldTime, closedById: admin.id, fallbackKind: "CALL", fallbackNote: "keep" } });
+    const childSnapshot = async (leadId: string) => Promise.all([
+        prisma.activity.findMany({ where: { leadId }, orderBy: { id: "asc" } }),
+        prisma.leadRequest.findMany({ where: { leadId }, orderBy: { id: "asc" } }),
+        prisma.dealTask.findMany({ where: { leadId }, orderBy: { id: "asc" } }),
+        prisma.dealOwnership.findMany({ where: { leadId }, orderBy: { id: "asc" } }),
+        prisma.design.findMany({ where: { leadId }, orderBy: { id: "asc" } }),
+    ]);
+    const childrenBefore = await childSnapshot(l.id);
     const statsBefore = await getContactsAddedStats({ range: resolveRange({ period: "all" }), userId: scout.id });
     const first = await recycleLeadsAs(admin, { items: [{ leadId: l.id, expectedRevision: l.revision }] });
     check("timestamp fixture recycled", !("error" in first) && first.recycled === 1, first);
     const movedDesign = await prisma.design.findUniqueOrThrow({ where: { id: design.id }, include: { tracker: { include: { events: true } }, versions: true } });
     const movedRequest = await prisma.leadRequest.findUniqueOrThrow({ where: { id: request.id } });
+    const childrenAfter = await childSnapshot(movedDesign.leadId);
+    for (const [i, name] of ["Activity", "LeadRequest", "DealTask", "DealOwnership", "Design"].entries()) {
+        const withoutLead = (rows: { leadId: string }[]) => rows.map(({ leadId, ...fields }) => { void leadId; return fields; });
+        check(`all ${name} scalar values preserved except leadId`, JSON.stringify(withoutLead(childrenBefore[i])) === JSON.stringify(withoutLead(childrenAfter[i])));
+    }
     check("archived Design.updatedAt preserved", +movedDesign.updatedAt === +oldTime, { before: oldTime, after: movedDesign.updatedAt });
     check("archived LeadRequest.updatedAt preserved", +movedRequest.updatedAt === +oldTime, { before: oldTime, after: movedRequest.updatedAt });
     check("nested versions/events retained", movedDesign.versions.length === 1 && movedDesign.tracker?.events.length === 1);
@@ -85,13 +107,17 @@ async function main() {
     const history = await getCallHistory(admin, caller.id);
     check("round-two history uses live number, no edit/revert/link", history.some((h) => h.id === activity.id && h.lead.number === l.number && h.lead.archivedRound === 2 && !h.canEdit && !h.canRevert && h.lead.href === null));
 
-    const dealCaller = await makeUser("TELESALES");
+    const dealCaller = await makeUser("SALES_REP");
     const interestedLead = await lead({ status: "NEW", assignedCallerId: dealCaller.id });
     const interested = await logCallAs(dealCaller, { leadId: interestedLead.id, outcome: "INTERESTED", asked: ["INFO"], expectedRevision: 0, idempotencyKey: crypto.randomUUID() });
     check("interested-call fixture created", !("error" in interested), interested);
+    const liveHistory = await getCallHistory(dealCaller, dealCaller.id);
+    check("live deal history keeps working owner link", liveHistory.some((h) => h.lead.href === `/dashboard/pipeline/${interestedLead.id}`));
     await recycleLeadsAs(admin, { items: await revisionItems([interestedLead.id]) });
     const archivedDealHistory = (await getCallHistory(admin, dealCaller.id)).find((h) => h.lead.archivedRound === 1);
     check("archived deal history has no dead detail link", archivedDealHistory !== undefined && archivedDealHistory.lead.href === null, archivedDealHistory?.lead);
+    const ownerArchive = (await getCallHistory(dealCaller, dealCaller.id)).find((h) => h.lead.archivedRound === 1);
+    check("former owner archive has correct number and no link/edit/revert", ownerArchive?.lead.number === interestedLead.number && ownerArchive.lead.href === null && !ownerArchive.canEdit && !ownerArchive.canRevert);
 
     // Každý kôš a všetky poradia musia mať rovnaký výber ako zoznam aj počty.
     const queryName = `${run}_filters`;
@@ -150,11 +176,14 @@ async function main() {
 
     // RC-6 pôvodne iba strieda poradie Promise.all; to nezaručuje obe poradia zámku Lead.
     // Podržíme Lead a najprv počkáme na konkrétny DB waiter, až potom spustíme druhú operáciu.
-    async function waitForLeadWaiter(kind: "recycle" | "call") {
+    async function waitForLeadWaiter(kind: "recycle" | "call", blockerPid: number) {
         const end = Date.now() + 4_000;
         while (Date.now() < end) {
-            const waiting = await prisma.$queryRaw<{ query: string }[]>`SELECT query FROM pg_stat_activity
-                WHERE wait_event_type = 'Lock' AND query LIKE '%FROM "Lead"%' AND query LIKE '%FOR UPDATE%'`;
+            const waiting = await prisma.$queryRaw<{ query: string }[]>`WITH RECURSIVE waiting AS (
+                SELECT pid, query FROM pg_stat_activity WHERE ${blockerPid} = ANY(pg_blocking_pids(pid))
+                UNION
+                SELECT a.pid, a.query FROM pg_stat_activity a JOIN waiting w ON w.pid = ANY(pg_blocking_pids(a.pid))
+            ) SELECT DISTINCT query FROM waiting WHERE query LIKE '%FROM "Lead"%' AND query LIKE '%FOR UPDATE%'`;
             if (waiting.some((w) => kind === "recycle" ? w.query.includes("ANY(") : !w.query.includes("ANY("))) return;
             await new Promise((resolve) => setTimeout(resolve, 40));
         }
@@ -167,7 +196,9 @@ async function main() {
         let heldLead!: () => void;
         const leadRelease = new Promise<void>((resolve) => { releaseLead = resolve; });
         const leadReady = new Promise<void>((resolve) => { heldLead = resolve; });
+        let blockerPid = 0;
         const lock = prisma.$transaction(async (tx) => {
+            blockerPid = (await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`)[0].pid;
             await tx.$queryRaw`SELECT id FROM "Lead" WHERE id = ${contested.id} FOR UPDATE`;
             heldLead();
             await leadRelease;
@@ -178,9 +209,9 @@ async function main() {
         try {
             await leadReady;
             const first = order === "recycle" ? rec() : call();
-            await waitForLeadWaiter(order);
+            await waitForLeadWaiter(order, blockerPid);
             const second = order === "recycle" ? call() : rec();
-            await waitForLeadWaiter(order === "recycle" ? "call" : "recycle");
+            await waitForLeadWaiter(order === "recycle" ? "call" : "recycle", blockerPid);
             releaseLead();
             const [a, b] = await Promise.all([first, second]);
             result = order === "recycle" ? { r: a, c: b } : { r: b, c: a };

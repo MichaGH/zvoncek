@@ -55,6 +55,9 @@ const GOT_SQL: Record<NonNullable<RecycleParams["got"]>, Prisma.Sql> = {
 function leadFilter(p: RecycleParams): Prisma.Sql {
     const parts: Prisma.Sql[] = [RECYCLE_ELIGIBLE_SQL];
     if (p.got) parts.push(GOT_SQL[p.got]);
+    if (p.asked) parts.push(Prisma.sql`l."pipelineEnteredAt" IS NOT NULL AND EXISTS (
+        SELECT 1 FROM "LeadRequest" r WHERE r."leadId" = l.id AND r.state = 'OPEN' AND r.content::text = ${p.asked}
+    )`);
     if (p.round === "1") parts.push(Prisma.sql`l.round = 1`);
     if (p.round === "2") parts.push(Prisma.sql`l.round >= 2`);
     if (p.q) {
@@ -105,6 +108,17 @@ const ORDER_SQL: Record<RecycleParams["sort"], Prisma.Sql> = {
     number: Prisma.sql`l.number ASC`,
 };
 
+const OPEN_ASKS_SQL = Prisma.sql`(SELECT array_agg(DISTINCT r.content::text) FROM "LeadRequest" r
+    WHERE r."leadId" = l.id AND r.state = 'OPEN')`;
+
+async function holderNames(ids: (string | null)[]) {
+    const unique = [...new Set(ids.filter((id): id is string => Boolean(id)))];
+    const users = unique.length
+        ? await prisma.user.findMany({ where: { id: { in: unique } }, select: { id: true, firstName: true, lastName: true } })
+        : [];
+    return new Map(users.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+}
+
 type RowRaw = {
     id: string;
     number: number;
@@ -140,8 +154,7 @@ export async function getRecycleList(p: RecycleParams) {
                    (l."offerAboutUsAt" IS NOT NULL OR l."offerPricelistAt" IS NOT NULL) AS "gotInfo",
                    (l."offerPriceAt" IS NOT NULL) AS "gotPrice",
                    (l."designSentAt" IS NOT NULL) AS "gotDesign",
-                   (SELECT array_agg(DISTINCT r.content::text) FROM "LeadRequest" r
-                     WHERE r."leadId" = l.id AND r.state = 'OPEN') AS "openAsks"
+                   ${OPEN_ASKS_SQL} AS "openAsks"
               FROM c JOIN "Lead" l ON l.id = c.id
              WHERE ${outerFilter(p)}
              ORDER BY ${ORDER_SQL[p.sort]}
@@ -149,11 +162,7 @@ export async function getRecycleList(p: RecycleParams) {
         prisma.$queryRaw<{ n: number }[]>`${eligibleCte(p)} SELECT count(*)::int AS n FROM c WHERE ${outerFilter(p)}`,
     ]);
 
-    const holderIds = [...new Set(rows.map((r) => r.holder).filter((id): id is string => Boolean(id)))];
-    const users = holderIds.length
-        ? await prisma.user.findMany({ where: { id: { in: holderIds } }, select: { id: true, firstName: true, lastName: true } })
-        : [];
-    const name = new Map(users.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+    const name = await holderNames(rows.map((r) => r.holder));
 
     return {
         total: totalRows[0]?.n ?? 0,
@@ -172,6 +181,7 @@ export async function getRecycleList(p: RecycleParams) {
             bucket: r.bucket,
             lastAt: r.last_at.toISOString(),
             tries: r.tries,
+            holderId: r.holder,
             holderName: r.holder ? (name.get(r.holder) ?? "—") : null,
             lastOutcome: r.lastOutcome,
             got: { info: r.gotInfo, price: r.gotPrice, design: r.gotDesign },
@@ -216,12 +226,18 @@ export async function getRecycleHolders(p: RecycleParams) {
         .sort((a, b) => b.count - a.count);
 }
 
-// „Vybrať prvých N": id + revízia v poradí a filtri zoznamu – klient pošle presne tieto riadky.
+// „Vybrať prvých N": ten istý filter + metadata potvrdenia aj pre riadky mimo aktuálnej strany.
 export async function getRecycleFirst(p: RecycleParams, n: number) {
     const take = Math.max(1, Math.min(RECYCLE_MAX_ITEMS, Math.floor(n)));
-    return prisma.$queryRaw<{ id: string; revision: number; bucket: RecycleBucket }[]>`${eligibleCte(p)}
-        SELECT c.id, l.revision, c.bucket FROM c JOIN "Lead" l ON l.id = c.id
+    const rows = await prisma.$queryRaw<{
+        id: string; revision: number; bucket: RecycleBucket; holder: string | null; last_at: Date; openAsks: RequestContent[] | null;
+    }[]>`${eligibleCte(p)}
+        SELECT c.id, l.revision, c.bucket, c.holder, c.last_at, ${OPEN_ASKS_SQL} AS "openAsks"
+          FROM c JOIN "Lead" l ON l.id = c.id
          WHERE ${outerFilter(p)} ORDER BY ${ORDER_SQL[p.sort]} LIMIT ${take}`;
+    const names = await holderNames(rows.map((r) => r.holder));
+    return rows.map((r) => ({ id: r.id, revision: r.revision, bucket: r.bucket, holderId: r.holder,
+        holderName: r.holder ? (names.get(r.holder) ?? "—") : null, lastAt: r.last_at.toISOString(), openAsks: r.openAsks ?? [] }));
 }
 
 // Hlavička panelu: koľko práce už čaká, než pridáme ďalšiu.
@@ -232,5 +248,5 @@ export async function getRecycleHeader() {
             where: { deletedAt: null, status: "NEW", pipelineEnteredAt: null, assignedCallerId: { not: null } },
         }),
     ]);
-    return { pool, inBatches };
+    return { pool, inBatches, now: Date.now() };
 }

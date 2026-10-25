@@ -597,9 +597,9 @@ function pillFilter(view: string | undefined, params: Omit<DealListParams, "view
             : baseWhere(params);
     return {
         where: {
-            ...base,
+            // Search and received-design each contain OR; keep both predicates.
+            AND: [base, viewWhere(v)],
             ...(params.status && !viewIgnoresStatus(v) ? { status: params.status } : {}),
-            ...viewWhere(v),
             ...(step ? stepWhere(step) : {}),
         },
         sql: v === "today" ? TODAY_SQL : null,

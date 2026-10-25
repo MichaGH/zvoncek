@@ -6,6 +6,14 @@ import { Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+    CONTACT_ROUNDS,
+    CONTACT_ROUND_LABEL,
+    DEFAULT_CONTACT_ROUND,
+    DEFAULT_CONTACT_VIEW,
+    type ContactRound,
+    type ContactView,
+} from "@/lib/domain/contactFilters";
 
 type User = { id: string; firstName: string; lastName: string };
 type Team = { id: string; name: string };
@@ -22,6 +30,9 @@ type Props = {
     showCreatedByFilter?: boolean;
     showOwnerFilter?: boolean;
     createdByLabel?: string;
+    // Feature 02 §15: pohľad sa tu nemení, ale každá zmena filtra ho musí preniesť; kolo je filter ako ostatné.
+    view?: ContactView;
+    round?: ContactRound;
 };
 
 export default function ContactsFilterBar({
@@ -35,6 +46,8 @@ export default function ContactsFilterBar({
     showCreatedByFilter = false,
     showOwnerFilter = false,
     createdByLabel = "Všetci (od koho)",
+    view = DEFAULT_CONTACT_VIEW,
+    round = DEFAULT_CONTACT_ROUND,
 }: Props) {
     const router = useRouter();
     const [searchValue, setSearchValue] = useState(query);
@@ -42,21 +55,25 @@ export default function ContactsFilterBar({
     const [assignedToValue, setAssignedToValue] = useState(assignedTo);
     const [ownerValue, setOwnerValue] = useState(owner);
     const [teamValue, setTeamValue] = useState(team);
+    const [roundValue, setRoundValue] = useState<ContactRound>(round);
 
     function push(
-        overrides: { q?: string; createdBy?: string; assignedTo?: string; owner?: string; team?: string } = {},
+        overrides: { q?: string; createdBy?: string; assignedTo?: string; owner?: string; team?: string; round?: ContactRound } = {},
     ) {
         const q = overrides.q !== undefined ? overrides.q : searchValue;
         const cb = overrides.createdBy !== undefined ? overrides.createdBy : createdByValue;
         const ao = overrides.assignedTo !== undefined ? overrides.assignedTo : assignedToValue;
         const tm = overrides.team !== undefined ? overrides.team : teamValue;
         const ow = overrides.owner !== undefined ? overrides.owner : ownerValue;
+        const rd = overrides.round !== undefined ? overrides.round : roundValue;
         const params = new URLSearchParams();
         if (q.trim()) params.set("q", q.trim());
         if (cb) params.set("createdBy", cb);
         if (ao) params.set("assignedTo", ao);
         if (tm) params.set("team", tm);
         if (ow) params.set("owner", ow);
+        if (view !== DEFAULT_CONTACT_VIEW) params.set("view", view);
+        if (rd !== DEFAULT_CONTACT_ROUND) params.set("round", rd);
         router.push(`/dashboard/contacts?${params.toString()}`);
     }
 
@@ -178,6 +195,26 @@ export default function ContactsFilterBar({
                     </SelectContent>
                 </Select>
             )}
+
+            <Select
+                value={roundValue}
+                onValueChange={(value) => {
+                    const next = value as ContactRound;
+                    setRoundValue(next);
+                    push({ round: next });
+                }}
+            >
+                <SelectTrigger className="h-9" aria-label="Kolo">
+                    <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                    {CONTACT_ROUNDS.map((r) => (
+                        <SelectItem key={r} value={r}>
+                            {CONTACT_ROUND_LABEL[r]}
+                        </SelectItem>
+                    ))}
+                </SelectContent>
+            </Select>
 
             <Button type="submit" size="sm" variant="outline">
                 Hľadať

@@ -91,7 +91,7 @@ export async function recycleLeadsAs(user: AccessUser, input: RecycleInput): Pro
         for (let i = 0; i < items.length; i += CHUNK) {
             const result = await withLockTx((tx) => recycleChunk(tx, user, items.slice(i, i + CHUNK), new Date()), {
                 lockTimeout: "10s",
-                timeout: 60_000,
+                timeout: 30_000,
             });
             recycled += result.recycled;
             skipped.push(...result.skipped);

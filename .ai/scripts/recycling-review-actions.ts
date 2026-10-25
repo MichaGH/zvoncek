@@ -28,7 +28,7 @@ async function action(actor: AccessUser, name: string, args: unknown[]) {
     const m = JSON.parse(readFileSync(".next/dev/server/server-reference-manifest.json", "utf8")) as Manifest;
     const id = Object.entries(m.node).find(([, v]) => v.exportedName === name)?.[0];
     if (!id) throw new Error(`Action ${name} not compiled`);
-    const path = name === "recycleLeads" ? "/dashboard/admin/recycle" : "/dashboard/contacts";
+    const path = name === "recycleLeads" || name === "pickRecycleFirst" ? "/dashboard/admin/recycle" : "/dashboard/contacts";
     const r = await fetch(`${base}${path}`, { method: "POST", headers: { cookie: await cookie(actor), origin: base, "Next-Action": id, "Content-Type": "text/plain;charset=UTF-8" }, body: JSON.stringify(args) });
     return { status: r.status, body: await r.text() };
 }
@@ -64,6 +64,25 @@ async function main() {
     check("manager/scout with stale ADMIN JWT cannot call recycle server action directly", noManager.body.includes('"code":"FORBIDDEN"') && noScout.body.includes('"code":"FORBIDDEN"'), `HTTP ${noManager.status}/${noScout.status}`);
     const final = await prisma.lead.findUniqueOrThrow({ where: { id: recyclable.id } });
     check("unauthorized recycle performs no write", final.round === 1 && final.revision === 0 && final.status === "LOST");
+
+    const wanted = await prisma.lead.create({ data: { companyName: `${run}_wanted`, status: "ACTIVE", pipelineEnteredAt: new Date(), ownerId: admin.id,
+        requests: { create: { content: "DESIGN", requestedAt: new Date() } } } });
+    ids.push(wanted.id);
+    const query = { b: "deal_active", older: "0", q: `${run}_wanted`, asked: "DESIGN" };
+    const picked = await action(admin, "pickRecycleFirst", [query, 500]);
+    check("actual first-N action carries owner/request/date snapshot", picked.status === 200 && picked.body.includes(wanted.id)
+        && picked.body.includes('"holderId":"' + admin.id + '"') && picked.body.includes('"openAsks":["DESIGN"]') && picked.body.includes('"lastAt":'));
+    const deniedPick = await action({ ...manager, role: "ADMIN" }, "pickRecycleFirst", [query, 500]);
+    check("manager with stale ADMIN session cannot obtain first-N data", deniedPick.body.includes('"code":"FORBIDDEN"') && !deniedPick.body.includes(wanted.id));
+    const input = { items: [{ leadId: wanted.id, expectedRevision: 0 }] };
+    // Model a client losing the success response: keep the original selection and submit it again.
+    // This is local response-discard coverage, not a claim about deployed disconnect/cancellation behavior.
+    const firstResponse = await action(admin, "recycleLeads", [input]);
+    check("actual recycle action returns success", firstResponse.status === 200 && firstResponse.body.includes('"recycled":1'));
+    const retried = await action(admin, "recycleLeads", [input]);
+    const afterRetry = await prisma.lead.findUniqueOrThrow({ where: { id: wanted.id } });
+    check("HTTP retry of discarded success makes no second round", retried.status === 200 && retried.body.includes('"recycled":1')
+        && afterRetry.round === 2 && afterRetry.revision === 1 && await prisma.lead.count({ where: { archiveOfId: wanted.id } }) === 1);
 }
 main().catch((e) => { failures++; console.error(e); }).finally(async () => {
     const archives = await prisma.lead.findMany({ where: { archiveOfId: { in: ids } }, select: { id: true } });

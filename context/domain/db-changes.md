@@ -72,7 +72,7 @@ not recorded here because the row is removed after rollout.
 No `DROP`, no retype, no enum change. Applied on development 2026-10-25 (endpoint verified
 `ep-divine-waterfall-asbkuort` / `neondb`): reviewed `migrate diff` SQL → `db execute` → second `migrate diff` empty.
 Production script: `context/features/02-recycling/sql/01-recycling-schema.sql` (generated offline from the `main`
-schema, same 7 statements). Rollout: `context/features/02-recycling/production-rollout.md` — schema before code.
+schema, four statements implementing seven schema operations). Rollout: `context/features/02-recycling/production-rollout.md` — schema before code.
 
 ## 2. Data steps owed to production
 

@@ -1,0 +1,316 @@
+▲ Next.js 16.2.9 (Turbopack)
+- Local:         http://localhost:3100
+- Network:       http://192.168.100.8:3100
+- Environments: .env
+✓ Ready in 987ms
+
+(node:29036) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <SegmentViewNode type="layout" pagePath="layout.tsx">
+      <SegmentTrieNode>
+      <link>
+      <script>
+      <script>
+      <script>
+      <RootLayout>
+        <html lang="sk" suppressHydrationWarning={true} className="geist_a715...">
+          <body className="flex min-h...">
+            <ThemeProvider>
+              <J attribute="class" defaultTheme="system" enableSystem={true}>
+                <V attribute="class" defaultTheme="system" enableSystem={true}>
+                  <script>
+                  <Header>
+                    <header className="sticky top...">
+                      <div className="mx-auto fl...">
+                        <div>
+                        <div className="flex items...">
+                          <span>
+                          <span>
+                          <DarkModeToggle>
+                            <Button variant="outline" size="icon" className="h-8 w-8 sh..." aria-label="Prepnúť na..." ...>
+                              <button
+                                data-slot="button"
+                                data-variant="outline"
+                                data-size="icon"
+                                className={"group/button inline-flex items-center justify-center rounded-lg border bg..."}
++                               aria-label="Prepnúť na svetlý režim"
+-                               aria-label="Prepnúť na tmavý režim"
+                                onClick={function onClick}
+                              >
+                          ...
+                  ...
+ 
+ GET /dashboard 200 in 3.7s (next.js: 340ms, proxy.ts: 15ms, application-code: 3.3s)
+ GET /dashboard/admin/recycle?b=call_retry,call_scheduled,call_snoozed,call_lost,call_unreachable,deal_active,deal_snoozed,deal_lost,deal_unreachable&older=0&q=R02UImvoa70e9&sort=number 200 in 1198ms (next.js: 65ms, proxy.ts: 13ms, application-code: 1120ms)
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <SegmentViewNode type="layout" pagePath="layout.tsx">
+      <SegmentTrieNode>
+      <link>
+      <script>
+      <script>
+      <script>
+      <RootLayout>
+        <html lang="sk" suppressHydrationWarning={true} className="geist_a715...">
+          <body className="flex min-h...">
+            <ThemeProvider>
+              <J attribute="class" defaultTheme="system" enableSystem={true}>
+                <V attribute="class" defaultTheme="system" enableSystem={true}>
+                  <script>
+                  <Header>
+                    <header className="sticky top...">
+                      <div className="mx-auto fl...">
+                        <div>
+                        <div className="flex items...">
+                          <span>
+                          <span>
+                          <DarkModeToggle>
+                            <Button variant="outline" size="icon" className="h-8 w-8 sh..." aria-label="Prepnúť na..." ...>
+                              <button
+                                data-slot="button"
+                                data-variant="outline"
+                                data-size="icon"
+                                className={"group/button inline-flex items-center justify-center rounded-lg border bg..."}
++                               aria-label="Prepnúť na svetlý režim"
+-                               aria-label="Prepnúť na tmavý režim"
+                                onClick={function onClick}
+                              >
+                          ...
+                  ...
+ 
+ GET /dashboard/admin/recycle?b=call_retry%2Ccall_scheduled%2Ccall_snoozed%2Ccall_lost%2Ccall_unreachable%2Cdeal_active%2Cdeal_snoozed%2Cdeal_lost%2Cdeal_unreachable&older=0&q=R02UImvoa70e9&sort=number&page=2 200 in 276ms (next.js: 7ms, proxy.ts: 12ms, application-code: 256ms)
+ POST /dashboard/admin/recycle?b=call_retry%2Ccall_scheduled%2Ccall_snoozed%2Ccall_lost%2Ccall_unreachable%2Cdeal_active%2Cdeal_snoozed%2Cdeal_lost%2Cdeal_unreachable&older=0&q=R02UImvoa70e9&sort=number&page=2 200 in 274ms (next.js: 7ms, proxy.ts: 16ms, application-code: 251ms)
+  └─ ƒ pickRecycleFirst({"b":"call_retry,call_scheduled,call_snoozed,call_lost,call_unreachable,deal_active,deal_snoozed,deal_lost,deal_unreachable","older":"0","q":"R02UImvoa70e9","...":"1 item not stringified"}, 106) in 217ms lib/actions/recycling/index.ts
+ GET /dashboard/contacts 200 in 1510ms (next.js: 72ms, proxy.ts: 14ms, application-code: 1424ms)
+ POST /dashboard/contacts 200 in 240ms (next.js: 7ms, proxy.ts: 13ms, application-code: 219ms)
+  └─ ƒ updateContact("cmvoa8wpx000548vmtzbc4evl", {"companyName":"forged edit","phone":"+000 456"}) in 205ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 220ms (next.js: 7ms, proxy.ts: 10ms, application-code: 203ms)
+  └─ ƒ deleteContact("cmvoa8wpx000548vmtzbc4evl") in 191ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 288ms (next.js: 7ms, proxy.ts: 14ms, application-code: 267ms)
+  └─ ƒ updateContact("cmvoa8wpx000548vmtzbc4evl", {"companyName":"forged edit","phone":"+000 456"}) in 256ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 285ms (next.js: 8ms, proxy.ts: 12ms, application-code: 264ms)
+  └─ ƒ deleteContact("cmvoa8wpx000548vmtzbc4evl") in 252ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 463ms (next.js: 7ms, proxy.ts: 11ms, application-code: 445ms)
+  └─ ƒ updateContact("cmvoa8z1r000748vmj6sc1u5o", {"companyName":"rvact_mvoa8we2 edited","phone":"+000 789"}) in 245ms lib/actions/contacts/index.ts
+ POST /dashboard/admin/recycle 200 in 169ms (next.js: 7ms, proxy.ts: 12ms, application-code: 150ms)
+  └─ ƒ recycleLeads({"items":["[Object]"]}) in 39ms lib/actions/recycling/index.ts
+ POST /dashboard/admin/recycle 200 in 177ms (next.js: 7ms, proxy.ts: 11ms, application-code: 159ms)
+  └─ ƒ recycleLeads({"items":["[Object]"]}) in 39ms lib/actions/recycling/index.ts
+ GET /dashboard/admin/recycle?b=call_retry%2Ccall_scheduled%2Ccall_snoozed%2Ccall_lost%2Ccall_unreachable%2Cdeal_active%2Cdeal_snoozed%2Cdeal_lost%2Cdeal_unreachable&older=0&asked=DESIGN&q=R02UImvoa70e9&sort=number 200 in 418ms (next.js: 8ms, proxy.ts: 12ms, application-code: 398ms)
+ GET /dashboard/admin/recycle?b=call_lost&older=0&q=R02UImvoa70e9&sort=number&page=2 200 in 661ms (next.js: 7ms, proxy.ts: 9ms, application-code: 645ms)
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <SegmentViewNode type="layout" pagePath="layout.tsx">
+      <SegmentTrieNode>
+      <link>
+      <script>
+      <script>
+      <script>
+      <RootLayout>
+        <html lang="sk" suppressHydrationWarning={true} className="geist_a715...">
+          <body className="flex min-h...">
+            <ThemeProvider>
+              <J attribute="class" defaultTheme="system" enableSystem={true}>
+                <V attribute="class" defaultTheme="system" enableSystem={true}>
+                  <script>
+                  <Header>
+                    <header className="sticky top...">
+                      <div className="mx-auto fl...">
+                        <div>
+                        <div className="flex items...">
+                          <span>
+                          <span>
+                          <DarkModeToggle>
+                            <Button variant="outline" size="icon" className="h-8 w-8 sh..." aria-label="Prepnúť na..." ...>
+                              <button
+                                data-slot="button"
+                                data-variant="outline"
+                                data-size="icon"
+                                className={"group/button inline-flex items-center justify-center rounded-lg border bg..."}
++                               aria-label="Prepnúť na svetlý režim"
+-                               aria-label="Prepnúť na tmavý režim"
+                                onClick={function onClick}
+                              >
+                          ...
+                  ...
+ 
+ POST /dashboard/admin/recycle?b=call_lost&older=0&q=R02UImvoa70e9&sort=number&page=2 200 in 786ms (next.js: 8ms, proxy.ts: 15ms, application-code: 764ms)
+  └─ ƒ recycleLeads({"items":["[Object]","[Object]"]}) in 504ms lib/actions/recycling/index.ts
+ GET /dashboard/admin/recycle?b=call_lost&older=0&q=R02UImvoa70e9&sort=number&page=2 200 in 258ms (next.js: 10ms, proxy.ts: 17ms, application-code: 232ms)
+ GET /dashboard/admin/recycle?b=call_lost&older=0&q=R02UImvoa70e9&sort=number 200 in 247ms (next.js: 10ms, proxy.ts: 13ms, application-code: 224ms)
+ GET /dashboard/admin/recycle?b=call_lost&older=0&q=R02UImvoa70e9&sort=number 200 in 318ms (next.js: 7ms, proxy.ts: 23ms, application-code: 288ms)
+ GET /dashboard/admin/recycle?b=call_lost&holder=none&older=0&round=1&q=rvfix_mvoab2zw_http_201to200&sort=number&page=3 200 in 470ms (next.js: 8ms, proxy.ts: 9ms, application-code: 453ms)
+ GET /dashboard/admin/recycle?b=call_lost&holder=none&older=0&round=1&q=rvfix_mvoab2zw_http_201to200&sort=number&page=2 200 in 513ms (next.js: 5ms, proxy.ts: 8ms, application-code: 500ms)
+ GET /dashboard/admin/recycle?b=call_lost&holder=none&older=0&round=1&q=rvfix_mvoab2zw_http_empty&sort=number&page=9 200 in 187ms (next.js: 5ms, proxy.ts: 8ms, application-code: 173ms)
+ GET /dashboard/admin/recycle?b=call_lost&holder=none&older=0&round=1&q=rvfix_mvoab2zw_http_empty&sort=number 200 in 225ms (next.js: 5ms, proxy.ts: 10ms, application-code: 210ms)
+ GET /dashboard/admin/recycle?b=call_lost&holder=none&older=0&round=1&q=rvfix_mvoab2zw_http_manual&sort=number&page=999 200 in 262ms (next.js: 6ms, proxy.ts: 8ms, application-code: 248ms)
+ GET /dashboard/admin/recycle?b=call_lost&holder=none&older=0&round=1&q=rvfix_mvoab2zw_http_manual&sort=number&page=3 200 in 330ms (next.js: 7ms, proxy.ts: 9ms, application-code: 315ms)
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <SegmentViewNode type="layout" pagePath="layout.tsx">
+      <SegmentTrieNode>
+      <link>
+      <script>
+      <script>
+      <script>
+      <RootLayout>
+        <html lang="sk" suppressHydrationWarning={true} className="geist_a715...">
+          <body className="flex min-h...">
+            <ThemeProvider>
+              <J attribute="class" defaultTheme="system" enableSystem={true}>
+                <V attribute="class" defaultTheme="system" enableSystem={true}>
+                  <script>
+                  <Header>
+                    <header className="sticky top...">
+                      <div className="mx-auto fl...">
+                        <div>
+                        <div className="flex items...">
+                          <span>
+                          <span>
+                          <DarkModeToggle>
+                            <Button variant="outline" size="icon" className="h-8 w-8 sh..." aria-label="Prepnúť na..." ...>
+                              <button
+                                data-slot="button"
+                                data-variant="outline"
+                                data-size="icon"
+                                className={"group/button inline-flex items-center justify-center rounded-lg border bg..."}
++                               aria-label="Prepnúť na svetlý režim"
+-                               aria-label="Prepnúť na tmavý režim"
+                                onClick={function onClick}
+                              >
+                          ...
+                  ...
+ 
+ GET /dashboard/admin/recycle?b=deal_active&older=0&q=R02UImvoa70e9&sort=number 200 in 734ms (next.js: 7ms, proxy.ts: 10ms, application-code: 717ms)
+ POST /dashboard/admin/recycle?b=deal_active&older=0&q=R02UImvoa70e9&sort=number 200 in 572ms (next.js: 8ms, proxy.ts: 12ms, application-code: 553ms)
+  └─ ƒ recycleLeads({"items":["[Object]"]}) in 335ms lib/actions/recycling/index.ts
+ GET /dashboard/admin/recycle?b=deal_active&older=0&q=R02UImvoa70e9&sort=number 200 in 238ms (next.js: 14ms, proxy.ts: 18ms, application-code: 205ms)
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <SegmentViewNode type="layout" pagePath="layout.tsx">
+      <SegmentTrieNode>
+      <link>
+      <script>
+      <script>
+      <script>
+      <RootLayout>
+        <html lang="sk" suppressHydrationWarning={true} className="geist_a715...">
+          <body className="flex min-h...">
+            <ThemeProvider>
+              <J attribute="class" defaultTheme="system" enableSystem={true}>
+                <V attribute="class" defaultTheme="system" enableSystem={true}>
+                  <script>
+                  <Header>
+                    <header className="sticky top...">
+                      <div className="mx-auto fl...">
+                        <div>
+                        <div className="flex items...">
+                          <span>
+                          <span>
+                          <DarkModeToggle>
+                            <Button variant="outline" size="icon" className="h-8 w-8 sh..." aria-label="Prepnúť na..." ...>
+                              <button
+                                data-slot="button"
+                                data-variant="outline"
+                                data-size="icon"
+                                className={"group/button inline-flex items-center justify-center rounded-lg border bg..."}
++                               aria-label="Prepnúť na svetlý režim"
+-                               aria-label="Prepnúť na tmavý režim"
+                                onClick={function onClick}
+                              >
+                          ...
+                  ...
+ 
+ GET /dashboard/calls/history?userId=cmvoa70he00007wvmep8oe9ob 200 in 1463ms (next.js: 58ms, proxy.ts: 10ms, application-code: 1395ms)
+ GET /dashboard/calls/history?userId=cmvoa70he00007wvmep8oe9ob 200 in 1400ms (next.js: 198ms, proxy.ts: 115ms, application-code: 1086ms)
+ GET /dashboard/contacts 200 in 1274ms (next.js: 30ms, proxy.ts: 15ms, application-code: 1228ms)
+ POST /dashboard/contacts 200 in 237ms (next.js: 6ms, proxy.ts: 9ms, application-code: 222ms)
+  └─ ƒ updateContact("cmvoafh130005tkvm71kmdatv", {"companyName":"forged edit","phone":"+000 456"}) in 208ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 232ms (next.js: 6ms, proxy.ts: 8ms, application-code: 218ms)
+  └─ ƒ deleteContact("cmvoafh130005tkvm71kmdatv") in 209ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 298ms (next.js: 9ms, proxy.ts: 13ms, application-code: 276ms)
+  └─ ƒ updateContact("cmvoafh130005tkvm71kmdatv", {"companyName":"forged edit","phone":"+000 456"}) in 268ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 305ms (next.js: 6ms, proxy.ts: 11ms, application-code: 288ms)
+  └─ ƒ deleteContact("cmvoafh130005tkvm71kmdatv") in 279ms lib/actions/contacts/index.ts
+ POST /dashboard/contacts 200 in 427ms (next.js: 5ms, proxy.ts: 7ms, application-code: 415ms)
+  └─ ƒ updateContact("cmvoafj7y0007tkvmbzfsf7vy", {"companyName":"rvact_mvoafgo3 edited","phone":"+000 789"}) in 250ms lib/actions/contacts/index.ts
+ POST /dashboard/admin/recycle 200 in 479ms (next.js: 235ms, proxy.ts: 11ms, application-code: 233ms)
+  └─ ƒ recycleLeads({"items":["[Object]"]}) in 42ms lib/actions/recycling/index.ts
+ POST /dashboard/admin/recycle 200 in 128ms (next.js: 5ms, proxy.ts: 8ms, application-code: 115ms)
+  └─ ƒ recycleLeads({"items":["[Object]"]}) in 36ms lib/actions/recycling/index.ts
+ POST /dashboard/admin/recycle 200 in 93ms (next.js: 5ms, proxy.ts: 8ms, application-code: 80ms)
+  └─ ƒ pickRecycleFirst({"asked":"DESIGN","b":"deal_active","older":"0","...":"1 item not stringified"}, 500) in 71ms lib/actions/recycling/index.ts
+ POST /dashboard/admin/recycle 200 in 63ms (next.js: 7ms, proxy.ts: 11ms, application-code: 45ms)
+  └─ ƒ pickRecycleFirst({"asked":"DESIGN","b":"deal_active","older":"0","...":"1 item not stringified"}, 500) in 34ms lib/actions/recycling/index.ts
+ POST /dashboard/admin/recycle 200 in 693ms (next.js: 6ms, proxy.ts: 11ms, application-code: 676ms)
+  └─ ƒ recycleLeads({"items":["[Object]"]}) in 357ms lib/actions/recycling/index.ts
+ POST /dashboard/admin/recycle 200 in 575ms (next.js: 5ms, proxy.ts: 8ms, application-code: 562ms)
+  └─ ƒ recycleLeads({"items":["[Object]"]}) in 227ms lib/actions/recycling/index.ts
+ GET /dashboard/admin/recycle?b=call_lost,call_unreachable&older=0&q=UI-TEST%20mvoagfhe 200 in 1196ms (next.js: 6ms, proxy.ts: 12ms, application-code: 1178ms)
+ GET /dashboard/admin 200 in 824ms (next.js: 72ms, proxy.ts: 10ms, application-code: 741ms)
+ GET /dashboard/admin/recycle?b=call_lost,call_unreachable&older=0&q=UI-TEST%20mvoagfhe 200 in 265ms (next.js: 6ms, proxy.ts: 9ms, application-code: 250ms)
+ GET /dashboard/calls/history 200 in 230ms (next.js: 5ms, proxy.ts: 7ms, application-code: 218ms)

@@ -6,6 +6,46 @@ In this file progress of feature implementation is tracked. Should contain
 
 ---
 
+# Feature 02 §15: Kontakty — Pridané / Na volanie + Kolo (built on development, 2026-10-25, after R01 resolution)
+
+Design: `context/features/02-recycling/recycling-spec.md` §15 (Michal found recycled contacts buried in Kontakty during
+the click-through; K1–K5 left to Claude, defaults taken). No schema change. Nothing committed.
+
+- **Code.** `lib/domain/contactFilters.ts` (views `added` / `pool`, rounds `all` / `1` / `2`); `POOL_ORDER_SQL` in
+  `lib/queries/calls` is now the one queue order for `claimBatchAs` and the Kontakty pool list;
+  `lib/queries/contacts`: one `contactsWhere` for list and counts, `getContactsList({ view, round, … })` (pool view:
+  ids ordered in SQL, rows via Prisma), `getContactsViewCounts`, rows carry `round` / `recycledAt`;
+  `app/dashboard/contacts/page.tsx`: view switch with counts, header number links to Na volanie, queue position
+  column / line, "N. kolo" badge and "recykl." date in both layouts; `ContactsFilterBar`: Kolo select, every filter
+  change keeps `view` and `round`.
+- **Checks (all actually run):** `tsc` clean · `eslint .` only the known `MobileNav.tsx` error · `next build` OK ·
+  business time (local + `TZ=UTC`) and client sections passed · `check-concurrency --expect-endpoint
+  ep-divine-waterfall-asbkuort --iterations 100` **264/264** (new `kvClaimOrder`: the first 10 of Na volanie = the
+  next claim, recycled contact in its queue place; `kvCountsScope`: 6 view × round combinations for a scout, every
+  count = its list, another scout's contact excluded); fixtures cleaned · HTTP render
+  (`.claude/kontakty-ui-check.ts`, throwaway admin) **5/5**: switch, header link, Poradie column, the 200 recycled
+  contacts visible with "2. kolo" + "recykl.", links keep view + round.
+- **Not verified:** a human click-through of the switch and the Kolo select on a phone and desktop.
+
+# Feature 02: R01 resolution (verified on development, 2026-10-25)
+
+Fixing R01-01–05 and inherited R01-FU-01; original reviews remain immutable. Child FK moves preserve historical
+timestamps, selection warnings carry owner/request/recency metadata across pages and first-N, OPEN request filters
+are URL-backed, archive history has no dead links, out-of-range pages redirect, and pipeline OR predicates compose.
+Chunk timeout aligned to the approved 30 s; recycle route requests 300 s hosting duration (actual deployment still
+requires verification). No schema/backfill/production changes, commits or deployment during this resolution.
+Record: `.ai/reviews/02-recycling/implementation/R01-resolution.md`. All six confirmed findings resolved.
+Final checks: type checking/build/changed-file lint passed; full lint has only the known MobileNav error and ignored
+render-script warning. Business time (normal + UTC) and client-section checks passed. Concurrency **261/261**;
+expanded archive regression **36/36**, second pass **55/55**, new filter/summary/page HTTP checks **26/26**, actual
+server actions **10/10**, existing HTTP render **10/10**. Browser verified manual cross-page and first-N warnings,
+request-filter selection reset, mobile confirmation, last-page redirect (102→100) and unlinked archive history.
+500 contacts with CALL children completed in **71.148 s**; partial retry and discarded HTTP-success retry created
+no duplicate round. Tightened forced-race helpers to follow only their fixture's lock queue after one intermediate
+false ordering failure. Schema diff empty; all review/suite fixtures cleaned and invariants clean. Obsolete global
+assignment-backfill delta check not run. Actual deployed duration/disconnect rehearsal, S-R1 rollout and Michal's
+smoke/approval remain owed; originals R01 and R01-follow-up remain unchanged.
+
 # Feature 02: recycling contacts (built on the development copy 2026-10-25, NOT in production)
 
 Design: `context/features/02-recycling/recycling-spec.md` (all questions decided 2026-10-25). Rollout:

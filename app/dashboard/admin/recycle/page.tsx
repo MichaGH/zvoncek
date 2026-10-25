@@ -3,12 +3,14 @@ import { DashboardPage, DashboardPageHeader } from "@/components/dashboard/Dashb
 import RecycleFilters from "@/components/admin/recycle/RecycleFilters";
 import RecyclePanel from "@/components/admin/recycle/RecyclePanel";
 import { requireUser } from "@/lib/access/user";
-import { parseRecycleParams, recycleHref } from "@/lib/domain/recycling";
+import { parseRecycleParams, recycleHref, recyclePage } from "@/lib/domain/recycling";
 import { can } from "@/lib/permissions";
 import { getRecycleCounts, getRecycleHeader, getRecycleHolders, getRecycleList } from "@/lib/queries/recycling";
 
 // Recyklácia kontaktov (feature 02, spec §8): skončené / zaseknuté kontakty späť do spoločnej fronty ako nové.
 // Proxy pustí /dashboard/admin len s admin.access; samotnú recykláciu stráži contacts.recycle (stránka aj príkaz).
+// A 500-contact submission spans five bounded transactions; hosting must allow the whole request.
+export const maxDuration = 300;
 export default async function RecyclePage({
     searchParams,
 }: {
@@ -25,6 +27,8 @@ export default async function RecyclePage({
         getRecycleHolders(params),
         getRecycleHeader(),
     ]);
+    const page = recyclePage(params.page, list.total);
+    if (page !== params.page) redirect(recycleHref(params, { page }));
     // Výber prežije stránkovanie, nie zmenu filtra (spec §8).
     const selectionKey = recycleHref(params, { page: 1 });
 
@@ -42,7 +46,7 @@ export default async function RecyclePage({
                     {" · "}v dávkach volajúcich: <span className="font-semibold text-foreground tabular-nums">{header.inBatches}</span>
                 </p>
                 <RecycleFilters params={params} counts={counts} holders={holders} />
-                <RecyclePanel key={selectionKey} params={params} total={list.total} rows={list.rows} />
+                <RecyclePanel key={selectionKey} params={params} total={list.total} rows={list.rows} now={header.now} />
             </div>
         </DashboardPage>
     );

@@ -12,6 +12,8 @@ import {
     RECYCLE_BUCKET_LABEL,
     RECYCLE_GOT,
     RECYCLE_GOT_LABEL,
+    RECYCLE_ASKED,
+    RECYCLE_ASKED_LABEL,
     RECYCLE_HOLDER_NONE,
     RECYCLE_OLDER_OPTIONS,
     RECYCLE_SORTS,
@@ -138,6 +140,12 @@ export default function RecycleFilters({
                     value={params.got ?? ALL}
                     onChange={(v) => go({ got: v === ALL ? null : (v as RecycleParams["got"]) })}
                     options={[{ value: ALL, label: "hocičo" }, ...RECYCLE_GOT.map((g) => ({ value: g, label: RECYCLE_GOT_LABEL[g] }))]}
+                />
+                <Pick
+                    label="Požiadavka:"
+                    value={params.asked ?? ALL}
+                    onChange={(v) => go({ asked: v === ALL ? null : (v as RecycleParams["asked"]) })}
+                    options={[{ value: ALL, label: "hocičo" }, ...RECYCLE_ASKED.map((a) => ({ value: a, label: RECYCLE_ASKED_LABEL[a] }))]}
                 />
                 <Pick
                     label="Kolo:"

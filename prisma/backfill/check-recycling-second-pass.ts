@@ -76,11 +76,11 @@ async function readers(admin: AccessUser, rep: AccessUser, former: AccessUser, s
     const archive = await prisma.lead.findFirstOrThrow({ where: { archiveOfId: l.id } });
     const afterList = await getDealList(p), afterCounts = await getDealCounts(p), afterToday = await getDealsToday(rep);
     const afterManager = await getManagerToday(admin), afterHistory = await getHandedOverHistory(former.id);
-    // got_design má zdedený problém so skladaním OR vyhľadávania; nesmie sa zameniť s únikom archívu.
+    // Skontroluj aj skutočný sent-design reader; vyhľadávanie musí zostať súčasťou predikátu.
     const gotDesignRows = await getDealList({ ...p, view: "got_design", take: 500 });
     check("pipeline actual list and every pill count exclude archive/current NEW", !failed(r) && afterList.rows.length === 0
-        && Object.entries(afterCounts).filter(([k]) => k !== "unassignedOpen" && k !== "got_design").every(([, n]) => n === 0)
-        && afterCounts.got_design === beforeCounts.got_design && !gotDesignRows.rows.some((row) => row.id === l.id || row.id === archive.id), afterCounts);
+        && Object.entries(afterCounts).filter(([k]) => k !== "unassignedOpen").every(([, n]) => n === 0)
+        && beforeCounts.got_design === 0 && gotDesignRows.rows.length === 0, afterCounts);
     check("owner dashboard and manager owner totals exclude archived active deal", afterToday?.openCount === 0 && !afterToday.urgent.some((r) => r.id === l.id || r.id === archive.id)
         && afterManager.reps.some((r) => r.id === rep.id && r.openDeals === 0 && r.overdue === 0 && r.newThisWeek === 0));
     check("ownership history really disappears after archive", !afterHistory.some((r) => r.leadId === l.id || r.leadId === archive.id));
@@ -194,10 +194,15 @@ async function filters(admin: AccessUser, rep: AccessUser, a: AccessUser, b: Acc
     check("number search identifies exactly the live contact", numeric.total === 1 && numeric.rows[0]?.id === tied.id);
 }
 
-async function waitForWaiter(table: "Lead" | "User", mode: "recycle" | "other", signal: string) {
+async function waitForWaiter(table: "Lead" | "User", mode: "recycle" | "other", signal: string, blockerPid: number) {
     const end = Date.now() + 4_000;
     while (Date.now() < end) {
-        const rows = await prisma.$queryRaw<{ query: string }[]>`SELECT query FROM pg_stat_activity WHERE wait_event_type = 'Lock'`;
+        // Follow only this fixture's lock queue; other suites may have unrelated waiters with the same SQL.
+        const rows = await prisma.$queryRaw<{ query: string }[]>`WITH RECURSIVE waiting AS (
+            SELECT pid, query FROM pg_stat_activity WHERE ${blockerPid} = ANY(pg_blocking_pids(pid))
+            UNION
+            SELECT a.pid, a.query FROM pg_stat_activity a JOIN waiting w ON w.pid = ANY(pg_blocking_pids(a.pid))
+        ) SELECT DISTINCT query FROM waiting`;
         if (rows.some((r) => r.query.includes(`FROM "${table}"`) && (mode === "recycle" ? r.query.includes(signal) : !r.query.includes(signal)))) return;
         await new Promise((resolve) => setTimeout(resolve, 30));
     }
@@ -206,7 +211,9 @@ async function waitForWaiter(table: "Lead" | "User", mode: "recycle" | "other", 
 async function forced<A, B>(table: "Lead" | "User", id: string, firstMode: "recycle" | "other", first: () => Promise<A>, second: () => Promise<B>) {
     let release!: () => void, ready!: () => void;
     const held = new Promise<void>((resolve) => { ready = resolve; }), unblock = new Promise<void>((resolve) => { release = resolve; });
+    let blockerPid = 0;
     const blocker = prisma.$transaction(async (tx) => {
+        blockerPid = (await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`)[0].pid;
         if (table === "Lead") await tx.$queryRaw`SELECT id FROM "Lead" WHERE id = ${id} FOR UPDATE`;
         else await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${id} FOR UPDATE`;
         ready(); await unblock;
@@ -214,9 +221,9 @@ async function forced<A, B>(table: "Lead" | "User", id: string, firstMode: "recy
     try {
         await held;
         const one = first();
-        await waitForWaiter(table, firstMode, table === "Lead" ? "ANY(" : "FOR SHARE");
+        await waitForWaiter(table, firstMode, table === "Lead" ? "ANY(" : "FOR SHARE", blockerPid);
         const two = second();
-        await waitForWaiter(table, firstMode === "recycle" ? "other" : "recycle", table === "Lead" ? "ANY(" : "FOR SHARE");
+        await waitForWaiter(table, firstMode === "recycle" ? "other" : "recycle", table === "Lead" ? "ANY(" : "FOR SHARE", blockerPid);
         release();
         return await Promise.all([one, two]);
     } finally { release(); await blocker; }
@@ -259,12 +266,19 @@ async function races(admin: AccessUser, rep: AccessUser, targetRep: AccessUser, 
 async function inheritedPipelineSearch(admin: AccessUser, owner: AccessUser) {
     const a = await lead({ companyName: `${run}_search_ALPHA`, status: "ACTIVE", pipelineEnteredAt: new Date(), ownerId: owner.id, designSentAt: new Date() });
     const b = await lead({ companyName: `${run}_search_BETA`, status: "ACTIVE", pipelineEnteredAt: new Date(), ownerId: owner.id, designSentAt: new Date() });
-    const p = { scope: await getDealScope(owner), owner: { userId: owner.id }, query: `${run}_search_ALPHA`, viewerId: owner.id };
+    const actual = await lead({ companyName: `${run}_search_ALPHA_actual`, status: "ACTIVE", pipelineEnteredAt: new Date(), ownerId: owner.id });
+    await prisma.design.create({ data: { leadId: actual.id, sentAt: new Date() } });
+    const foreign = await lead({ companyName: `${run}_search_ALPHA_foreign`, status: "ACTIVE", pipelineEnteredAt: new Date(), ownerId: admin.id, designSentAt: new Date() });
+    await prisma.design.create({ data: { leadId: foreign.id, sentAt: new Date() } });
+    const p = { scope: await getDealScope(owner), owner: { userId: owner.id }, query: a.companyName!, viewerId: owner.id };
     const plain = await getDealList(p), got = await getDealList({ ...p, view: "got_design" }), counts = await getDealCounts(p);
-    check("pipeline search control without receipt view matches only ALPHA", plain.rows.length === 1 && plain.rows[0].id === a.id);
-    check("INHERITED: got_design preserves the search predicate", got.rows.length === 1 && got.rows[0].id === a.id && counts.got_design === 1,
-        { expected: 1, actualRows: got.rows.length, actualCount: counts.got_design, returnedUnrelatedBeta: got.rows.some((row) => row.id === b.id) });
+    check("pipeline search control matches only scoped ALPHA records", plain.rows.length === 2 && plain.rows.every((r) => [a.id, actual.id].includes(r.id)));
+    check("INHERITED: got_design preserves search for legacy and actual sent designs", got.rows.length === 2 && got.rows.every((r) => [a.id, actual.id].includes(r.id)) && counts.got_design === 2,
+        { expected: 2, actualRows: got.rows.length, actualCount: counts.got_design, returnedUnrelatedBeta: got.rows.some((row) => row.id === b.id) });
+    const noMatch = { ...p, query: `${run}_search_ABSENT`, view: "got_design" };
+    check("sent-design no-match list and count both empty", (await getDealList(noMatch)).rows.length === 0 && (await getDealCounts(noMatch)).got_design === 0);
     await rec(admin, a.id);
+    await rec(admin, actual.id);
     const after = await getDealList({ ...p, view: "got_design" });
     check("INHERITED: search for recycled ALPHA does not return unrelated BETA", after.rows.length === 0,
         { expected: 0, actualRows: after.rows.length, returnedUnrelatedBeta: after.rows.some((row) => row.id === b.id) });

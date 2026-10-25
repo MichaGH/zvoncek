@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { CallbackKind, LeadStatus } from "@/app/generated/prisma/enums";
+import type { CallbackKind, LeadStatus, RequestContent } from "@/app/generated/prisma/enums";
 
 // Recyklácia kontaktov (feature 02, context/features/02-recycling/recycling-spec.md). Čisté pravidlá – bezpečné aj
 // pre klienta. Zápis je v recycleMutations.ts, transakcia v lib/commands/recycling.ts.
@@ -175,6 +175,12 @@ export const RECYCLE_GOT_LABEL: Record<(typeof RECYCLE_GOT)[number], string> = {
     price: "Dostali cenu",
     design: "Dostali návrh",
 };
+export const RECYCLE_ASKED = ["INFO", "PRICE", "DESIGN"] as const;
+export const RECYCLE_ASKED_LABEL: Record<(typeof RECYCLE_ASKED)[number], string> = {
+    INFO: "Chceli info",
+    PRICE: "Chceli cenu",
+    DESIGN: "Chceli návrh",
+};
 export const RECYCLE_SORTS = ["last_asc", "last_desc", "added_asc", "added_desc", "number"] as const;
 export const RECYCLE_SORT_LABEL: Record<(typeof RECYCLE_SORTS)[number], string> = {
     last_asc: "Posledný kontakt – najstaršie",
@@ -191,6 +197,7 @@ export type RecycleParams = {
     older: number; // posledný kontakt starší ako N dní (0 = hocikedy)
     tries: number; // aspoň N „nezdvihli"
     got: (typeof RECYCLE_GOT)[number] | null;
+    asked: (typeof RECYCLE_ASKED)[number] | null; // otvorená požiadavka v aktuálnom obchode
     round: "1" | "2" | null; // 2 = druhé a ďalšie kolo
     q: string;
     sort: (typeof RECYCLE_SORTS)[number];
@@ -222,10 +229,11 @@ export function parseRecycleParams(raw: RawParams): RecycleParams {
         older: (RECYCLE_OLDER_OPTIONS as readonly number[]).includes(older) ? older : DEFAULT_RECYCLE_OLDER,
         tries: Number.isInteger(tries) && tries >= 0 && tries <= 20 ? tries : 0,
         got: oneOf(RECYCLE_GOT, one(raw.got)),
+        asked: oneOf(RECYCLE_ASKED, one(raw.asked)),
         round: oneOf(["1", "2"] as const, one(raw.round)),
         q: (one(raw.q) ?? "").trim().slice(0, 100),
         sort: oneOf(RECYCLE_SORTS, one(raw.sort)) ?? "last_asc",
-        page: Number.isInteger(page) && page >= 1 ? page : 1,
+        page: Number.isInteger(page) && page >= 1 && page <= 2_147_483_647 ? page : 1,
     };
 }
 
@@ -238,9 +246,54 @@ export function recycleHref(params: RecycleParams, patch: Partial<RecycleParams>
     if (next.older !== DEFAULT_RECYCLE_OLDER) s.set("older", String(next.older));
     if (next.tries > 0) s.set("tries", String(next.tries));
     if (next.got) s.set("got", next.got);
+    if (next.asked) s.set("asked", next.asked);
     if (next.round) s.set("round", next.round);
     if (next.q) s.set("q", next.q);
     if (next.sort !== "last_asc") s.set("sort", next.sort);
     if (next.page > 1) s.set("page", String(next.page));
     return `/dashboard/admin/recycle?${s.toString()}`;
+}
+
+export function recyclePage(page: number, total: number): number {
+    return Math.min(page, Math.max(1, Math.ceil(total / RECYCLE_PAGE_SIZE)));
+}
+
+// Snapshot shown when selected; mutations still send only id + expected revision.
+export type RecycleSelection = {
+    expectedRevision: number;
+    bucket: RecycleBucket;
+    holderId: string | null;
+    holderName: string | null;
+    lastAt: string;
+    openAsks: RequestContent[];
+};
+
+export function recycleSelection(row: Omit<RecycleSelection, "expectedRevision"> & { revision: number }): RecycleSelection {
+    return { expectedRevision: row.revision, bucket: row.bucket, holderId: row.holderId,
+        holderName: row.holderName, lastAt: row.lastAt, openAsks: row.openAsks };
+}
+
+// Recent = within the default 30-day window (Q9); a warning, never an eligibility rule.
+export function summarizeRecycleSelection(items: Iterable<RecycleSelection>, now: number) {
+    const buckets = new Map<RecycleBucket, number>();
+    const owners = new Map<string | null, { id: string | null; name: string; active: number; snoozed: number }>();
+    const asks = new Map<RequestContent, number>();
+    let recent = 0;
+    for (const item of items) {
+        buckets.set(item.bucket, (buckets.get(item.bucket) ?? 0) + 1);
+        if (item.bucket === "deal_active" || item.bucket === "deal_snoozed") {
+            const owner = owners.get(item.holderId) ?? { id: item.holderId, name: item.holderName ?? "Bez vlastníka", active: 0, snoozed: 0 };
+            if (item.bucket === "deal_active") owner.active++;
+            else owner.snoozed++;
+            owners.set(item.holderId, owner);
+        }
+        for (const content of new Set(item.openAsks)) asks.set(content, (asks.get(content) ?? 0) + 1);
+        if (Date.parse(item.lastAt) >= now - DEFAULT_RECYCLE_OLDER * 86_400_000) recent++;
+    }
+    return {
+        buckets: RECYCLE_BUCKETS.filter((b) => buckets.has(b)).map((bucket) => ({ bucket, n: buckets.get(bucket)! })),
+        owners: [...owners.values()].sort((a, b) => a.name.localeCompare(b.name) || (a.id ?? "").localeCompare(b.id ?? "")),
+        asks: [...asks.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([content, n]) => ({ content, n })),
+        recent,
+    };
 }

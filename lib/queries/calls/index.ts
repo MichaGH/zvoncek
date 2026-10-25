@@ -1,5 +1,5 @@
 import prisma from "@/lib/db";
-import type { Prisma } from "@/app/generated/prisma/client";
+import { Prisma } from "@/app/generated/prisma/client";
 import type { AccessUser } from "@/lib/access/user";
 import { can } from "@/lib/permissions";
 
@@ -62,6 +62,11 @@ export const POOL_WHERE = {
     assignedCallerId: null,
     activities: { none: { type: "CALL" } },
 } satisfies Prisma.LeadWhereInput;
+
+// Poradie spoločnej fronty: FIFO podľa vstupu do fronty – pridanie, alebo recyklácia (feature 02, Q3). Jediný zdroj
+// pre claimBatchAs aj Kontakty → Na volanie (§15); test kvClaimOrder overuje, že prvých 10 je presne ďalší claim.
+// Stĺpce sú bez aliasu: použiť len v dopyte nad samotnou tabuľkou "Lead".
+export const POOL_ORDER_SQL = Prisma.sql`COALESCE("roundStartedAt", "createdAt"), id`;
 
 export async function getPoolCount(): Promise<number> {
     return prisma.lead.count({ where: POOL_WHERE });

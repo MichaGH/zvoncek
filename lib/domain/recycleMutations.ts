@@ -86,10 +86,12 @@ export async function archiveRound(tx: Tx, actorId: string, lead: Lead, now: Dat
     const archive = await tx.lead.create({ data: archiveCopy(lead, actorId, now), select: { id: true } });
     const move = { where: { leadId: lead.id }, data: { leadId: archive.id } };
     await tx.activity.updateMany(move);
-    await tx.leadRequest.updateMany(move);
+    // Prisma @updatedAt would rewrite historical timestamps on these two models.
+    // Move the FK only, preserving every child's individual scalar snapshot.
+    await tx.$executeRaw`UPDATE "LeadRequest" SET "leadId" = ${archive.id} WHERE "leadId" = ${lead.id}`;
     await tx.dealTask.updateMany(move);
     await tx.dealOwnership.updateMany(move);
-    await tx.design.updateMany(move);
+    await tx.$executeRaw`UPDATE "Design" SET "leadId" = ${archive.id} WHERE "leadId" = ${lead.id}`;
     await tx.lead.update({
         where: { id: lead.id },
         data: { ...RECYCLE_RESET, round: { increment: 1 }, roundStartedAt: now, ...bump },

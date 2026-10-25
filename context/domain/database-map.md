@@ -51,7 +51,8 @@ Indexes: `status` · `(status, callbackKind)` · `deletedAt` · `(createdById, c
 an exact copy of the contact before recycling (every column except `id`, `number`, `deletedAt`, `archiveOfId`,
 `archivedById`, `updatedAt`), with `deletedAt` = the recycle time, and **moves every child row** (`Activity`,
 `LeadRequest`, `DealTask`, `DealOwnership`, `Design` — and with them task parts, design versions, trackers, events) to
-it. The live row keeps id, `number`, contact data, `note`, `origin`, creator and `createdAt`, and is reset to a fresh
+it. Child scalar values, including each Design/LeadRequest `updatedAt`, stay unchanged except for `leadId`.
+The live row keeps id, `number`, contact data, `note`, `origin`, creator and `createdAt`, and is reset to a fresh
 `NEW` contact (`round + 1`, `roundStartedAt` = now, one revision bump). An archive row is therefore a complete,
 internally consistent old round, invisible to every query through `deletedAt`, and found via `archiveOfId`. A row
 with `deletedAt` set and `archiveOfId NULL` is a contact that was really deleted. Archive rows are never recycled,
